@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>가스트 사격 — Ghast Shooting</title>
+  <!-- 한글 픽셀 폰트(갈무리). 인터넷이 없으면 맑은 고딕으로 자동 대체됩니다. -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/galmuri/dist/galmuri.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 게임 화면 전체를 그리는 캔버스 -->
+  <canvas id="game"></canvas>
+
+  <!-- 처음 화면/결과 화면에서만 보이는 운영 버튼 -->
+  <div id="corner-buttons">
+    <button type="button" id="btn-fullscreen" title="전체화면 (F)">⛶ 전체화면</button>
+    <button type="button" id="btn-settings" title="설정 (S)">⚙ 설정</button>
+  </div>
+
+  <!-- 운영자 설정 창 -->
+  <div id="settings" hidden>
+    <form id="settings-form">
+      <h2>게임 설정</h2>
+      <div class="grid">
+        <label>제한 시간 (초)<input type="number" name="gameSeconds" min="10" max="600" step="5"></label>
+        <label>가스트 처치 점수<input type="number" name="killPoints" min="0" max="20"></label>
+        <label>보너스 시간 기준 점수<input type="number" name="bonusScore" min="0" max="999"></label>
+        <label>화염구 반사 점수<input type="number" name="deflectPoints" min="0" max="20"></label>
+        <label>보너스 시간 (초)<input type="number" name="bonusSeconds" min="0" max="300" step="5"></label>
+        <label>화염구 피격 감점<input type="number" name="hitPenalty" min="0" max="20"></label>
+        <label>가스트의 눈물 기준 점수<input type="number" name="rewardScore" min="0" max="999"></label>
+        <label>난이도 (0.5 쉬움 ~ 2 어려움)<input type="number" name="difficulty" min="0.3" max="3" step="0.1"></label>
+        <label>판정 여유 (%)<input type="number" name="hitPadding" min="0" max="60" step="5"></label>
+        <label>가스트 크기 (%)<input type="number" name="ghastScale" min="50" max="200" step="10"></label>
+        <label>소리 크기 (0 ~ 1)<input type="number" name="volume" min="0" max="1" step="0.1"></label>
+        <label>센서 중복 무시 (ms)<input type="number" name="debounceMs" min="0" max="500" step="10"></label>
+        <label class="check"><input type="checkbox" name="showTouches"> 터치 위치 표시</label>
+      </div>
+      <div class="actions">
+        <button type="button" id="settings-reset">기본값</button>
+        <button type="button" id="settings-close">취소</button>
+        <button type="submit" class="primary">저장</button>
+      </div>
+      <p class="keys">
+        단축키 — <b>Space</b> 시작 · <b>P</b> 일시정지 · <b>Q</b> 처음 화면 · <b>F</b> 전체화면 · <b>M</b> 소리 끄기 · <b>S</b> 설정
+      </p>
+    </form>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>

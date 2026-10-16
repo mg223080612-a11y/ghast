@@ -1,0 +1,88 @@
+:root {
+  --font: "Galmuri11", "Galmuri9", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+  --panel: rgba(20, 6, 4, 0.92);
+  --line: #8a3a2a;
+  --text: #fff4e6;
+  --accent: #ffb23a;
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #140303;
+  color: var(--text);
+  font-family: var(--font);
+  /* 프로젝터 터치를 길게 눌러도 선택·메뉴·확대가 일어나지 않게 */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+#game {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+#corner-buttons {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 8px;
+}
+#corner-buttons.hidden { display: none; }
+
+button {
+  font-family: var(--font);
+  font-size: 15px;
+  color: var(--text);
+  background: #5a5a5a;
+  border: 2px solid #1a1a1a;
+  box-shadow: inset 2px 2px 0 #8c8c8c, inset -2px -2px 0 #3a3a3a;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+button:hover { background: #6e6e8a; }
+button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset -2px -2px 0 #24461a; }
+
+#settings {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+#settings[hidden] { display: none; }
+
+#settings form {
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  background: var(--panel);
+  border: 3px solid var(--line);
+  padding: 20px 24px;
+  box-sizing: border-box;
+}
+#settings h2 { margin: 0 0 16px; color: var(--accent); }
+
+#settings .grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px 20px;
+}
+#settings label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+#settings label.check { flex-direction: row; align-items: center; gap: 8px; }
+#settings input[type="number"] {
+  font-family: var(--font);
+  font-size: 16px;
+  padding: 6px 8px;
+  background: #000;
+  color: #fff;
+  border: 2px solid #777;
+}
+#settings .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+#settings .keys { font-size: 13px; opacity: 0.75; margin: 16px 0 0; line-height: 1.6; }
