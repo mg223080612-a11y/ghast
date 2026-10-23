@@ -9,13 +9,14 @@
 
 // ---------- 설정 (설정 창에서 바꿀 수 있음, 브라우저에 저장됨) ----------
 const DEFAULTS = {
-  gameSeconds: 90,     // 제한 시간 1분 30초
-  bonusScore: 40,      // 이 점수를 넘으면
-  bonusSeconds: 30,    // 이만큼 시간 추가 (한 판에 한 번)
+  gameSeconds: 40,     // 제한 시간 40초
+  bonusScore: 20,      // 이 점수마다 (20, 40, 60 …)
+  bonusSeconds: 8,     // 이만큼 시간 추가
   rewardScore: 30,     // 이 점수 이상이면 가스트의 눈물(밀키스)
   killPoints: 2,       // 가스트 처치
   deflectPoints: 1,    // 날아오는 화염구 맞히기
   hitPenalty: 1,       // 화염구에 맞으면 감점
+  missPenalty: 1,      // 배경(빈 곳)을 맞히면 감점
   difficulty: 1,       // 0.5 쉬움 ~ 2 어려움
   hitPadding: 15,      // 가스트 판정 범위를 몇 % 넓힐지
   ghastScale: 100,     // 가스트 크기 (%)
@@ -23,7 +24,8 @@ const DEFAULTS = {
   debounceMs: 80,      // 센서가 한 번의 충격을 여러 번 보내는 것을 무시
   showTouches: true,   // 터치(탄착) 위치를 화면에 표시
 };
-const SETTINGS_KEY = 'ghast-shooting-settings';
+// 기본 규칙이 바뀌면 이름 뒤 숫자를 올려 예전에 저장된 설정을 무시한다
+const SETTINGS_KEY = 'ghast-shooting-settings-v2';
 const BEST_KEY = 'ghast-shooting-best';
 let settings = loadSettings();
 
@@ -220,7 +222,7 @@ const Sound = {
   charge()  { this.tone(500, 0.55, { type: 'sawtooth', freqEnd: 1300, gain: 0.06, attack: 0.1 }); },
   shoot()   { this.noise(0.5, { type: 'bandpass', freq: 400, freqEnd: 2500, q: 2, gain: 0.7 }); },
   spawn()   { this.tone(rand(260, 340), 0.6, { type: 'sine', freqEnd: 180, gain: 0.08, attack: 0.15 }); },
-  miss()    { this.noise(0.06, { type: 'highpass', freq: 1500, gain: 0.15 }); },
+  miss()    { this.noise(0.06, { type: 'highpass', freq: 1500, gain: 0.15 }); this.tone(180, 0.18, { type: 'square', freqEnd: 110, gain: 0.12 }); },
   tick()    { this.tone(1000, 0.05, { gain: 0.12 }); },
   go()      { this.tone(660, 0.12, { gain: 0.2 }); this.tone(990, 0.3, { gain: 0.2, delay: 0.1 }); },
   bonus()   { [523, 659, 784, 1047].forEach((f, i) => this.tone(f, 0.2, { gain: 0.2, delay: i * 0.09 })); },
@@ -740,7 +742,8 @@ const game = {
   elapsed: 0,
   spawnTimer: 0,
   countdown: 0,
-  bonusGiven: false,
+  nextBonus: 0,         // 다음 보너스 시간을 받는 점수
+  bonusCount: 0,        // 이번 판에 받은 보너스 횟수
   rewardShown: false,
   resultTime: 0,
   stats: null,
@@ -797,9 +800,10 @@ function startGame() {
   game.timeLeft = settings.gameSeconds;
   game.elapsed = 0;
   game.spawnTimer = 0;
-  game.bonusGiven = false;
+  game.nextBonus = settings.bonusScore;
+  game.bonusCount = 0;
   game.rewardShown = false;
-  game.stats = { shots: 0, kills: 0, deflects: 0, hitsTaken: 0 };
+  game.stats = { shots: 0, kills: 0, deflects: 0, hitsTaken: 0, misses: 0 };
   banner = null;
   fireballs = [];
   ghasts.forEach((g) => g.hittable() && g.leave());
@@ -827,11 +831,16 @@ function addScore(n) {
     Sound.reward();
     showBanner('가스트의 눈물 확보!', `${settings.rewardScore}점 달성`, '#9ff6ff');
   }
-  if (!game.bonusGiven && settings.bonusSeconds > 0 && game.score >= settings.bonusScore) {
-    game.bonusGiven = true;
-    game.timeLeft += settings.bonusSeconds;
+  // 20점, 40점, 60점 … 처음 넘을 때마다 시간 추가 (감점 후 다시 넘어도 같은 구간은 한 번만)
+  if (settings.bonusSeconds > 0 && settings.bonusScore > 0 && game.score >= game.nextBonus) {
+    const reached = game.nextBonus;
+    while (game.score >= game.nextBonus) {
+      game.timeLeft += settings.bonusSeconds;
+      game.bonusCount++;
+      game.nextBonus += settings.bonusScore;
+    }
     Sound.bonus();
-    showBanner(`보너스 타임 +${settings.bonusSeconds}초!`, `${settings.bonusScore}점 돌파`, '#ffe14a', 2.6);
+    showBanner(`보너스 타임 +${settings.bonusSeconds}초!`, `${reached}점 돌파`, '#ffe14a', 2);
     doFlash('#ffe14a', 0.25);
   }
 }
@@ -912,10 +921,15 @@ function onTap(x, y) {
     return;
   }
 
-  // 3) 빗나감
+  // 3) 빗나감 (배경을 맞힘) → 감점
+  game.stats.misses++;
   Sound.miss();
   for (let i = 0; i < 6; i++) {
     addPart({ x, y, vx: rand(-1, 1) * U * 8, vy: rand(-1, 0.3) * U * 8, g: U * 40, size: U * 0.6, life: 0.4, color: '#bbbbbb' });
+  }
+  if (settings.missPenalty > 0) {
+    popupScore(x, y - U * 4, `-${settings.missPenalty}`, '#ff6a5a');
+    addScore(-settings.missPenalty);
   }
 }
 
@@ -1048,6 +1062,11 @@ function button(label, cx, cy, w, h, action, enabled = true, primary = false) {
   ctx.globalAlpha = 1;
   buttons.push({ x: x - b, y: y - b, w: w + b * 2, h: h + b * 2, action, enabled });
 }
+// 40 → "40초", 90 → "1분 30초"
+function timeLabel(s) {
+  const m = Math.floor(s / 60), r = Math.round(s % 60);
+  return m ? (r ? `${m}분 ${r}초` : `${m}분`) : `${r}초`;
+}
 function formatTime(s) {
   s = Math.max(0, Math.ceil(s));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -1060,22 +1079,23 @@ function drawTitle(time) {
   text('가스트 사격', cx, H * 0.17 + bobY, U * 15, '#ffffff', 'center', { shadow: '#a3200c' });
   text('GHAST SHOOTING', cx, H * 0.17 + U * 11, U * 4.5, '#ffcf5a');
 
-  const pw = Math.min(W - U * 8, U * 112), ph = U * 40;
-  const py = H * 0.34;
+  const pw = Math.min(W - U * 8, U * 112), ph = U * 45;
+  const py = H * 0.32;
   panel(cx - pw / 2, py, pw, ph, 0.68);
   const lines = [
     ['네더의 가스트가 화염구를 쏘기 전에 맞혀라!', '#ffffff', 5],
-    [`가스트 처치 +${settings.killPoints}점   ·   날아오는 화염구 맞히기 +${settings.deflectPoints}점   ·   화염구에 맞으면 -${settings.hitPenalty}점`, '#ffd9b0', 3.4],
-    [`제한 시간 ${formatTime(settings.gameSeconds)}   ·   ${settings.bonusScore}점을 넘으면 +${settings.bonusSeconds}초 보너스!`, '#ffd9b0', 3.4],
+    [`가스트 처치 +${settings.killPoints}점   ·   날아오는 화염구 맞히기 +${settings.deflectPoints}점`, '#ffd9b0', 3.4],
+    [`배경을 잘못 맞히면 -${settings.missPenalty}점   ·   화염구에 맞으면 -${settings.hitPenalty}점`, '#ff9a8a', 3.4],
+    [`제한 시간 ${timeLabel(settings.gameSeconds)}   ·   ${settings.bonusScore}점마다 +${settings.bonusSeconds}초 보너스!`, '#ffe14a', 3.4],
     [`${settings.rewardScore}점 이상이면 '가스트의 눈물'을 드려요`, '#9ff6ff', 4],
     ['※ 화면만 쏘세요! 사람을 향해 쏘면 안 돼요', '#ff8a7a', 3.2],
   ];
-  lines.forEach(([str, color, size], i) => text(str, cx, py + U * (7 + i * 7.4), U * size, color));
+  lines.forEach(([str, color, size], i) => text(str, cx, py + U * (6 + i * 6.6), U * size, color));
   // 가스트의 눈물 아이콘
   ctx.imageSmoothingEnabled = false;
-  const ts = U * 6;
-  ctx.drawImage(IMG.tear, cx - pw / 2 + U * 3, py + U * 32 - ts / 2, ts, ts);
-  ctx.drawImage(IMG.tear, cx + pw / 2 - U * 3 - ts, py + U * 32 - ts / 2, ts, ts);
+  const ts = U * 6, ty = py + U * (6 + 4 * 6.6);
+  ctx.drawImage(IMG.tear, cx - pw / 2 + U * 3, ty - ts / 2, ts, ts);
+  ctx.drawImage(IMG.tear, cx + pw / 2 - U * 3 - ts, ty - ts / 2, ts, ts);
 
   button('게임 시작', cx, H * 0.84, U * 52, U * 12, startGame, true, true);
   text('Space 시작 · F 전체화면 · S 설정 · M 소리', cx, H * 0.84 + U * 10, U * 2.6, '#c9a89a');
@@ -1099,14 +1119,15 @@ function drawHUD(time) {
   text(formatTime(game.timeLeft), 0, 0, U * 10, danger ? '#ff5a4a' : '#ffffff');
   ctx.restore();
 
-  // 목표 진행 막대: 보상 점수 / 보너스 점수 표시
+  // 목표 진행 막대: 가스트의 눈물 점수 / 다음 보너스 점수 표시
+  const bonusOn = settings.bonusSeconds > 0 && settings.bonusScore > 0;
   const bw = U * 52, bh = U * 3.4, bx = W - bw - U * 5, by = U * 9;
-  const max = Math.max(settings.bonusScore, settings.rewardScore, 1) * 1.15;
+  const max = Math.max(settings.rewardScore, bonusOn ? game.nextBonus : 0, game.score, 1) * 1.15;
   panel(bx - U * 2.5, U * 2.5, bw + U * 5, U * 13, 0.6);
   ctx.fillStyle = '#2a1010';
   ctx.fillRect(bx, by, bw, bh);
   const fill = clamp(game.score / max, 0, 1);
-  ctx.fillStyle = game.score >= settings.bonusScore ? '#ffd25a' : game.score >= settings.rewardScore ? '#7de3ff' : '#ff7a3a';
+  ctx.fillStyle = game.score >= settings.rewardScore ? '#7de3ff' : '#ff7a3a';
   ctx.fillRect(bx, by, bw * fill, bh);
   const mark = (score, label, color, img) => {
     const mx = bx + bw * clamp(score / max, 0, 1);
@@ -1117,7 +1138,7 @@ function drawHUD(time) {
     text(`${score}`, mx, by + bh + U * 2.6, U * 2.6, color);
   };
   mark(settings.rewardScore, '', '#9ff6ff', IMG.tear);
-  if (settings.bonusSeconds > 0) mark(settings.bonusScore, game.bonusGiven ? '보너스 완료' : `+${settings.bonusSeconds}초`, '#ffe14a');
+  if (bonusOn) mark(game.nextBonus, `+${settings.bonusSeconds}초`, '#ffe14a');
 }
 
 function drawCountdown() {
@@ -1143,7 +1164,7 @@ function drawResult(time) {
   text('미션 종료!', cx, py + U * 8, U * 8, '#ffcf5a');
   text(`${game.score}점`, cx, py + U * 22, U * 15, '#ffffff', 'center', { shadow: '#a3200c' });
   const acc = st.shots ? Math.round(((st.kills + st.deflects) / st.shots) * 100) : 0;
-  text(`처치 ${st.kills}   ·   반사 ${st.deflects}   ·   피격 ${st.hitsTaken}   ·   명중률 ${acc}%`, cx, py + U * 34, U * 3.4, '#ffd9b0');
+  text(`처치 ${st.kills}  ·  반사 ${st.deflects}  ·  빗나감 ${st.misses}  ·  피격 ${st.hitsTaken}  ·  명중률 ${acc}%  ·  보너스 ${game.bonusCount}회`, cx, py + U * 34, U * 3.2, '#ffd9b0');
 
   if (win) {
     const ts = U * 15, ty = py + U * 49 + Math.sin(time * 3) * U;
