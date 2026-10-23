@@ -30,12 +30,26 @@
         <label>보너스 시간 (초)<input type="number" name="bonusSeconds" min="0" max="300" step="1"></label>
         <label>화염구 피격 감점<input type="number" name="hitPenalty" min="0" max="20"></label>
         <label>배경 잘못 맞히면 감점<input type="number" name="missPenalty" min="0" max="20"></label>
+        <label>가스트 놓치면 감점<input type="number" name="escapePenalty" min="0" max="20"></label>
         <label>가스트의 눈물 기준 점수<input type="number" name="rewardScore" min="0" max="999"></label>
         <label>난이도 (0.5 쉬움 ~ 2 어려움)<input type="number" name="difficulty" min="0.3" max="3" step="0.1"></label>
         <label>판정 여유 (%)<input type="number" name="hitPadding" min="0" max="60" step="5"></label>
         <label>가스트 크기 (%)<input type="number" name="ghastScale" min="50" max="200" step="10"></label>
         <label>소리 크기 (0 ~ 1)<input type="number" name="volume" min="0" max="1" step="0.1"></label>
-        <label>센서 중복 무시 (ms)<input type="number" name="debounceMs" min="0" max="500" step="10"></label>
+        <label>입력 장치
+          <select name="inputMode">
+            <option value="gun">라이트건 (GUN4IR · 마우스)</option>
+            <option value="touch">프로젝터 터치 센서</option>
+          </select>
+        </label>
+        <label>게임 중 조준점
+          <select name="aimMode">
+            <option value="small">작은 십자</option>
+            <option value="big">큰 조준점</option>
+            <option value="hidden">숨김 (실제 총처럼)</option>
+          </select>
+        </label>
+        <label>터치 중복 무시 (ms, 터치 모드에서만)<input type="number" name="debounceMs" min="0" max="500" step="10"></label>
         <label class="check"><input type="checkbox" name="showTouches"> 터치 위치 표시</label>
       </div>
       <div class="actions">

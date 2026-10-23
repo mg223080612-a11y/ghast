@@ -10,22 +10,25 @@
 // ---------- 설정 (설정 창에서 바꿀 수 있음, 브라우저에 저장됨) ----------
 const DEFAULTS = {
   gameSeconds: 40,     // 제한 시간 40초
-  bonusScore: 20,      // 이 점수마다 (20, 40, 60 …)
-  bonusSeconds: 8,     // 이만큼 시간 추가
+  bonusScore: 30,      // 이 점수마다 (30, 60, 90 …)
+  bonusSeconds: 7,     // 이만큼 시간 추가
   rewardScore: 30,     // 이 점수 이상이면 가스트의 눈물(밀키스)
   killPoints: 2,       // 가스트 처치
   deflectPoints: 1,    // 날아오는 화염구 맞히기
   hitPenalty: 1,       // 화염구에 맞으면 감점
   missPenalty: 1,      // 배경(빈 곳)을 맞히면 감점
+  escapePenalty: 1,    // 가스트를 못 맞히고 화면 밖으로 놓치면 감점
   difficulty: 1,       // 0.5 쉬움 ~ 2 어려움
   hitPadding: 15,      // 가스트 판정 범위를 몇 % 넓힐지
   ghastScale: 100,     // 가스트 크기 (%)
   volume: 0.8,
-  debounceMs: 80,      // 센서가 한 번의 충격을 여러 번 보내는 것을 무시
+  inputMode: 'gun',    // 'gun' = 라이트건(마우스로 인식) / 'touch' = 프로젝터 터치 센서
+  aimMode: 'small',    // 게임 중 조준점: 'small' 작은 십자 / 'big' 큰 조준점 / 'hidden' 숨김
+  debounceMs: 80,      // (터치 모드에서만) 센서가 한 번의 충격을 여러 번 보내는 것을 무시
   showTouches: true,   // 터치(탄착) 위치를 화면에 표시
 };
 // 기본 규칙이 바뀌면 이름 뒤 숫자를 올려 예전에 저장된 설정을 무시한다
-const SETTINGS_KEY = 'ghast-shooting-settings-v2';
+const SETTINGS_KEY = 'ghast-shooting-settings-v5';
 let settings = loadSettings();
 
 function loadSettings() {
@@ -221,6 +224,7 @@ const Sound = {
   charge()  { this.tone(500, 0.55, { type: 'sawtooth', freqEnd: 1300, gain: 0.06, attack: 0.1 }); },
   shoot()   { this.noise(0.5, { type: 'bandpass', freq: 400, freqEnd: 2500, q: 2, gain: 0.7 }); },
   spawn()   { this.tone(rand(260, 340), 0.6, { type: 'sine', freqEnd: 180, gain: 0.08, attack: 0.15 }); },
+  escape()  { this.tone(420, 0.35, { type: 'triangle', freqEnd: 160, gain: 0.18 }); this.tone(300, 0.4, { type: 'sine', freqEnd: 120, gain: 0.12, delay: 0.08 }); },
   miss()    { this.noise(0.06, { type: 'highpass', freq: 1500, gain: 0.15 }); this.tone(180, 0.18, { type: 'square', freqEnd: 110, gain: 0.12 }); },
   tick()    { this.tone(1000, 0.05, { gain: 0.12 }); },
   go()      { this.tone(660, 0.12, { gain: 0.2 }); this.tone(990, 0.3, { gain: 0.2, delay: 0.1 }); },
@@ -629,14 +633,20 @@ class Ghast {
         }
         break;
       case 'leave':
-        if (this.x < -this.w || this.x > W + this.w) this.dead = true;
+        if (this.x < -this.w || this.x > W + this.w) {
+          this.dead = true;
+          // 화면 밖으로 놓쳐 버린 가스트 → 감점 (게임이 끝나 물러나는 가스트는 제외)
+          if (!this.demo && !this.forced) ghastEscaped(this);
+        }
         break;
       case 'dying':
         if (this.t >= 0.18) { burstGhast(this); Sound.pop(); this.dead = true; }
         break;
     }
   }
-  leave() {
+  // forced: 게임 종료·처음 화면 이동 때문에 물러나는 것 (놓침 감점 없음)
+  leave(forced = false) {
+    this.forced = forced;
     this.state = 'leave';
     this.tx = this.x < W / 2 ? -W * 0.4 : W * 1.4;
     this.ty = this.y - H * 0.1;
@@ -863,7 +873,7 @@ function goTitle() {
   game.state = 'title';
   game.paused = false;
   fireballs = [];
-  ghasts.forEach((g) => g.hittable() && g.leave());
+  ghasts.forEach((g) => g.hittable() && g.leave(true));
   refreshTitleTop();
   updateCornerButtons();
 }
@@ -881,10 +891,10 @@ function startGame() {
   game.nextBonus = settings.bonusScore;
   game.bonusCount = 0;
   game.rewardShown = false;
-  game.stats = { shots: 0, kills: 0, deflects: 0, hitsTaken: 0, misses: 0 };
+  game.stats = { shots: 0, kills: 0, deflects: 0, hitsTaken: 0, misses: 0, escapes: 0 };
   banner = null;
   fireballs = [];
-  ghasts.forEach((g) => g.hittable() && g.leave());
+  ghasts.forEach((g) => g.hittable() && g.leave(true));
   updateCornerButtons();
 }
 
@@ -895,7 +905,7 @@ function endGame() {
   // 남은 화염구는 공중에서 터뜨림
   fireballs.forEach((f) => burstFire(f.x, f.y, 0.6));
   fireballs = [];
-  ghasts.forEach((g) => g.hittable() && g.leave());
+  ghasts.forEach((g) => g.hittable() && g.leave(true));
   const win = game.score >= settings.rewardScore;
   Sound.end(win);
   updateCornerButtons();
@@ -909,12 +919,14 @@ function endGame() {
 
 function addScore(n) {
   game.score = Math.max(0, game.score + n);
+  let rewardNow = false;
   if (!game.rewardShown && game.score >= settings.rewardScore) {
     game.rewardShown = true;
+    rewardNow = true;
     Sound.reward();
     showBanner('가스트의 눈물 확보!', `${settings.rewardScore}점 달성`, '#9ff6ff');
   }
-  // 20점, 40점, 60점 … 처음 넘을 때마다 시간 추가 (감점 후 다시 넘어도 같은 구간은 한 번만)
+  // 30점, 60점, 90점 … 처음 넘을 때마다 시간 추가 (감점 후 다시 넘어도 같은 구간은 한 번만)
   if (settings.bonusSeconds > 0 && settings.bonusScore > 0 && game.score >= game.nextBonus) {
     const reached = game.nextBonus;
     while (game.score >= game.nextBonus) {
@@ -923,8 +935,23 @@ function addScore(n) {
       game.nextBonus += settings.bonusScore;
     }
     Sound.bonus();
-    showBanner(`보너스 타임 +${settings.bonusSeconds}초!`, `${reached}점 돌파`, '#ffe14a', 2);
+    // 가스트의 눈물과 같은 점수에서 터지면 알림을 하나로 합친다
+    if (rewardNow) showBanner('가스트의 눈물 확보!', `보너스 타임 +${settings.bonusSeconds}초!`, '#9ff6ff', 2.4);
+    else showBanner(`보너스 타임 +${settings.bonusSeconds}초!`, `${reached}점 돌파`, '#ffe14a', 2);
     doFlash('#ffe14a', 0.25);
+  }
+}
+
+// 가스트를 맞히지 못하고 화면 밖으로 흘려보냄
+function ghastEscaped(gh) {
+  if (game.state !== 'play') return;
+  game.stats.escapes++;
+  Sound.escape();
+  if (settings.escapePenalty > 0) {
+    // 가스트가 사라진 쪽 화면 가장자리에 표시
+    const x = clamp(gh.x, U * 10, W - U * 10);
+    popupScore(x, clamp(gh.y, U * 22, H - U * 10), `-${settings.escapePenalty} 놓침!`, '#ff6a5a');
+    addScore(-settings.escapePenalty);
   }
 }
 
@@ -945,6 +972,8 @@ function playerHit(fb) {
 // ---------- 입력 (센서 터치 / 마우스 / 펜) ----------
 const recentTaps = [];
 function isDuplicateTap(x, y, now) {
+  // 라이트건은 방아쇠 한 번 = 클릭 한 번이라 걸러낼 필요가 없다 (빠른 연사도 모두 인정)
+  if (settings.inputMode === 'gun') return false;
   // 프로젝터 센서는 한 번 맞은 것을 여러 번 보낼 수 있어 짧은 시간·가까운 위치는 무시
   while (recentTaps.length && now - recentTaps[0].t > 500) recentTaps.shift();
   const dup = recentTaps.some((p) => now - p.t < settings.debounceMs && Math.hypot(p.x - x, p.y - y) < U * 4);
@@ -1019,7 +1048,17 @@ function onTap(x, y) {
 
 canvas.addEventListener('pointerdown', (e) => {
   e.preventDefault();
+  // 마우스(라이트건)는 왼쪽 버튼 = 방아쇠만 한 발로 친다.
+  // 총의 재장전·보조 버튼이 오른쪽/가운데 클릭으로 들어와도 빗나감 감점이 되지 않게.
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  aim.x = e.clientX; aim.y = e.clientY; aim.seen = true;
   onTap(e.clientX, e.clientY);
+});
+// 조준점 위치 (라이트건을 움직이면 마우스 커서가 따라 움직인다)
+const aim = { x: 0, y: 0, seen: false };
+window.addEventListener('pointermove', (e) => {
+  if (e.pointerType !== 'mouse') return;
+  aim.x = e.clientX; aim.y = e.clientY; aim.seen = true;
 });
 // 길게 누르기(오른쪽 클릭) 메뉴, 확대 제스처 막기
 window.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -1168,6 +1207,7 @@ form.addEventListener('submit', (e) => {
     const input = form.elements[k];
     if (!input) continue;
     if (input.type === 'checkbox') next[k] = input.checked;
+    else if (input.tagName === 'SELECT') next[k] = input.value;
     else {
       const n = parseFloat(input.value);
       if (Number.isFinite(n)) next[k] = n;
@@ -1251,7 +1291,7 @@ function drawTitle(time) {
   const lines = [
     ['네더의 가스트가 화염구를 쏘기 전에 맞혀라!', '#ffffff', 5],
     [`가스트 처치 +${settings.killPoints}점   ·   날아오는 화염구 맞히기 +${settings.deflectPoints}점`, '#ffd9b0', 3.4],
-    [`배경을 잘못 맞히면 -${settings.missPenalty}점   ·   화염구에 맞으면 -${settings.hitPenalty}점`, '#ff9a8a', 3.4],
+    [`배경을 맞히면 -${settings.missPenalty}점  ·  가스트를 놓치면 -${settings.escapePenalty}점  ·  화염구에 맞으면 -${settings.hitPenalty}점`, '#ff9a8a', 3.3],
     [`제한 시간 ${timeLabel(settings.gameSeconds)}   ·   ${settings.bonusScore}점마다 +${settings.bonusSeconds}초 보너스!`, '#ffe14a', 3.4],
     [`${settings.rewardScore}점 이상이면 '가스트의 눈물'을 드려요`, '#9ff6ff', 4],
     ['※ 화면만 쏘세요! 사람을 향해 쏘면 안 돼요', '#ff8a7a', 3.2],
@@ -1387,7 +1427,7 @@ function drawResult(time) {
   text(`${game.player || '이름없음'} 님 · 미션 종료!`, cx, py + U * 7, U * 6.5, '#ffcf5a');
   text(`${game.score}점`, cx, py + U * 20, U * 15, '#ffffff', 'center', { shadow: '#a3200c' });
   const acc = st.shots ? Math.round(((st.kills + st.deflects) / st.shots) * 100) : 0;
-  text(`처치 ${st.kills}  ·  반사 ${st.deflects}  ·  빗나감 ${st.misses}  ·  피격 ${st.hitsTaken}  ·  명중률 ${acc}%  ·  보너스 ${game.bonusCount}회`, cx, py + U * 31, U * 3.2, '#ffd9b0');
+  text(`처치 ${st.kills}  ·  반사 ${st.deflects}  ·  빗나감 ${st.misses}  ·  놓침 ${st.escapes}  ·  피격 ${st.hitsTaken}  ·  명중률 ${acc}%  ·  보너스 ${game.bonusCount}회`, cx, py + U * 31, U * 3.2, '#ffd9b0');
 
   // 순위
   const ri = game.rankInfo;
@@ -1526,6 +1566,31 @@ function draw(time) {
     text('일시정지', W / 2, H * 0.45, U * 12, '#ffffff');
     text('P 또는 Space 를 누르면 계속합니다', W / 2, H * 0.45 + U * 11, U * 4, '#ffd9b0');
   }
+
+  // 조준점: 게임 중에만 설정을 따르고, 메뉴 화면에서는 버튼을 고를 수 있게 항상 보인다
+  const inGame = (game.state === 'play' || game.state === 'countdown') && !game.paused;
+  const mode = inGame ? settings.aimMode : 'small';
+  const cursor = mode === 'small' ? 'crosshair' : 'none';
+  if (canvas.style.cursor !== cursor) canvas.style.cursor = cursor;
+  if (mode === 'big' && aim.seen) drawAim(aim.x, aim.y);
+}
+
+// 큰 조준점 (프로젝터 화면에서도 잘 보이게)
+function drawAim(x, y) {
+  const r = U * 3.2, gap = U * 1, len = U * 2.4, t = Math.max(2, U * 0.45);
+  for (const [color, w] of [['rgba(0,0,0,0.8)', t + U * 0.5], ['#ffffff', t]]) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = w;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.moveTo(x - r - len, y); ctx.lineTo(x - gap, y);
+    ctx.moveTo(x + gap, y); ctx.lineTo(x + r + len, y);
+    ctx.moveTo(x, y - r - len); ctx.lineTo(x, y - gap);
+    ctx.moveTo(x, y + gap); ctx.lineTo(x, y + r + len);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#ff3a2a';
+  ctx.fillRect(x - t / 2, y - t / 2, t, t);
 }
 
 let last = performance.now();
