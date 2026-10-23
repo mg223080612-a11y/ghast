@@ -10,8 +10,9 @@
 // ---------- 설정 (설정 창에서 바꿀 수 있음, 브라우저에 저장됨) ----------
 const DEFAULTS = {
   gameSeconds: 40,     // 제한 시간 40초
-  bonusFirst: 30,      // 첫 보너스 점수
-  bonusScore: 20,      // 그다음부터 이 간격마다 (30 → 50 → 70 → 90 …)
+  // 보너스를 받으려면 '새로' 모아야 하는 점수. 처음 30점 → 그다음 50점 더 → 그다음 70점 더,
+  // 이후로는 마지막 값(70점)을 모을 때마다. 점수로 치면 30 → 80 → 150 → 220 …
+  bonusGaps: '30, 50, 70',
   bonusSeconds: 7,     // 이만큼 시간 추가
   rewardScore: 30,     // 이 점수 이상이면 가스트의 눈물(밀키스)
   killPoints: 2,       // 가스트 처치
@@ -19,6 +20,7 @@ const DEFAULTS = {
   hitPenalty: 1,       // 화염구에 맞으면 감점
   missPenalty: 1,      // 배경(빈 곳)을 맞히면 감점
   escapePenalty: 1,    // 가스트를 못 맞히고 화면 밖으로 놓치면 감점
+  levelSpeedUp: 25,    // 레벨이 하나 오를 때마다 가스트가 몇 % 빨라지는지
   difficulty: 1,       // 0.5 쉬움 ~ 2 어려움
   hitPadding: 15,      // 가스트 판정 범위를 몇 % 넓힐지
   ghastScale: 100,     // 가스트 크기 (%)
@@ -29,7 +31,7 @@ const DEFAULTS = {
   showTouches: true,   // 터치(탄착) 위치를 화면에 표시
 };
 // 기본 규칙이 바뀌면 이름 뒤 숫자를 올려 예전에 저장된 설정을 무시한다
-const SETTINGS_KEY = 'ghast-shooting-settings-v6';
+const SETTINGS_KEY = 'ghast-shooting-settings-v8';
 let settings = loadSettings();
 
 function loadSettings() {
@@ -533,17 +535,24 @@ function doFlash(color, a) { flash = { color, a }; }
 function showBanner(textStr, sub, color = '#ffe14a', dur = 2.2) { banner = { text: textStr, sub, color, t: 0, dur }; }
 
 // ---------- 난이도 ----------
-// 시간이 지날수록 가스트가 많아지고 빨리 쏜다
+// 시간이 지날수록 가스트가 많아지고 빨리 쏜다.
+// 레벨(보너스 점수를 넘을 때마다 1씩 오름)이 오를수록 가스트가 더 빨리 날아다니고 서두른다.
+function levelMul() {
+  return Math.min(3, 1 + (settings.levelSpeedUp / 100) * ((game.level || 1) - 1));
+}
 function difficulty() {
   const p = clamp(game.elapsed / Math.max(30, settings.gameSeconds), 0, 1);
   const d = clamp(settings.difficulty, 0.3, 3);
+  const L = levelMul();
+  const lv = (game.level || 1) - 1;
   return {
-    spawnEvery: lerp(1.6, 0.8, p) / d,
-    maxGhasts: Math.max(2, Math.round(lerp(3, 6, p) * Math.min(1.4, d))),
-    floatMul: lerp(1, 0.6, p) / d,
-    chargeTime: lerp(1.4, 0.9, p) / Math.sqrt(d),
-    flightTime: lerp(1.7, 1.15, p) / Math.sqrt(d),
-    speed: lerp(0.8, 1.3, p) * Math.sqrt(d),
+    spawnEvery: lerp(1.6, 0.8, p) / d / (1 + 0.1 * lv),
+    maxGhasts: Math.max(2, Math.round(lerp(3, 6, p) * Math.min(1.4, d))) + Math.floor(lv / 2),
+    floatMul: lerp(1, 0.6, p) / d / Math.sqrt(L),
+    chargeTime: lerp(1.4, 0.9, p) / Math.sqrt(d) / (1 + 0.1 * lv),
+    flightTime: lerp(1.7, 1.15, p) / Math.sqrt(d) / (1 + 0.08 * lv),
+    speed: lerp(0.8, 1.3, p) * Math.sqrt(d) * L,
+    level: L,
   };
 }
 
@@ -563,6 +572,7 @@ class Ghast {
     this.shots = Math.random() < 0.35 ? 2 : 1;
     this.floatDur = rand(1.4, 3.0) * difficulty().floatMul;
     this.chargeDur = difficulty().chargeTime;
+    this.speedMul = rand(0.85, 1.2);  // 가스트마다 빠르기가 조금씩 다름
     this.dead = false;
   }
   get w() { return U * 24 * this.z * (settings.ghastScale / 100); }
@@ -573,7 +583,8 @@ class Ghast {
     const w = this.w, h = this.h;
     this.tx = rand(w / 2 + U * 2, W - w / 2 - U * 2);
     this.ty = rand(h / 2 + U * 16, Math.max(h / 2 + U * 16, groundY - h * 0.45));
-    this.retarget = rand(1.5, 3);
+    // 레벨이 높으면 방향을 더 자주 바꿔 이리저리 날아다님
+    this.retarget = rand(1.5, 3) / levelMul();
     // 가는 방향을 바라봄 (원본 그림은 왼쪽을 봄)
     if (Math.abs(this.tx - this.x) > W * 0.05) this.flip = this.tx < this.x ? 1 : -1;
   }
@@ -599,9 +610,9 @@ class Ghast {
     if (this.retarget <= 0 && this.state !== 'leave' && this.state !== 'dying') this.pickTarget();
 
     // 목표 지점으로 둥실둥실 이동
-    let speed = 0.8 * D.speed;
+    let speed = 0.8 * D.speed * this.speedMul;
     if (this.state === 'charge') speed *= 0.2;
-    if (this.state === 'leave') speed = 1.4;
+    if (this.state === 'leave') speed = 1.4 * (this.forced ? 1 : D.level);
     if (this.state === 'dying') speed = 0;
     const k = Math.min(1, dt * speed);
     this.x += (this.tx - this.x) * k;
@@ -754,6 +765,7 @@ const game = {
   countdown: 0,
   nextBonus: 0,         // 다음 보너스 시간을 받는 점수
   bonusCount: 0,        // 이번 판에 받은 보너스 횟수
+  level: 1,             // 보너스 점수를 넘을 때마다 1씩 오름 → 가스트가 빨라짐
   rewardShown: false,
   resultTime: 0,
   stats: null,
@@ -872,6 +884,7 @@ function spawnGhast(demo) {
 
 function goTitle() {
   game.state = 'title';
+  game.level = 1; // 처음 화면의 가스트는 천천히
   game.paused = false;
   fireballs = [];
   ghasts.forEach((g) => g.hittable() && g.leave(true));
@@ -889,8 +902,9 @@ function startGame() {
   game.timeLeft = settings.gameSeconds;
   game.elapsed = 0;
   game.spawnTimer = 0;
-  game.nextBonus = settings.bonusFirst;
+  game.nextBonus = bonusGaps()[0] ?? Infinity;
   game.bonusCount = 0;
+  game.level = 1;
   game.rewardShown = false;
   game.stats = { shots: 0, kills: 0, deflects: 0, hitsTaken: 0, misses: 0, escapes: 0 };
   banner = null;
@@ -927,19 +941,23 @@ function addScore(n) {
     Sound.reward();
     showBanner('가스트의 눈물 확보!', `${settings.rewardScore}점 달성`, '#9ff6ff');
   }
-  // 30점, 50점, 70점 … 처음 넘을 때마다 시간 추가 (감점 후 다시 넘어도 같은 구간은 한 번만)
-  if (settings.bonusSeconds > 0 && settings.bonusFirst > 0 && game.score >= game.nextBonus) {
+  // 마지막 보너스 이후 점수를 새로 30 → 50 → 70 … 모을 때마다 시간 추가
+  // (감점으로 내려갔다 다시 넘어도 같은 구간은 한 번만)
+  if (settings.bonusSeconds > 0 && game.score >= game.nextBonus) {
     const reached = game.nextBonus;
+    const gaps = bonusGaps();
     while (game.score >= game.nextBonus) {
       game.timeLeft += settings.bonusSeconds;
       game.bonusCount++;
-      // 간격이 0 이면 첫 보너스 한 번만
-      game.nextBonus = settings.bonusScore > 0 ? game.nextBonus + settings.bonusScore : Infinity;
+      game.level++;
+      // 다음 보너스까지 새로 모아야 하는 점수 (목록이 끝나면 마지막 값을 계속 사용)
+      game.nextBonus += gaps[Math.min(game.bonusCount, gaps.length - 1)];
     }
     Sound.bonus();
     // 가스트의 눈물과 같은 점수에서 터지면 알림을 하나로 합친다
-    if (rewardNow) showBanner('가스트의 눈물 확보!', `보너스 타임 +${settings.bonusSeconds}초!`, '#9ff6ff', 2.4);
-    else showBanner(`보너스 타임 +${settings.bonusSeconds}초!`, `${reached}점 돌파`, '#ffe14a', 2);
+    const sub = `+${settings.bonusSeconds}초 보너스  ·  가스트가 빨라져요!`;
+    if (rewardNow) showBanner(`가스트의 눈물 확보!  Lv.${game.level}`, sub, '#9ff6ff', 2.6);
+    else showBanner(`레벨 UP!  Lv.${game.level}`, `${reached}점 돌파  ·  ${sub}`, '#ffe14a', 2.4);
     doFlash('#ffe14a', 0.25);
   }
 }
@@ -1209,7 +1227,7 @@ form.addEventListener('submit', (e) => {
     const input = form.elements[k];
     if (!input) continue;
     if (input.type === 'checkbox') next[k] = input.checked;
-    else if (input.tagName === 'SELECT') next[k] = input.value;
+    else if (input.tagName === 'SELECT' || input.type === 'text') next[k] = input.value;
     else {
       const n = parseFloat(input.value);
       if (Number.isFinite(n)) next[k] = n;
@@ -1272,8 +1290,12 @@ function button(label, cx, cy, w, h, action, enabled = true, primary = false) {
 }
 // 처음 화면 안내용: "30 · 50 · 70 …"
 function bonusSteps() {
-  const f = settings.bonusFirst, s = settings.bonusScore;
-  return s > 0 ? `${f} · ${f + s} · ${f + s * 2} …` : `${f}`;
+  const g = bonusGaps();
+  return g.map((n, i) => (i ? `+${n}` : `${n}`)).join(' → ');
+}
+// 설정의 "30, 50, 70" → [30, 50, 70] (0 이하·숫자 아닌 값은 버림)
+function bonusGaps() {
+  return String(settings.bonusGaps).split(/[,\s]+/).map(Number).filter((n) => Number.isFinite(n) && n > 0);
 }
 // 40 → "40초", 90 → "1분 30초"
 function timeLabel(s) {
@@ -1299,7 +1321,7 @@ function drawTitle(time) {
     ['네더의 가스트가 화염구를 쏘기 전에 맞혀라!', '#ffffff', 5],
     [`가스트 처치 +${settings.killPoints}점   ·   날아오는 화염구 맞히기 +${settings.deflectPoints}점`, '#ffd9b0', 3.4],
     [`배경을 맞히면 -${settings.missPenalty}점  ·  가스트를 놓치면 -${settings.escapePenalty}점  ·  화염구에 맞으면 -${settings.hitPenalty}점`, '#ff9a8a', 3.3],
-    [`제한 시간 ${timeLabel(settings.gameSeconds)}   ·   ${bonusSteps()}점마다 +${settings.bonusSeconds}초 보너스!`, '#ffe14a', 3.4],
+    [`제한 시간 ${timeLabel(settings.gameSeconds)}   ·   ${bonusSteps()}점 모을 때마다 +${settings.bonusSeconds}초 & 레벨 UP!`, '#ffe14a', 3.4],
     [`${settings.rewardScore}점 이상이면 '가스트의 눈물'을 드려요`, '#9ff6ff', 4],
     ['※ 화면만 쏘세요! 사람을 향해 쏘면 안 돼요', '#ff8a7a', 3.2],
   ];
@@ -1326,6 +1348,7 @@ function drawTitle(time) {
   }
 }
 const MEDAL = ['#ffd84a', '#d8d8e0', '#e09a5a'];
+const LEVEL_COLORS = ['#ffffff', '#ffe14a', '#ffb23a', '#ff7a3a', '#ff4a3a'];
 
 function drawRanking() {
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
@@ -1388,9 +1411,10 @@ function drawHUD(time) {
   ctx.scale(pulse, pulse);
   text(formatTime(game.timeLeft), 0, 0, U * 10, danger ? '#ff5a4a' : '#ffffff');
   ctx.restore();
+  text(`Lv.${game.level}`, W / 2, U * 17, U * 3.6, LEVEL_COLORS[Math.min(game.level, LEVEL_COLORS.length) - 1]);
 
   // 목표 진행 막대: 가스트의 눈물 점수 / 다음 보너스 점수 표시
-  const bonusOn = settings.bonusSeconds > 0 && settings.bonusFirst > 0 && Number.isFinite(game.nextBonus);
+  const bonusOn = settings.bonusSeconds > 0 && Number.isFinite(game.nextBonus);
   const bw = U * 52, bh = U * 3.4, bx = W - bw - U * 5, by = U * 9;
   const max = Math.max(settings.rewardScore, bonusOn ? game.nextBonus : 0, game.score, 1) * 1.15;
   panel(bx - U * 2.5, U * 2.5, bw + U * 5, U * 13, 0.6);
@@ -1434,7 +1458,7 @@ function drawResult(time) {
   text(`${game.player || '이름없음'} 님 · 미션 종료!`, cx, py + U * 7, U * 6.5, '#ffcf5a');
   text(`${game.score}점`, cx, py + U * 20, U * 15, '#ffffff', 'center', { shadow: '#a3200c' });
   const acc = st.shots ? Math.round(((st.kills + st.deflects) / st.shots) * 100) : 0;
-  text(`처치 ${st.kills}  ·  반사 ${st.deflects}  ·  빗나감 ${st.misses}  ·  놓침 ${st.escapes}  ·  피격 ${st.hitsTaken}  ·  명중률 ${acc}%  ·  보너스 ${game.bonusCount}회`, cx, py + U * 31, U * 3.2, '#ffd9b0');
+  text(`처치 ${st.kills}  ·  반사 ${st.deflects}  ·  빗나감 ${st.misses}  ·  놓침 ${st.escapes}  ·  피격 ${st.hitsTaken}  ·  명중률 ${acc}%  ·  레벨 ${game.level}`, cx, py + U * 31, U * 3.2, '#ffd9b0');
 
   // 순위
   const ri = game.rankInfo;
