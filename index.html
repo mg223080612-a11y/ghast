@@ -43,9 +43,28 @@
         <button type="button" id="settings-close">취소</button>
         <button type="submit" class="primary">저장</button>
       </div>
+      <h3>랭킹 관리</h3>
+      <p class="keys" id="rank-where"></p>
+      <div id="rank-admin"></div>
+      <div class="actions">
+        <button type="button" id="rank-clear">랭킹 전체 삭제</button>
+      </div>
       <p class="keys">
-        단축키 — <b>Space</b> 시작 · <b>P</b> 일시정지 · <b>Q</b> 처음 화면 · <b>F</b> 전체화면 · <b>M</b> 소리 끄기 · <b>S</b> 설정
+        단축키 — <b>Space</b> 시작 · <b>R</b> 랭킹 · <b>P</b> 일시정지 · <b>Q</b> 처음 화면 · <b>F</b> 전체화면 · <b>M</b> 소리 끄기 · <b>S</b> 설정
       </p>
+    </form>
+  </div>
+
+  <!-- 게임 시작 전 닉네임 입력 -->
+  <div id="name-entry" class="overlay" hidden>
+    <form id="name-form" autocomplete="off">
+      <h2>닉네임을 입력하세요</h2>
+      <input name="nickname" maxlength="12" placeholder="예: 가스트헌터" spellcheck="false">
+      <p class="hint" id="name-hint">랭킹에 이 이름으로 기록돼요 (최대 12자)</p>
+      <div class="actions">
+        <button type="button" id="name-cancel">취소</button>
+        <button type="submit" class="primary">시작!</button>
+      </div>
     </form>
   </div>
 

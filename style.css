@@ -86,3 +86,43 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
 }
 #settings .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 #settings .keys { font-size: 13px; opacity: 0.75; margin: 16px 0 0; line-height: 1.6; }
+#settings h3 { margin: 24px 0 4px; color: var(--accent); border-top: 2px solid var(--line); padding-top: 16px; }
+#rank-admin { max-height: 240px; overflow: auto; margin-top: 8px; font-size: 14px; }
+#rank-admin .rank-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 4px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+#rank-admin .rank-row button { font-size: 13px; padding: 4px 10px; }
+
+/* 닉네임 입력 (프로젝터에서도 잘 보이게 크게) */
+#name-entry {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+#name-entry[hidden] { display: none; }
+#name-form {
+  width: min(640px, calc(100vw - 32px));
+  background: var(--panel);
+  border: 4px solid var(--line);
+  padding: 28px 32px;
+  box-sizing: border-box;
+  text-align: center;
+}
+#name-form h2 { margin: 0 0 20px; font-size: 32px; color: var(--accent); }
+#name-form input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font);
+  font-size: 40px;
+  text-align: center;
+  padding: 12px;
+  background: #000;
+  color: #fff;
+  border: 3px solid #888;
+  outline: none;
+}
+#name-form input:focus { border-color: var(--accent); }
+#name-form .hint { margin: 12px 0 0; font-size: 16px; opacity: 0.8; }
+#name-form .hint.error { color: #ff8a7a; opacity: 1; }
+#name-form .actions { display: flex; justify-content: center; gap: 12px; margin-top: 24px; }
+#name-form button { font-size: 22px; padding: 12px 28px; white-space: nowrap; }

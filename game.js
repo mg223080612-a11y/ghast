@@ -26,7 +26,6 @@ const DEFAULTS = {
 };
 // 기본 규칙이 바뀌면 이름 뒤 숫자를 올려 예전에 저장된 설정을 무시한다
 const SETTINGS_KEY = 'ghast-shooting-settings-v2';
-const BEST_KEY = 'ghast-shooting-best';
 let settings = loadSettings();
 
 function loadSettings() {
@@ -747,18 +746,96 @@ const game = {
   rewardShown: false,
   resultTime: 0,
   stats: null,
-  best: 0,
   lastTick: 0,
+  player: '',           // 지금 플레이하는 사람의 닉네임
+  rankInfo: null,       // 결과 화면의 순위 { status: 'saving'|'saved'|'error', rankToday, rankAll, local }
+  lastEntryId: null,    // 방금 저장한 기록 (랭킹 화면에서 강조)
+  rankFrom: 'title',    // 랭킹 화면을 닫으면 돌아갈 곳
+  titleTop: [],         // 처음 화면에 보여줄 오늘의 TOP 3
 };
 
-function loadBest() {
-  try {
-    const b = JSON.parse(localStorage.getItem(BEST_KEY) || '{}');
-    return b.date === new Date().toDateString() ? b.score : 0;
-  } catch { return 0; }
+// ---------- 랭킹 ----------
+// serve.cjs 로 열었으면 서버 DB(data/ranking.db)에, index.html 을 바로 열었으면 이 브라우저에 저장한다.
+const RANK_LOCAL_KEY = 'ghast-shooting-ranking';
+const todayStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const cleanName = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 12);
+const byRank = (a, b) => b.score - a.score || a.created_at - b.created_at;
+
+const Ranking = {
+  useServer: location.protocol.startsWith('http'),
+
+  async request(method, url, body) {
+    const res = await fetch(url, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) throw new Error(`서버 오류 ${res.status}`);
+    return res.json();
+  },
+  readLocal() {
+    try { return JSON.parse(localStorage.getItem(RANK_LOCAL_KEY) || '[]'); } catch { return []; }
+  },
+  writeLocal(list) {
+    try { localStorage.setItem(RANK_LOCAL_KEY, JSON.stringify(list)); } catch { /* 저장 불가 */ }
+  },
+
+  // 기록 저장 → { id, rankToday, rankAll, local }
+  async add(entry) {
+    if (this.useServer) {
+      try {
+        return { ...(await this.request('POST', '/api/scores', { ...entry, since: todayStart() })), local: false };
+      } catch (err) {
+        console.warn('서버에 랭킹을 저장하지 못해 이 브라우저에 저장합니다', err);
+      }
+    }
+    const list = this.readLocal();
+    const row = { id: Date.now(), ...entry, created_at: Date.now() };
+    list.push(row);
+    this.writeLocal(list);
+    const rankIn = (rows) => 1 + rows.filter((r) => r.score > row.score).length;
+    return { id: row.id, rankToday: rankIn(list.filter((r) => r.created_at >= todayStart())), rankAll: rankIn(list), local: true };
+  },
+  // scope: 'today' | 'all'
+  async top(scope, limit = 10) {
+    const since = scope === 'today' ? todayStart() : 0;
+    if (this.useServer) {
+      try { return await this.request('GET', `/api/scores?since=${since}&limit=${limit}`); } catch (err) { console.warn(err); }
+    }
+    return this.readLocal().filter((r) => r.created_at >= since).sort(byRank).slice(0, limit);
+  },
+  async remove(id) {
+    if (this.useServer) return this.request('DELETE', `/api/scores/${id}`);
+    this.writeLocal(this.readLocal().filter((r) => r.id !== id));
+  },
+  async clear() {
+    if (this.useServer) return this.request('DELETE', '/api/scores');
+    this.writeLocal([]);
+  },
+};
+
+function refreshTitleTop() {
+  Ranking.top('today', 3).then((list) => { game.titleTop = list; }).catch(() => {});
 }
-function saveBest(score) {
-  try { localStorage.setItem(BEST_KEY, JSON.stringify({ date: new Date().toDateString(), score })); } catch { /* 무시 */ }
+
+// 랭킹 화면
+const rankView = { scope: 'today', list: null, req: 0 };
+function openRanking() {
+  game.rankFrom = game.state === 'result' ? 'result' : 'title';
+  game.state = 'ranking';
+  setRankScope(rankView.scope);
+  updateCornerButtons();
+}
+function setRankScope(scope) {
+  rankView.scope = scope;
+  rankView.list = null;
+  const req = ++rankView.req;
+  Ranking.top(scope, 10)
+    .then((list) => { if (req === rankView.req) rankView.list = list; })
+    .catch(() => { if (req === rankView.req) rankView.list = []; });
+}
+function closeRanking() {
+  if (game.rankFrom === 'result') { game.state = 'result'; updateCornerButtons(); } else goTitle();
 }
 
 function spawnGhast(demo) {
@@ -787,6 +864,7 @@ function goTitle() {
   game.paused = false;
   fireballs = [];
   ghasts.forEach((g) => g.hittable() && g.leave());
+  refreshTitleTop();
   updateCornerButtons();
 }
 
@@ -820,8 +898,13 @@ function endGame() {
   ghasts.forEach((g) => g.hittable() && g.leave());
   const win = game.score >= settings.rewardScore;
   Sound.end(win);
-  if (game.score > game.best) { game.best = game.score; saveBest(game.best); }
   updateCornerButtons();
+
+  // 랭킹 저장
+  game.rankInfo = { status: 'saving' };
+  Ranking.add({ name: game.player || '이름없음', score: game.score, kills: game.stats.kills })
+    .then((r) => { game.rankInfo = { status: 'saved', ...r }; game.lastEntryId = r.id; })
+    .catch((err) => { console.error(err); game.rankInfo = { status: 'error' }; });
 }
 
 function addScore(n) {
@@ -880,10 +963,11 @@ function onTap(x, y) {
     addPart({ kind: 'cross', x, y, size: U * 1.6, life: 0.35, color: '#ffffff' });
   }
 
-  if (game.state === 'title' || game.state === 'result') {
+  if (game.state === 'title' || game.state === 'result' || game.state === 'ranking') {
     for (const b of buttons) {
       if (b.enabled && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { b.action(); return; }
     }
+    if (game.state === 'ranking') return;
     // 처음 화면의 가스트는 연습용으로 맞힐 수 있다 (점수 없음)
     const g = [...ghasts].sort((a, b) => b.z - a.z).find((o) => o.hittable() && o.hitTest(x, y));
     if (g) { g.kill(); Sound.hit(); }
@@ -942,8 +1026,13 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 
 window.addEventListener('keydown', (e) => {
+  // 설정 창·닉네임 입력 중에는 게임 단축키를 쓰지 않는다 (글자 입력과 겹치지 않게)
   if (settingsOpen()) {
     if (e.key === 'Escape') closeSettings();
+    return;
+  }
+  if (nameOpen()) {
+    if (e.key === 'Escape') closeNameEntry();
     return;
   }
   Sound.init();
@@ -951,15 +1040,22 @@ window.addEventListener('keydown', (e) => {
     case 'Space':
     case 'Enter':
       e.preventDefault();
-      if (game.state === 'title') startGame();
-      else if (game.state === 'result' && game.resultTime > 1.5) startGame();
+      if (game.state === 'title') openNameEntry();
+      else if (game.state === 'result' && game.resultTime > 1.5) nextPlayer();
+      else if (game.state === 'ranking') closeRanking();
       else if (game.state === 'play' && game.paused) game.paused = false;
+      break;
+    case 'KeyR':
+      if (game.state === 'title' || (game.state === 'result' && game.resultTime > 1.5)) openRanking();
+      else if (game.state === 'ranking') closeRanking();
       break;
     case 'KeyP':
       if (game.state === 'play') game.paused = !game.paused;
       break;
     case 'KeyQ':
-      goTitle();
+    case 'Escape':
+      if (game.state === 'ranking') closeRanking();
+      else if (e.code === 'KeyQ') goTitle();
       break;
     case 'KeyF':
       toggleFullscreen();
@@ -993,7 +1089,77 @@ function openSettings() {
   if (game.state === 'play') game.paused = true;
   fillForm(settings);
   settingsEl.hidden = false;
+  loadRankAdmin();
 }
+
+// 설정 창의 랭킹 관리: 장난스러운 닉네임 등을 운영자가 지울 수 있게
+async function loadRankAdmin() {
+  const box = document.getElementById('rank-admin');
+  document.getElementById('rank-where').textContent = Ranking.useServer
+    ? '저장 위치: 서버 DB (ghast/data/ranking.db)'
+    : '저장 위치: 이 브라우저 (serve.cjs 로 열면 DB 에 저장됩니다)';
+  box.textContent = '불러오는 중…';
+  let list = [];
+  try { list = await Ranking.top('all', 100); } catch { box.textContent = '랭킹을 불러오지 못했습니다'; return; }
+  box.textContent = '';
+  if (!list.length) { box.textContent = '아직 기록이 없습니다'; return; }
+  list.forEach((r, i) => {
+    const row = document.createElement('div');
+    row.className = 'rank-row';
+    const label = document.createElement('span');
+    label.textContent = `${i + 1}. ${r.name} · ${r.score}점 · ${new Date(r.created_at).toLocaleString('ko-KR')}`;
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.textContent = '삭제';
+    del.addEventListener('click', async () => {
+      if (!confirm(`'${r.name}' (${r.score}점) 기록을 지울까요?`)) return;
+      await Ranking.remove(r.id).catch((err) => alert(`삭제 실패: ${err.message}`));
+      loadRankAdmin();
+      refreshTitleTop();
+    });
+    row.append(label, del);
+    box.append(row);
+  });
+}
+document.getElementById('rank-clear').addEventListener('click', async () => {
+  if (!confirm('랭킹 기록을 모두 지울까요? 되돌릴 수 없습니다.')) return;
+  await Ranking.clear().catch((err) => alert(`삭제 실패: ${err.message}`));
+  loadRankAdmin();
+  refreshTitleTop();
+});
+
+// ---------- 닉네임 입력 ----------
+const nameEl = document.getElementById('name-entry');
+const nameForm = document.getElementById('name-form');
+const nameInput = nameForm.elements.nickname;
+const nameHint = document.getElementById('name-hint');
+const nameOpen = () => !nameEl.hidden;
+function openNameEntry() {
+  Sound.init();
+  if (game.state !== 'title') goTitle();
+  nameInput.value = '';
+  nameHint.textContent = '랭킹에 이 이름으로 기록돼요 (최대 12자)';
+  nameHint.classList.remove('error');
+  nameEl.hidden = false;
+  setTimeout(() => nameInput.focus(), 0);
+}
+function closeNameEntry() { nameEl.hidden = true; }
+nameForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const name = cleanName(nameInput.value);
+  if (!name) {
+    nameHint.textContent = '닉네임을 입력해 주세요!';
+    nameHint.classList.add('error');
+    nameInput.focus();
+    return;
+  }
+  game.player = name;
+  closeNameEntry();
+  startGame();
+});
+document.getElementById('name-cancel').addEventListener('click', closeNameEntry);
+// 결과 화면 → 다음 사람 (닉네임 새로 입력)
+function nextPlayer() { openNameEntry(); }
 function closeSettings() { settingsEl.hidden = true; }
 form.addEventListener('submit', (e) => {
   e.preventDefault();
@@ -1097,9 +1263,66 @@ function drawTitle(time) {
   ctx.drawImage(IMG.tear, cx - pw / 2 + U * 3, ty - ts / 2, ts, ts);
   ctx.drawImage(IMG.tear, cx + pw / 2 - U * 3 - ts, ty - ts / 2, ts, ts);
 
-  button('게임 시작', cx, H * 0.84, U * 52, U * 12, startGame, true, true);
-  text('Space 시작 · F 전체화면 · S 설정 · M 소리', cx, H * 0.84 + U * 10, U * 2.6, '#c9a89a');
-  if (game.best > 0) text(`오늘 최고 점수 ${game.best}점`, U * 3, H - U * 4, U * 3.2, '#ffe14a', 'left');
+  button('게임 시작', cx - U * 13, H * 0.84, U * 46, U * 12, openNameEntry, true, true);
+  button('랭킹', cx + U * 26, H * 0.84, U * 22, U * 12, openRanking);
+  text('Space 시작 · R 랭킹 · F 전체화면 · S 설정 · M 소리', cx, H * 0.84 + U * 10, U * 2.6, '#c9a89a');
+
+  // 오늘의 TOP 3
+  if (game.titleTop.length) {
+    const x = U * 4;
+    let y = H - U * 4 - (game.titleTop.length - 1) * U * 4.6;
+    text('오늘의 TOP 3', x, y - U * 5.5, U * 3.4, '#ffe14a', 'left');
+    game.titleTop.forEach((r, i) => {
+      text(`${i + 1}위  ${r.name}  ${r.score}점`, x, y, U * 3.2, MEDAL[i], 'left');
+      y += U * 4.6;
+    });
+  }
+}
+const MEDAL = ['#ffd84a', '#d8d8e0', '#e09a5a'];
+
+function drawRanking() {
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, 0, W, H);
+  const cx = W / 2;
+  const pw = Math.min(W - U * 8, U * 100);
+  const ph = Math.min(H - U * 4, U * 100);
+  const px = cx - pw / 2, py = (H - ph) / 2;
+  panel(px, py, pw, ph, 0.88);
+
+  text('랭킹 TOP 10', cx, py + U * 7, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
+  button('오늘', cx - U * 13, py + U * 17, U * 22, U * 7, () => setRankScope('today'), true, rankView.scope === 'today');
+  button('전체', cx + U * 13, py + U * 17, U * 22, U * 7, () => setRankScope('all'), true, rankView.scope === 'all');
+
+  const colRank = px + U * 8, colName = px + U * 16, colKills = px + pw - U * 26, colScore = px + pw - U * 6;
+  const headY = py + U * 26;
+  text('순위', colRank, headY, U * 2.8, '#c9a89a');
+  text('닉네임', colName, headY, U * 2.8, '#c9a89a', 'left');
+  text('처치', colKills, headY, U * 2.8, '#c9a89a');
+  text('점수', colScore, headY, U * 2.8, '#c9a89a', 'right');
+
+  const top = py + U * 31, bottom = py + ph - U * 13;
+  const rowH = Math.min(U * 6.4, (bottom - top) / 10);
+  const list = rankView.list;
+  if (!list) {
+    text('불러오는 중…', cx, top + rowH * 3, U * 4, '#ffffff');
+  } else if (!list.length) {
+    text(rankView.scope === 'today' ? '오늘은 아직 기록이 없어요' : '아직 기록이 없어요', cx, top + rowH * 3, U * 4, '#ffffff');
+  } else {
+    list.forEach((r, i) => {
+      const y = top + rowH * (i + 0.5);
+      if (r.id === game.lastEntryId) {
+        ctx.fillStyle = 'rgba(255, 225, 74, 0.2)';
+        ctx.fillRect(px + U * 3, y - rowH / 2, pw - U * 6, rowH);
+      }
+      const color = MEDAL[i] || '#ffffff';
+      const size = Math.min(U * 3.8, rowH * 0.62);
+      text(`${i + 1}`, colRank, y, size, color);
+      text(r.name, colName, y, size, color, 'left');
+      text(String(r.kills ?? 0), colKills, y, size * 0.85, '#ffd9b0');
+      text(`${r.score}점`, colScore, y, size, color, 'right');
+    });
+  }
+  button('돌아가기', cx, py + ph - U * 7, U * 36, U * 8, closeRanking);
 }
 
 function drawHUD(time) {
@@ -1156,18 +1379,26 @@ function drawCountdown() {
 function drawResult(time) {
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.fillRect(0, 0, W, H);
-  const cx = W / 2, pw = Math.min(W - U * 8, U * 110), ph = U * 86;
+  const cx = W / 2, pw = Math.min(W - U * 8, U * 110), ph = U * 92;
   const py = Math.max(U * 2, (H - ph) / 2);
   panel(cx - pw / 2, py, pw, ph, 0.82);
   const win = game.score >= settings.rewardScore;
   const st = game.stats;
-  text('미션 종료!', cx, py + U * 8, U * 8, '#ffcf5a');
-  text(`${game.score}점`, cx, py + U * 22, U * 15, '#ffffff', 'center', { shadow: '#a3200c' });
+  text(`${game.player || '이름없음'} 님 · 미션 종료!`, cx, py + U * 7, U * 6.5, '#ffcf5a');
+  text(`${game.score}점`, cx, py + U * 20, U * 15, '#ffffff', 'center', { shadow: '#a3200c' });
   const acc = st.shots ? Math.round(((st.kills + st.deflects) / st.shots) * 100) : 0;
-  text(`처치 ${st.kills}  ·  반사 ${st.deflects}  ·  빗나감 ${st.misses}  ·  피격 ${st.hitsTaken}  ·  명중률 ${acc}%  ·  보너스 ${game.bonusCount}회`, cx, py + U * 34, U * 3.2, '#ffd9b0');
+  text(`처치 ${st.kills}  ·  반사 ${st.deflects}  ·  빗나감 ${st.misses}  ·  피격 ${st.hitsTaken}  ·  명중률 ${acc}%  ·  보너스 ${game.bonusCount}회`, cx, py + U * 31, U * 3.2, '#ffd9b0');
+
+  // 순위
+  const ri = game.rankInfo;
+  let rankLine = '';
+  if (ri?.status === 'saving') rankLine = '랭킹 저장 중…';
+  else if (ri?.status === 'error') rankLine = '랭킹 저장에 실패했어요';
+  else if (ri?.status === 'saved') rankLine = `오늘 ${ri.rankToday}위  ·  전체 ${ri.rankAll}위${ri.local ? '  (이 브라우저에만 저장됨)' : ''}`;
+  text(rankLine, cx, py + U * 38, U * 4.4, ri?.status === 'error' ? '#ff8a7a' : '#ffe14a');
 
   if (win) {
-    const ts = U * 15, ty = py + U * 49 + Math.sin(time * 3) * U;
+    const ts = U * 15, ty = py + U * 53 + Math.sin(time * 3) * U;
     const glow = ctx.createRadialGradient(cx, ty, 0, cx, ty, ts * 1.4);
     glow.addColorStop(0, 'rgba(160, 246, 255, 0.55)');
     glow.addColorStop(1, 'rgba(160, 246, 255, 0)');
@@ -1175,17 +1406,18 @@ function drawResult(time) {
     ctx.fillRect(cx - ts * 1.5, ty - ts * 1.5, ts * 3, ts * 3);
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(IMG.tear, cx - ts / 2, ty - ts / 2, ts, ts);
-    text('가스트의 눈물 획득!', cx, py + U * 62, U * 6, '#9ff6ff');
-    text('진행요원에게 가스트의 눈물을 받아가세요', cx, py + U * 69, U * 3.4, '#ffffff');
+    text('가스트의 눈물 획득!', cx, py + U * 66, U * 6, '#9ff6ff');
+    text('진행요원에게 가스트의 눈물을 받아가세요', cx, py + U * 73, U * 3.4, '#ffffff');
   } else {
-    text('아쉬워요!', cx, py + U * 48, U * 7, '#ff8a7a');
-    text(`${settings.rewardScore}점 이상이면 가스트의 눈물을 받을 수 있어요`, cx, py + U * 58, U * 3.6, '#ffffff');
+    text('아쉬워요!', cx, py + U * 53, U * 7, '#ff8a7a');
+    text(`${settings.rewardScore}점 이상이면 가스트의 눈물을 받을 수 있어요`, cx, py + U * 63, U * 3.6, '#ffffff');
   }
 
-  const ready = game.resultTime > 1.5; // 남은 총알이 실수로 '다시 하기'를 누르지 않게 잠깐 잠금
-  button('다시 하기', cx - U * 22, py + ph - U * 9, U * 38, U * 9, startGame, ready, true);
-  button('처음 화면', cx + U * 22, py + ph - U * 9, U * 38, U * 9, goTitle, ready);
-  if (game.best > 0) text(`오늘 최고 점수 ${game.best}점`, cx, py + ph + U * 4, U * 3.2, '#ffe14a');
+  const ready = game.resultTime > 1.5; // 남은 총알이 실수로 버튼을 누르지 않게 잠깐 잠금
+  const by = py + ph - U * 8;
+  button('다음 사람', cx - U * 33, by, U * 29, U * 9, nextPlayer, ready, true);
+  button('다시 하기', cx, by, U * 29, U * 9, startGame, ready);
+  button('랭킹', cx + U * 33, by, U * 29, U * 9, openRanking, ready);
 }
 
 function drawBanner() {
@@ -1285,6 +1517,7 @@ function draw(time) {
   if (game.state === 'countdown') { drawHUD(time); drawCountdown(); }
   if (game.state === 'play') drawHUD(time);
   if (game.state === 'result') drawResult(time);
+  if (game.state === 'ranking') drawRanking();
   drawBanner();
 
   if (game.paused) {
@@ -1310,7 +1543,6 @@ resize();
 loadImages()
   .then(() => {
     buildGhastVariants();
-    game.best = loadBest();
     goTitle();
     requestAnimationFrame(frame);
   })
