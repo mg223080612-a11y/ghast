@@ -10,7 +10,8 @@
 // ---------- 설정 (설정 창에서 바꿀 수 있음, 브라우저에 저장됨) ----------
 const DEFAULTS = {
   gameSeconds: 40,     // 제한 시간 40초
-  bonusScore: 30,      // 이 점수마다 (30, 60, 90 …)
+  bonusFirst: 30,      // 첫 보너스 점수
+  bonusScore: 20,      // 그다음부터 이 간격마다 (30 → 50 → 70 → 90 …)
   bonusSeconds: 7,     // 이만큼 시간 추가
   rewardScore: 30,     // 이 점수 이상이면 가스트의 눈물(밀키스)
   killPoints: 2,       // 가스트 처치
@@ -28,7 +29,7 @@ const DEFAULTS = {
   showTouches: true,   // 터치(탄착) 위치를 화면에 표시
 };
 // 기본 규칙이 바뀌면 이름 뒤 숫자를 올려 예전에 저장된 설정을 무시한다
-const SETTINGS_KEY = 'ghast-shooting-settings-v5';
+const SETTINGS_KEY = 'ghast-shooting-settings-v6';
 let settings = loadSettings();
 
 function loadSettings() {
@@ -888,7 +889,7 @@ function startGame() {
   game.timeLeft = settings.gameSeconds;
   game.elapsed = 0;
   game.spawnTimer = 0;
-  game.nextBonus = settings.bonusScore;
+  game.nextBonus = settings.bonusFirst;
   game.bonusCount = 0;
   game.rewardShown = false;
   game.stats = { shots: 0, kills: 0, deflects: 0, hitsTaken: 0, misses: 0, escapes: 0 };
@@ -926,13 +927,14 @@ function addScore(n) {
     Sound.reward();
     showBanner('가스트의 눈물 확보!', `${settings.rewardScore}점 달성`, '#9ff6ff');
   }
-  // 30점, 60점, 90점 … 처음 넘을 때마다 시간 추가 (감점 후 다시 넘어도 같은 구간은 한 번만)
-  if (settings.bonusSeconds > 0 && settings.bonusScore > 0 && game.score >= game.nextBonus) {
+  // 30점, 50점, 70점 … 처음 넘을 때마다 시간 추가 (감점 후 다시 넘어도 같은 구간은 한 번만)
+  if (settings.bonusSeconds > 0 && settings.bonusFirst > 0 && game.score >= game.nextBonus) {
     const reached = game.nextBonus;
     while (game.score >= game.nextBonus) {
       game.timeLeft += settings.bonusSeconds;
       game.bonusCount++;
-      game.nextBonus += settings.bonusScore;
+      // 간격이 0 이면 첫 보너스 한 번만
+      game.nextBonus = settings.bonusScore > 0 ? game.nextBonus + settings.bonusScore : Infinity;
     }
     Sound.bonus();
     // 가스트의 눈물과 같은 점수에서 터지면 알림을 하나로 합친다
@@ -1268,6 +1270,11 @@ function button(label, cx, cy, w, h, action, enabled = true, primary = false) {
   ctx.globalAlpha = 1;
   buttons.push({ x: x - b, y: y - b, w: w + b * 2, h: h + b * 2, action, enabled });
 }
+// 처음 화면 안내용: "30 · 50 · 70 …"
+function bonusSteps() {
+  const f = settings.bonusFirst, s = settings.bonusScore;
+  return s > 0 ? `${f} · ${f + s} · ${f + s * 2} …` : `${f}`;
+}
 // 40 → "40초", 90 → "1분 30초"
 function timeLabel(s) {
   const m = Math.floor(s / 60), r = Math.round(s % 60);
@@ -1292,7 +1299,7 @@ function drawTitle(time) {
     ['네더의 가스트가 화염구를 쏘기 전에 맞혀라!', '#ffffff', 5],
     [`가스트 처치 +${settings.killPoints}점   ·   날아오는 화염구 맞히기 +${settings.deflectPoints}점`, '#ffd9b0', 3.4],
     [`배경을 맞히면 -${settings.missPenalty}점  ·  가스트를 놓치면 -${settings.escapePenalty}점  ·  화염구에 맞으면 -${settings.hitPenalty}점`, '#ff9a8a', 3.3],
-    [`제한 시간 ${timeLabel(settings.gameSeconds)}   ·   ${settings.bonusScore}점마다 +${settings.bonusSeconds}초 보너스!`, '#ffe14a', 3.4],
+    [`제한 시간 ${timeLabel(settings.gameSeconds)}   ·   ${bonusSteps()}점마다 +${settings.bonusSeconds}초 보너스!`, '#ffe14a', 3.4],
     [`${settings.rewardScore}점 이상이면 '가스트의 눈물'을 드려요`, '#9ff6ff', 4],
     ['※ 화면만 쏘세요! 사람을 향해 쏘면 안 돼요', '#ff8a7a', 3.2],
   ];
@@ -1383,7 +1390,7 @@ function drawHUD(time) {
   ctx.restore();
 
   // 목표 진행 막대: 가스트의 눈물 점수 / 다음 보너스 점수 표시
-  const bonusOn = settings.bonusSeconds > 0 && settings.bonusScore > 0;
+  const bonusOn = settings.bonusSeconds > 0 && settings.bonusFirst > 0 && Number.isFinite(game.nextBonus);
   const bw = U * 52, bh = U * 3.4, bx = W - bw - U * 5, by = U * 9;
   const max = Math.max(settings.rewardScore, bonusOn ? game.nextBonus : 0, game.score, 1) * 1.15;
   panel(bx - U * 2.5, U * 2.5, bw + U * 5, U * 13, 0.6);
