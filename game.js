@@ -27,12 +27,13 @@ const DEFAULTS = {
   ghastScale: 100,     // 가스트 크기 (%)
   volume: 0.8,
   inputMode: 'gun',    // 'gun' = 라이트건(마우스로 인식) / 'touch' = 프로젝터 터치 센서
-  aimMode: 'small',    // 게임 중 조준점: 'small' 작은 십자 / 'big' 큰 조준점 / 'hidden' 숨김
+  aimMode: 'big',      // 조준점: 'big' 큰 조준점 / 'small' 작은 마우스 십자 / 'hidden' 게임 중 숨김
+  aimSize: 100,        // 큰 조준점 크기 (%)
   debounceMs: 80,      // (터치 모드에서만) 센서가 한 번의 충격을 여러 번 보내는 것을 무시
   showTouches: true,   // 터치(탄착) 위치를 화면에 표시
 };
 // 기본 규칙이 바뀌면 이름 뒤 숫자를 올려 예전에 저장된 설정을 무시한다
-const SETTINGS_KEY = 'ghast-shooting-settings-v8';
+const SETTINGS_KEY = 'ghast-shooting-settings-v9';
 let settings = loadSettings();
 
 function loadSettings() {
@@ -1776,21 +1777,25 @@ function draw(time) {
     text('P 또는 Space 를 누르면 계속합니다', W / 2, H * 0.45 + U * 11, U * 4, '#ffd9b0');
   }
 
-  // 조준점: 게임 중에만 설정을 따르고, 메뉴 화면에서는 버튼을 고를 수 있게 항상 보인다
+  // 조준점: '숨김'은 게임 중에만 적용하고, 메뉴 화면에서는 버튼을 고를 수 있게 항상 보인다
   const inGame = (game.state === 'play' || game.state === 'countdown') && !game.paused;
-  const mode = inGame ? settings.aimMode : 'small';
-  // 조준 테스트에서는 큰 조준점을 따로 그리므로 시스템 커서를 숨긴다
-  const cursor = mode === 'small' && game.state !== 'aimtest' ? 'crosshair' : 'none';
+  const mode = !inGame && settings.aimMode === 'hidden' ? 'big' : settings.aimMode;
+  // 큰 조준점을 그릴 때(조준 테스트 포함)는 시스템 커서를 숨긴다
+  const showBig = mode === 'big' || game.state === 'aimtest';
+  const cursor = showBig || mode === 'hidden' ? 'none' : 'crosshair';
   if (canvas.style.cursor !== cursor) canvas.style.cursor = cursor;
-  if (mode === 'big' && aim.seen) drawAim(aim.x, aim.y);
+  if (showBig && aim.seen && game.state !== 'aimtest') drawAim(aim.x, aim.y);
 }
 
-// 큰 조준점 (프로젝터 화면에서도 잘 보이게)
+// 큰 조준점 (프로젝터 화면에서도 잘 보이게). 크기는 설정의 '조준점 크기'
 function drawAim(x, y) {
-  const r = U * 3.2, gap = U * 1, len = U * 2.4, t = Math.max(2, U * 0.45);
-  for (const [color, w] of [['rgba(0,0,0,0.8)', t + U * 0.5], ['#ffffff', t]]) {
+  const s = clamp(settings.aimSize, 50, 300) / 100;
+  const r = U * 5 * s, gap = U * 1.4 * s, len = U * 3.2 * s, t = Math.max(3, U * 0.8 * s);
+  // 검은 테두리 → 노란 빛 → 흰 선 순서로 겹쳐 어두운 네더 배경에서도 또렷하게
+  for (const [color, w] of [['rgba(0,0,0,0.85)', t + U * 0.9 * s], ['rgba(255,225,74,0.9)', t + U * 0.35 * s], ['#ffffff', t]]) {
     ctx.strokeStyle = color;
     ctx.lineWidth = w;
+    ctx.lineCap = 'square';
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.moveTo(x - r - len, y); ctx.lineTo(x - gap, y);
@@ -1799,8 +1804,12 @@ function drawAim(x, y) {
     ctx.moveTo(x, y + gap); ctx.lineTo(x, y + r + len);
     ctx.stroke();
   }
+  // 한가운데 빨간 점 (실제로 맞는 자리)
+  const dot = t * 1.4;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(x - dot / 2 - 2, y - dot / 2 - 2, dot + 4, dot + 4);
   ctx.fillStyle = '#ff3a2a';
-  ctx.fillRect(x - t / 2, y - t / 2, t, t);
+  ctx.fillRect(x - dot / 2, y - dot / 2, dot, dot);
 }
 
 let last = performance.now();
