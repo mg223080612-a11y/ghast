@@ -786,6 +786,17 @@ const RANK_PENDING_KEY = 'ghast-shooting-pending';   // 아직 못 올린 기록
 const RANK_CACHE_KEY = 'ghast-shooting-rank-cache';  // 마지막으로 받아 온 랭킹 (오프라인일 때 보여줌)
 const todayStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
 const cleanName = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 12);
+// 부적절한 닉네임 거르기 (worker.js 에도 같은 목록이 있어 서버에서도 한 번 더 막음)
+// 띄어쓰기·숫자·기호를 지운 뒤 검사해서 "씨 1 발" 같은 변형도 잡는다.
+const BAD_WORDS = [
+  '시발', '씨발', '씨바', 'ㅅㅂ', 'ㅆㅂ', '병신', '븅신', 'ㅂㅅ', '좆', '존나', '졸라', 'ㅈㄴ',
+  '개새', '새끼', '쌔끼', '지랄', 'ㅈㄹ', '미친', '닥쳐', '꺼져', '엠창', '느금', '니애미', '니엄마',
+  '애미', '애비', '섹스', '보지', '자지', '찐따', 'fuck', 'fuk', 'shit', 'bitch', 'sex', 'porn',
+  'dick', 'pussy', 'nigg',
+];
+const normalizeName = (s) => String(s).toLowerCase().normalize('NFC')
+  .replace(/[\s\d_.\-~!@#$%^&*()+=|\\/?<>,;:'"`[\]{}·•]+/g, '');
+const isBadName = (s) => { const n = normalizeName(s); return BAD_WORDS.some((w) => n.includes(w)); };
 const byRank = (a, b) => b.score - a.score || a.created_at - b.created_at;
 const readJson = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
 const writeJson = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 저장 불가 */ } };
@@ -812,19 +823,28 @@ const Ranking = {
     }
     this.online = true;
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `서버 오류 ${res.status}`);
+    if (!res.ok) {
+      const err = new Error(data.error || `서버 오류 ${res.status}`);
+      err.status = res.status;
+      throw err;
+    }
     return data;
   },
+  // 서버가 '이 기록은 안 받는다'고 확실히 거절한 경우 (닉네임·점수 문제).
+  // 이런 기록은 다시 보내도 안 되니 보관하지 않는다.
+  // 인터넷 끊김(status 없음)·너무 잦은 저장(429)·서버 고장(5xx)은 나중에 다시 보낸다.
+  isRejected(err) { return err.status >= 400 && err.status < 500 && err.status !== 429; },
 
   pending() { return readJson(RANK_PENDING_KEY, []); },
 
-  // 기록 저장 → { id, rankToday, rankAll, pending }
+  // 기록 저장 → { id, rankToday, rankAll, pending } 또는 { rejected: '이유' }
   async add(entry) {
     const row = { ...entry, created_at: Date.now() };
     try {
       const r = await this.request('POST', '', { ...row, since: todayStart() });
       return { ...r, pending: false };
     } catch (err) {
+      if (this.isRejected(err)) return { rejected: err.message };
       console.warn('랭킹을 올리지 못해 이 PC 에 보관합니다', err);
       const id = `p-${row.created_at}`;
       writeJson(RANK_PENDING_KEY, [...this.pending(), { ...row, id }]);
@@ -837,13 +857,18 @@ const Ranking = {
   async flush() {
     if (this.flushing) return;
     this.flushing = true;
-    try {
-      for (const row of this.pending()) {
+    const drop = (id) => writeJson(RANK_PENDING_KEY, this.pending().filter((p) => p.id !== id));
+    for (const row of this.pending()) {
+      try {
         const r = await this.request('POST', '', { ...row, since: todayStart() });
-        writeJson(RANK_PENDING_KEY, this.pending().filter((p) => p.id !== row.id));
+        drop(row.id);
         if (game.lastEntryId === row.id) game.lastEntryId = r.id;
+      } catch (err) {
+        // 서버가 거절한 기록 하나 때문에 뒤의 기록까지 막히지 않도록 버리고 계속한다
+        if (this.isRejected(err)) { console.warn('서버가 거절한 보관 기록을 버립니다', row, err.message); drop(row.id); continue; }
+        break; // 아직 오프라인 등 — 다음에 다시 시도
       }
-    } catch { /* 아직 오프라인 — 다음에 다시 시도 */ }
+    }
     this.flushing = false;
   },
 
@@ -968,7 +993,11 @@ function endGame() {
   // 랭킹 저장
   game.rankInfo = { status: 'saving' };
   Ranking.add({ name: game.player || '이름없음', score: game.score, kills: game.stats.kills })
-    .then((r) => { game.rankInfo = { status: 'saved', ...r }; game.lastEntryId = r.id; })
+    .then((r) => {
+      if (r.rejected) { game.rankInfo = { status: 'rejected', reason: r.rejected }; return; }
+      game.rankInfo = { status: 'saved', ...r };
+      game.lastEntryId = r.id;
+    })
     .catch((err) => { console.error(err); game.rankInfo = { status: 'error' }; });
 }
 
@@ -1248,9 +1277,11 @@ function closeNameEntry() { nameEl.hidden = true; }
 nameForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const name = cleanName(nameInput.value);
-  if (!name) {
-    nameHint.textContent = '닉네임을 입력해 주세요!';
+  const problem = !name ? '닉네임을 입력해 주세요!' : isBadName(name) ? '사용할 수 없는 닉네임이에요. 다른 이름을 써 주세요!' : '';
+  if (problem) {
+    nameHint.textContent = problem;
     nameHint.classList.add('error');
+    nameInput.select();
     nameInput.focus();
     return;
   }
@@ -1507,9 +1538,10 @@ function drawResult(time) {
   let rankLine = '';
   if (ri?.status === 'saving') rankLine = '랭킹 저장 중…';
   else if (ri?.status === 'error') rankLine = '랭킹 저장에 실패했어요';
+  else if (ri?.status === 'rejected') rankLine = `랭킹에 올리지 못했어요: ${ri.reason}`;
   else if (ri?.status === 'saved' && ri.pending) rankLine = '인터넷 연결이 안 돼 이 PC에 보관했어요 (연결되면 자동으로 올라가요)';
   else if (ri?.status === 'saved') rankLine = `오늘 ${ri.rankToday}위  ·  전체 ${ri.rankAll}위`;
-  text(rankLine, cx, py + U * 38, U * 4.4, ri?.status === 'error' ? '#ff8a7a' : '#ffe14a');
+  text(rankLine, cx, py + U * 38, U * 4.4, ri?.status === 'error' || ri?.status === 'rejected' ? '#ff8a7a' : '#ffe14a');
 
   if (win) {
     const ts = U * 15, ty = py + U * 53 + Math.sin(time * 3) * U;

@@ -28,6 +28,18 @@ const json = (status, body) => new Response(JSON.stringify(body), {
 
 // 닉네임 정리: 앞뒤 공백·제어문자 제거, 최대 12자
 const cleanName = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 12);
+
+// 부적절한 닉네임 거르기 (game.js 에도 같은 목록이 있어 입력할 때 바로 알려 줌)
+// 띄어쓰기·숫자·기호를 지운 뒤 검사해서 "씨 1 발" 같은 변형도 잡는다.
+const BAD_WORDS = [
+  '시발', '씨발', '씨바', 'ㅅㅂ', 'ㅆㅂ', '병신', '븅신', 'ㅂㅅ', '좆', '존나', '졸라', 'ㅈㄴ',
+  '개새', '새끼', '쌔끼', '지랄', 'ㅈㄹ', '미친', '닥쳐', '꺼져', '엠창', '느금', '니애미', '니엄마',
+  '애미', '애비', '섹스', '보지', '자지', '찐따', 'fuck', 'fuk', 'shit', 'bitch', 'sex', 'porn',
+  'dick', 'pussy', 'nigg',
+];
+const normalizeName = (s) => String(s).toLowerCase().normalize('NFC')
+  .replace(/[\s\d_.\-~!@#$%^&*()+=|\\/?<>,;:'"`[\]{}·•]+/g, '');
+const isBadName = (s) => { const n = normalizeName(s); return BAD_WORDS.some((w) => n.includes(w)); };
 const toInt = (v, min, max, fallback = min) => {
   const n = Math.round(Number(v));
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
@@ -57,12 +69,27 @@ async function handle(request, env, url) {
   }
 
   if (url.pathname === '/api/scores' && request.method === 'POST') {
+    // 같은 곳(IP)에서 1분에 10번 넘게 저장하면 막는다.
+    // 한 판이 40초 이상이라 정상 플레이로는 넘을 수 없고, 오프라인 기록을 몰아 올릴 여유는 남긴다.
+    if (env.SAVE_LIMITER) {
+      const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+      const { success } = await env.SAVE_LIMITER.limit({ key: ip });
+      if (!success) return json(429, { error: '너무 자주 저장하고 있어요. 잠시 후 다시 시도하세요' });
+    }
+
     let body;
     try { body = await request.json(); } catch { return json(400, { error: 'JSON 형식이 아닙니다' }); }
     const name = cleanName(body.name);
     if (!name) return json(400, { error: '닉네임이 비어 있습니다' });
-    const score = toInt(body.score, 0, 100000);
-    const kills = toInt(body.kills, 0, 100000);
+    if (isBadName(name)) return json(400, { error: '사용할 수 없는 닉네임입니다' });
+
+    // 40초 게임에서 나올 수 없는 점수는 받지 않는다 (가짜 기록 방지). 한도는 wrangler.toml 의 MAX_SCORE
+    const maxScore = toInt(env.MAX_SCORE, 1, 1_000_000, 500);
+    if (Number(body.score) > maxScore || Number(body.kills) > maxScore) {
+      return json(400, { error: `점수가 너무 높아 저장하지 않았습니다 (최대 ${maxScore}점)` });
+    }
+    const score = toInt(body.score, 0, maxScore);
+    const kills = toInt(body.kills, 0, maxScore);
     const since = toInt(body.since, 0, Number.MAX_SAFE_INTEGER, 0);
     // 인터넷이 끊겼을 때 PC 에 보관했다가 나중에 올리는 기록은 원래 플레이한 시각을 쓴다.
     // (미래 시각이나 일주일보다 오래된 시각은 받지 않고 지금 시각으로)
