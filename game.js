@@ -922,6 +922,46 @@ function setRankScope(scope) {
     .then((list) => { if (req === rankView.req) rankView.list = list; })
     .catch(() => { if (req === rankView.req) rankView.list = []; });
 }
+// 이 노트북의 serve.cjs 로 열었으면 관리자 키를 자동으로 채운다 (data/admin-key.txt)
+async function loadLocalAdminKey() {
+  if (settings.adminKey || !['localhost', '127.0.0.1'].includes(location.hostname)) return;
+  try {
+    const res = await fetch('/local/admin-key', { cache: 'no-store' });
+    if (!res.ok) return;
+    const key = (await res.text()).trim();
+    if (key) { settings.adminKey = key; saveSettings(); }
+  } catch { /* 키 파일이 없으면 설정 창에서 직접 입력 */ }
+}
+
+// 결과 화면 버튼 잠금 시간(초): 게임이 끝나도 계속 쏘는 학생이 버튼을 잘못 누르지 않게
+const RESULT_LOCK = 3;
+
+// ---------- 총 조준 테스트 ----------
+// 화면 9곳의 표적을 쏴서, 총이 가리키는 곳과 실제로 맞은 곳이 얼마나 어긋나는지 본다.
+// 많이 어긋나면 GUN4IR 프로그램에서 캘리브레이션을 다시 하면 된다.
+const aimTest = { shots: [] };
+function aimTargets() {
+  const xs = [0.08, 0.5, 0.92], ys = [0.14, 0.5, 0.88];
+  return ys.flatMap((y) => xs.map((x) => ({ x: x * W, y: y * H })));
+}
+function openAimTest() {
+  aimTest.shots = [];
+  game.state = 'aimtest';
+  fireballs = [];
+  ghasts.forEach((g) => g.hittable() && g.leave(true));
+  updateCornerButtons();
+}
+function recordAimShot(x, y) {
+  let best = null;
+  for (const t of aimTargets()) {
+    const d = Math.hypot(t.x - x, t.y - y);
+    if (!best || d < best.d) best = { t, d };
+  }
+  aimTest.shots.push({ x, y, tx: best.t.x, ty: best.t.y, d: best.d });
+  if (aimTest.shots.length > 40) aimTest.shots.shift();
+  Sound.hit();
+}
+
 function closeRanking() {
   if (game.rankFrom === 'result') { game.state = 'result'; updateCornerButtons(); } else goTitle();
 }
@@ -1081,6 +1121,13 @@ function onTap(x, y) {
     addPart({ kind: 'cross', x, y, size: U * 1.6, life: 0.35, color: '#ffffff' });
   }
 
+  if (game.state === 'aimtest') {
+    for (const b of buttons) {
+      if (b.enabled && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { b.action(); return; }
+    }
+    recordAimShot(x, y);
+    return;
+  }
   if (game.state === 'title' || game.state === 'result' || game.state === 'ranking') {
     for (const b of buttons) {
       if (b.enabled && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { b.action(); return; }
@@ -1167,15 +1214,23 @@ window.addEventListener('keydown', (e) => {
   switch (e.code) {
     case 'Space':
     case 'Enter':
+    case 'NumpadEnter':
+    case 'Digit1':   // 라이트건의 Start 버튼은 보통 키보드 '1' 로 들어온다
+    case 'Numpad1':
       e.preventDefault();
       if (game.state === 'title') openNameEntry();
-      else if (game.state === 'result' && game.resultTime > 1.5) nextPlayer();
+      else if (game.state === 'result' && game.resultTime > RESULT_LOCK) nextPlayer();
       else if (game.state === 'ranking') closeRanking();
+      else if (game.state === 'aimtest') goTitle();
       else if (game.state === 'play' && game.paused) game.paused = false;
       break;
     case 'KeyR':
-      if (game.state === 'title' || (game.state === 'result' && game.resultTime > 1.5)) openRanking();
+      if (game.state === 'title' || (game.state === 'result' && game.resultTime > RESULT_LOCK)) openRanking();
       else if (game.state === 'ranking') closeRanking();
+      break;
+    case 'KeyT':
+      if (game.state === 'title') openAimTest();
+      else if (game.state === 'aimtest') goTitle();
       break;
     case 'KeyP':
       if (game.state === 'play') game.paused = !game.paused;
@@ -1183,7 +1238,7 @@ window.addEventListener('keydown', (e) => {
     case 'KeyQ':
     case 'Escape':
       if (game.state === 'ranking') closeRanking();
-      else if (e.code === 'KeyQ') goTitle();
+      else if (game.state === 'aimtest' || e.code === 'KeyQ') goTitle();
       break;
     case 'KeyF':
       toggleFullscreen();
@@ -1315,6 +1370,7 @@ document.getElementById('settings-reset').addEventListener('click', () => fillFo
 document.getElementById('settings-close').addEventListener('click', closeSettings);
 document.getElementById('btn-settings').addEventListener('click', openSettings);
 document.getElementById('btn-fullscreen').addEventListener('click', toggleFullscreen);
+document.getElementById('btn-aimtest').addEventListener('click', () => { Sound.init(); openAimTest(); });
 function updateCornerButtons() {
   document.getElementById('corner-buttons').classList.toggle('hidden', game.state !== 'title' && game.state !== 'result');
 }
@@ -1407,7 +1463,7 @@ function drawTitle(time) {
 
   button('게임 시작', cx - U * 13, H * 0.84, U * 46, U * 12, openNameEntry, true, true);
   button('랭킹', cx + U * 26, H * 0.84, U * 22, U * 12, openRanking);
-  text('Space 시작 · R 랭킹 · F 전체화면 · S 설정 · M 소리', cx, H * 0.84 + U * 10, U * 2.6, '#c9a89a');
+  text('Space 시작 · R 랭킹 · T 총 조준 테스트 · F 전체화면 · S 설정 · M 소리', cx, H * 0.84 + U * 10, U * 2.6, '#c9a89a');
 
   // 오늘의 TOP 3
   if (game.titleTop.length) {
@@ -1422,6 +1478,52 @@ function drawTitle(time) {
 }
 const MEDAL = ['#ffd84a', '#d8d8e0', '#e09a5a'];
 const LEVEL_COLORS = ['#ffffff', '#ffe14a', '#ffb23a', '#ff7a3a', '#ff4a3a'];
+
+function drawAimTest() {
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, W, H);
+  const cx = W / 2;
+  text('총 조준 테스트', cx, H * 0.3, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
+  text('9개 표적의 한가운데를 차례로 쏴 보세요', cx, H * 0.3 + U * 8, U * 3.6, '#ffffff');
+  text('맞은 자리(점)가 표적에서 많이 벗어나면 GUN4IR 프로그램에서 캘리브레이션을 다시 하세요', cx, H * 0.3 + U * 13, U * 2.8, '#ffd9b0');
+
+  // 표적
+  for (const t of aimTargets()) {
+    const r = U * 4;
+    for (const [rr, color] of [[r, '#ffffff'], [r * 0.66, '#ff3a2a'], [r * 0.33, '#ffffff']]) {
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(t.x, t.y, rr, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.fillStyle = '#ff3a2a';
+    ctx.fillRect(t.x - 2, t.y - 2, 4, 4);
+  }
+
+  // 맞은 자리: 가까우면 초록, 조금 어긋나면 노랑, 많이 어긋나면 빨강
+  const ok = W * 0.015, warn = W * 0.04;
+  for (const s of aimTest.shots) {
+    const color = s.d <= ok ? '#5aff6a' : s.d <= warn ? '#ffd84a' : '#ff5a4a';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(s.tx, s.ty); ctx.lineTo(s.x, s.y); ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.fillRect(s.x - U * 0.8, s.y - U * 0.8, U * 1.6, U * 1.6);
+  }
+
+  if (aimTest.shots.length) {
+    const last = aimTest.shots[aimTest.shots.length - 1];
+    const avg = aimTest.shots.reduce((a, s) => a + s.d, 0) / aimTest.shots.length;
+    const pct = (d) => `${((d / W) * 100).toFixed(1)}%`;
+    const verdict = avg <= ok ? '정확해요! 바로 게임해도 돼요' : avg <= warn ? '조금 어긋나요. 판정 여유로 대부분 맞지만 캘리브레이션을 권장해요' : '많이 어긋나요. 캘리브레이션을 다시 하세요';
+    text(`마지막 ${pct(last.d)} 어긋남  ·  평균 ${pct(avg)} (${aimTest.shots.length}발)`, cx, H * 0.62, U * 3.6, '#ffffff');
+    text(verdict, cx, H * 0.62 + U * 6, U * 3.6, avg <= ok ? '#5aff6a' : avg <= warn ? '#ffd84a' : '#ff5a4a');
+  }
+
+  button('다시 측정', cx - U * 16, H * 0.74, U * 26, U * 7, () => { aimTest.shots = []; });
+  button('끝내기', cx + U * 16, H * 0.74, U * 26, U * 7, goTitle, true, true);
+  text('키보드: T / Esc 로 끝내기', cx, H * 0.74 + U * 7, U * 2.6, '#c9a89a');
+
+  if (aim.seen) drawAim(aim.x, aim.y);
+}
 
 function drawRanking() {
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
@@ -1559,7 +1661,7 @@ function drawResult(time) {
     text(`${settings.rewardScore}점 이상이면 가스트의 눈물을 받을 수 있어요`, cx, py + U * 63, U * 3.6, '#ffffff');
   }
 
-  const ready = game.resultTime > 1.5; // 남은 총알이 실수로 버튼을 누르지 않게 잠깐 잠금
+  const ready = game.resultTime > RESULT_LOCK; // 계속 쏘던 총알이 실수로 버튼을 누르지 않게 잠깐 잠금
   const by = py + ph - U * 8;
   button('다음 사람', cx - U * 33, by, U * 29, U * 9, nextPlayer, ready, true);
   button('다시 하기', cx, by, U * 29, U * 9, startGame, ready);
@@ -1664,6 +1766,7 @@ function draw(time) {
   if (game.state === 'play') drawHUD(time);
   if (game.state === 'result') drawResult(time);
   if (game.state === 'ranking') drawRanking();
+  if (game.state === 'aimtest') drawAimTest();
   drawBanner();
 
   if (game.paused) {
@@ -1676,7 +1779,8 @@ function draw(time) {
   // 조준점: 게임 중에만 설정을 따르고, 메뉴 화면에서는 버튼을 고를 수 있게 항상 보인다
   const inGame = (game.state === 'play' || game.state === 'countdown') && !game.paused;
   const mode = inGame ? settings.aimMode : 'small';
-  const cursor = mode === 'small' ? 'crosshair' : 'none';
+  // 조준 테스트에서는 큰 조준점을 따로 그리므로 시스템 커서를 숨긴다
+  const cursor = mode === 'small' && game.state !== 'aimtest' ? 'crosshair' : 'none';
   if (canvas.style.cursor !== cursor) canvas.style.cursor = cursor;
   if (mode === 'big' && aim.seen) drawAim(aim.x, aim.y);
 }
@@ -1716,6 +1820,7 @@ loadImages()
     buildGhastVariants();
     goTitle();
     requestAnimationFrame(frame);
+    loadLocalAdminKey();
   })
   .catch((err) => {
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
