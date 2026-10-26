@@ -14,4 +14,4 @@ directory = "."
 [[d1_databases]]
 binding = "DB"
 database_name = "ghast-db"
-database_id = "57530215-0863-42c1-8a22-ce84ba3af7c9"
+database_id = "0dd00856-8a98-4f9b-b4ae-6707b1aa9716"
