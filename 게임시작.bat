@@ -3,7 +3,7 @@ chcp 65001 >nul
 title 가스트 사격 실행기
 rem ==============================================================
 rem  더블클릭하면
-rem   1) 랭킹 DB 서버(serve.cjs)를 작은 창으로 켜고
+rem   1) 게임 서버(serve.cjs)를 작은 창으로 켜고 (랭킹은 Cloudflare 온라인 DB 에 저장)
 rem   2) Chrome(없으면 Edge)을 전체화면으로 열어 게임을 띄웁니다.
 rem  게임을 끝낼 때: 브라우저는 Alt+F4, 서버는 작업표시줄의 "가스트 서버" 창을 닫으세요.
 rem ==============================================================
@@ -24,7 +24,7 @@ if errorlevel 1 (
 rem ---- 서버가 이미 켜져 있지 않으면 켜기 ----
 curl -s -o nul "%URL%" >nul 2>nul
 if errorlevel 1 (
-  echo  랭킹 DB 서버를 켜는 중...
+  echo  게임 서버를 켜는 중...
   start "가스트 서버" /min cmd /k node serve.cjs
 )
 

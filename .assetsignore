@@ -1,0 +1,14 @@
+# Cloudflare 에 게임 파일만 올리고 아래는 올리지 않음
+.git
+.gitignore
+.gitattributes
+.assetsignore
+.wrangler
+node_modules
+data
+worker.js
+wrangler.toml
+schema.sql
+serve.cjs
+*.bat
+*.md

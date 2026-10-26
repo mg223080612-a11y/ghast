@@ -78,6 +78,7 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
 #settings label.check { flex-direction: row; align-items: center; gap: 8px; }
 #settings input[type="number"],
 #settings input[type="text"],
+#settings input[type="password"],
 #settings select {
   font-family: var(--font);
   font-size: 16px;

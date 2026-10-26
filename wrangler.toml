@@ -1,0 +1,17 @@
+# 가스트 사격 — Cloudflare Worker 설정
+# 게임 파일(정적 자산) + 랭킹 API(worker.js) + D1 데이터베이스를 한 번에 배포합니다.
+#   배포: npx wrangler deploy
+#   DB 테이블 만들기(처음 한 번): npx wrangler d1 execute ghast-db --remote --file=schema.sql
+#   삭제용 관리자 키 설정: npx wrangler secret put ADMIN_KEY
+name = "ghast-shooting"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+# 게임 파일. 올리지 않을 파일은 .assetsignore 에 적어 둠
+[assets]
+directory = "."
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ghast-db"
+database_id = "57530215-0863-42c1-8a22-ce84ba3af7c9"

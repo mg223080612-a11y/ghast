@@ -1,2 +1,5 @@
 # 랭킹 DB (행사 기록은 git 에 올리지 않음)
 data/
+# wrangler 임시 파일
+.wrangler/
+node_modules/

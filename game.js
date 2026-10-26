@@ -21,6 +21,7 @@ const DEFAULTS = {
   missPenalty: 1,      // 배경(빈 곳)을 맞히면 감점
   escapePenalty: 1,    // 가스트를 못 맞히고 화면 밖으로 놓치면 감점
   levelSpeedUp: 25,    // 레벨이 하나 오를 때마다 가스트가 몇 % 빨라지는지
+  adminKey: '',        // 랭킹 기록 삭제용 관리자 키 (Cloudflare 시크릿 ADMIN_KEY 와 같은 값)
   difficulty: 1,       // 0.5 쉬움 ~ 2 어려움
   hitPadding: 15,      // 가스트 판정 범위를 몇 % 넓힐지
   ghastScale: 100,     // 가스트 크기 (%)
@@ -777,65 +778,104 @@ const game = {
   titleTop: [],         // 처음 화면에 보여줄 오늘의 TOP 3
 };
 
-// ---------- 랭킹 ----------
-// serve.cjs 로 열었으면 서버 DB(data/ranking.db)에, index.html 을 바로 열었으면 이 브라우저에 저장한다.
-const RANK_LOCAL_KEY = 'ghast-shooting-ranking';
+// ---------- 랭킹 (Cloudflare 온라인 DB) ----------
+// 기록은 Cloudflare Worker + D1 에 저장한다 (worker.js).
+// 인터넷이 끊기면 이 PC 에 잠시 보관했다가, 다시 연결되면 자동으로 올린다.
+const RANK_API_ORIGIN = 'https://ghast-shooting.gcinhak.workers.dev'; // wrangler deploy 로 만든 주소
+const RANK_PENDING_KEY = 'ghast-shooting-pending';   // 아직 못 올린 기록
+const RANK_CACHE_KEY = 'ghast-shooting-rank-cache';  // 마지막으로 받아 온 랭킹 (오프라인일 때 보여줌)
 const todayStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
 const cleanName = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 12);
 const byRank = (a, b) => b.score - a.score || a.created_at - b.created_at;
+const readJson = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
+const writeJson = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 저장 불가 */ } };
+
+// Cloudflare 에 올린 게임 페이지에서 열면 같은 주소의 /api, 행사 PC(localhost·파일)에서 열면 위 주소로 보낸다
+function rankApi(path) {
+  const sameOrigin = location.protocol.startsWith('http') && !['localhost', '127.0.0.1'].includes(location.hostname);
+  return `${sameOrigin ? '' : RANK_API_ORIGIN}/api/scores${path}`;
+}
 
 const Ranking = {
-  useServer: location.protocol.startsWith('http'),
+  online: null, // 마지막 요청이 성공했는지 (설정 창 표시용)
 
-  async request(method, url, body) {
-    const res = await fetch(url, {
-      method,
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!res.ok) throw new Error(`서버 오류 ${res.status}`);
-    return res.json();
-  },
-  readLocal() {
-    try { return JSON.parse(localStorage.getItem(RANK_LOCAL_KEY) || '[]'); } catch { return []; }
-  },
-  writeLocal(list) {
-    try { localStorage.setItem(RANK_LOCAL_KEY, JSON.stringify(list)); } catch { /* 저장 불가 */ }
-  },
-
-  // 기록 저장 → { id, rankToday, rankAll, local }
-  async add(entry) {
-    if (this.useServer) {
-      try {
-        return { ...(await this.request('POST', '/api/scores', { ...entry, since: todayStart() })), local: false };
-      } catch (err) {
-        console.warn('서버에 랭킹을 저장하지 못해 이 브라우저에 저장합니다', err);
-      }
+  async request(method, path, body) {
+    const headers = {};
+    if (body) headers['Content-Type'] = 'application/json';
+    if (method === 'DELETE') headers['X-Admin-Key'] = settings.adminKey || '';
+    let res;
+    try {
+      res = await fetch(rankApi(path), { method, headers, body: body ? JSON.stringify(body) : undefined });
+    } catch (err) {
+      this.online = false;
+      throw err;
     }
-    const list = this.readLocal();
-    const row = { id: Date.now(), ...entry, created_at: Date.now() };
-    list.push(row);
-    this.writeLocal(list);
-    const rankIn = (rows) => 1 + rows.filter((r) => r.score > row.score).length;
-    return { id: row.id, rankToday: rankIn(list.filter((r) => r.created_at >= todayStart())), rankAll: rankIn(list), local: true };
+    this.online = true;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `서버 오류 ${res.status}`);
+    return data;
   },
-  // scope: 'today' | 'all'
+
+  pending() { return readJson(RANK_PENDING_KEY, []); },
+
+  // 기록 저장 → { id, rankToday, rankAll, pending }
+  async add(entry) {
+    const row = { ...entry, created_at: Date.now() };
+    try {
+      const r = await this.request('POST', '', { ...row, since: todayStart() });
+      return { ...r, pending: false };
+    } catch (err) {
+      console.warn('랭킹을 올리지 못해 이 PC 에 보관합니다', err);
+      const id = `p-${row.created_at}`;
+      writeJson(RANK_PENDING_KEY, [...this.pending(), { ...row, id }]);
+      return { id, pending: true };
+    }
+  },
+
+  // 보관해 둔 기록을 올린다 (처음 켤 때, 그리고 주기적으로)
+  flushing: false,
+  async flush() {
+    if (this.flushing) return;
+    this.flushing = true;
+    try {
+      for (const row of this.pending()) {
+        const r = await this.request('POST', '', { ...row, since: todayStart() });
+        writeJson(RANK_PENDING_KEY, this.pending().filter((p) => p.id !== row.id));
+        if (game.lastEntryId === row.id) game.lastEntryId = r.id;
+      }
+    } catch { /* 아직 오프라인 — 다음에 다시 시도 */ }
+    this.flushing = false;
+  },
+
+  // scope: 'today' | 'all' — 아직 못 올린 기록도 함께 보여준다
   async top(scope, limit = 10) {
     const since = scope === 'today' ? todayStart() : 0;
-    if (this.useServer) {
-      try { return await this.request('GET', `/api/scores?since=${since}&limit=${limit}`); } catch (err) { console.warn(err); }
+    await this.flush();
+    let list;
+    try {
+      list = await this.request('GET', `?since=${since}&limit=${limit}`);
+      writeJson(`${RANK_CACHE_KEY}-${scope}`, list);
+    } catch {
+      list = readJson(`${RANK_CACHE_KEY}-${scope}`, []).filter((r) => r.created_at >= since);
     }
-    return this.readLocal().filter((r) => r.created_at >= since).sort(byRank).slice(0, limit);
+    const waiting = this.pending().filter((r) => r.created_at >= since).map((r) => ({ ...r, pending: true }));
+    return [...list, ...waiting].sort(byRank).slice(0, limit);
   },
+
   async remove(id) {
-    if (this.useServer) return this.request('DELETE', `/api/scores/${id}`);
-    this.writeLocal(this.readLocal().filter((r) => r.id !== id));
+    if (String(id).startsWith('p-')) {
+      writeJson(RANK_PENDING_KEY, this.pending().filter((p) => p.id !== id));
+      return;
+    }
+    return this.request('DELETE', `/${id}`);
   },
   async clear() {
-    if (this.useServer) return this.request('DELETE', '/api/scores');
-    this.writeLocal([]);
+    await this.request('DELETE', '');
+    writeJson(RANK_PENDING_KEY, []);
   },
 };
+// 보관 중인 기록은 30초마다 다시 올려 본다
+setInterval(() => { if (Ranking.pending().length) Ranking.flush(); }, 30_000);
 
 function refreshTitleTop() {
   Ranking.top('today', 3).then((list) => { game.titleTop = list; }).catch(() => {});
@@ -1154,19 +1194,21 @@ function openSettings() {
 // 설정 창의 랭킹 관리: 장난스러운 닉네임 등을 운영자가 지울 수 있게
 async function loadRankAdmin() {
   const box = document.getElementById('rank-admin');
-  document.getElementById('rank-where').textContent = Ranking.useServer
-    ? '저장 위치: 서버 DB (ghast/data/ranking.db)'
-    : '저장 위치: 이 브라우저 (serve.cjs 로 열면 DB 에 저장됩니다)';
+  const where = document.getElementById('rank-where');
   box.textContent = '불러오는 중…';
   let list = [];
   try { list = await Ranking.top('all', 100); } catch { box.textContent = '랭킹을 불러오지 못했습니다'; return; }
+  const waiting = Ranking.pending().length;
+  where.textContent = `저장 위치: Cloudflare 온라인 DB — ${Ranking.online ? '연결됨' : '연결 안 됨 (인터넷 확인)'}`
+    + (waiting ? ` · 올리지 못한 기록 ${waiting}개 (연결되면 자동 업로드)` : '')
+    + ' · 삭제하려면 아래 관리자 키가 필요합니다';
   box.textContent = '';
   if (!list.length) { box.textContent = '아직 기록이 없습니다'; return; }
   list.forEach((r, i) => {
     const row = document.createElement('div');
     row.className = 'rank-row';
     const label = document.createElement('span');
-    label.textContent = `${i + 1}. ${r.name} · ${r.score}점 · ${new Date(r.created_at).toLocaleString('ko-KR')}`;
+    label.textContent = `${i + 1}. ${r.name} · ${r.score}점 · ${new Date(r.created_at).toLocaleString('ko-KR')}${r.pending ? ' · 업로드 대기' : ''}`;
     const del = document.createElement('button');
     del.type = 'button';
     del.textContent = '삭제';
@@ -1227,7 +1269,7 @@ form.addEventListener('submit', (e) => {
     const input = form.elements[k];
     if (!input) continue;
     if (input.type === 'checkbox') next[k] = input.checked;
-    else if (input.tagName === 'SELECT' || input.type === 'text') next[k] = input.value;
+    else if (input.tagName === 'SELECT' || input.type === 'text' || input.type === 'password') next[k] = input.value;
     else {
       const n = parseFloat(input.value);
       if (Number.isFinite(n)) next[k] = n;
@@ -1465,7 +1507,8 @@ function drawResult(time) {
   let rankLine = '';
   if (ri?.status === 'saving') rankLine = '랭킹 저장 중…';
   else if (ri?.status === 'error') rankLine = '랭킹 저장에 실패했어요';
-  else if (ri?.status === 'saved') rankLine = `오늘 ${ri.rankToday}위  ·  전체 ${ri.rankAll}위${ri.local ? '  (이 브라우저에만 저장됨)' : ''}`;
+  else if (ri?.status === 'saved' && ri.pending) rankLine = '인터넷 연결이 안 돼 이 PC에 보관했어요 (연결되면 자동으로 올라가요)';
+  else if (ri?.status === 'saved') rankLine = `오늘 ${ri.rankToday}위  ·  전체 ${ri.rankAll}위`;
   text(rankLine, cx, py + U * 38, U * 4.4, ri?.status === 'error' ? '#ff8a7a' : '#ffe14a');
 
   if (win) {
