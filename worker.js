@@ -28,18 +28,6 @@ const json = (status, body) => new Response(JSON.stringify(body), {
 
 // 닉네임 정리: 앞뒤 공백·제어문자 제거, 최대 12자
 const cleanName = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 12);
-
-// 부적절한 닉네임 거르기 (game.js 에도 같은 목록이 있어 입력할 때 바로 알려 줌)
-// 띄어쓰기·숫자·기호를 지운 뒤 검사해서 "씨 1 발" 같은 변형도 잡는다.
-const BAD_WORDS = [
-  '시발', '씨발', '씨바', 'ㅅㅂ', 'ㅆㅂ', '병신', '븅신', 'ㅂㅅ', '좆', '존나', '졸라', 'ㅈㄴ',
-  '개새', '새끼', '쌔끼', '지랄', 'ㅈㄹ', '미친', '닥쳐', '꺼져', '엠창', '느금', '니애미', '니엄마',
-  '애미', '애비', '섹스', '보지', '자지', '찐따', 'fuck', 'fuk', 'shit', 'bitch', 'sex', 'porn',
-  'dick', 'pussy', 'nigg',
-];
-const normalizeName = (s) => String(s).toLowerCase().normalize('NFC')
-  .replace(/[\s\d_.\-~!@#$%^&*()+=|\\/?<>,;:'"`[\]{}·•]+/g, '');
-const isBadName = (s) => { const n = normalizeName(s); return BAD_WORDS.some((w) => n.includes(w)); };
 const toInt = (v, min, max, fallback = min) => {
   const n = Math.round(Number(v));
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
@@ -81,7 +69,6 @@ async function handle(request, env, url) {
     try { body = await request.json(); } catch { return json(400, { error: 'JSON 형식이 아닙니다' }); }
     const name = cleanName(body.name);
     if (!name) return json(400, { error: '닉네임이 비어 있습니다' });
-    if (isBadName(name)) return json(400, { error: '사용할 수 없는 닉네임입니다' });
 
     // 40초 게임에서 나올 수 없는 점수는 받지 않는다 (가짜 기록 방지). 한도는 wrangler.toml 의 MAX_SCORE
     const maxScore = toInt(env.MAX_SCORE, 1, 1_000_000, 500);

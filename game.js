@@ -873,17 +873,6 @@ const RANK_PENDING_KEY = 'ghast-shooting-pending';   // 아직 못 올린 기록
 const RANK_CACHE_KEY = 'ghast-shooting-rank-cache';  // 마지막으로 받아 온 랭킹 (오프라인일 때 보여줌)
 const todayStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
 const cleanName = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 12);
-// 부적절한 닉네임 거르기 (worker.js 에도 같은 목록이 있어 서버에서도 한 번 더 막음)
-// 띄어쓰기·숫자·기호를 지운 뒤 검사해서 "씨 1 발" 같은 변형도 잡는다.
-const BAD_WORDS = [
-  '시발', '씨발', '씨바', 'ㅅㅂ', 'ㅆㅂ', '병신', '븅신', 'ㅂㅅ', '좆', '존나', '졸라', 'ㅈㄴ',
-  '개새', '새끼', '쌔끼', '지랄', 'ㅈㄹ', '미친', '닥쳐', '꺼져', '엠창', '느금', '니애미', '니엄마',
-  '애미', '애비', '섹스', '보지', '자지', '찐따', 'fuck', 'fuk', 'shit', 'bitch', 'sex', 'porn',
-  'dick', 'pussy', 'nigg',
-];
-const normalizeName = (s) => String(s).toLowerCase().normalize('NFC')
-  .replace(/[\s\d_.\-~!@#$%^&*()+=|\\/?<>,;:'"`[\]{}·•]+/g, '');
-const isBadName = (s) => { const n = normalizeName(s); return BAD_WORDS.some((w) => n.includes(w)); };
 const byRank = (a, b) => b.score - a.score || a.created_at - b.created_at;
 const readJson = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
 const writeJson = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 저장 불가 */ } };
@@ -1450,7 +1439,7 @@ function closeNameEntry() { nameEl.hidden = true; }
 nameForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const name = cleanName(nameInput.value);
-  const problem = !name ? '닉네임을 입력해 주세요!' : isBadName(name) ? '사용할 수 없는 닉네임이에요. 다른 이름을 써 주세요!' : '';
+  const problem = !name ? '닉네임을 입력해 주세요!' : '';
   if (problem) {
     nameHint.textContent = problem;
     nameHint.classList.add('error');
