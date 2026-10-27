@@ -862,7 +862,7 @@ const game = {
   rankInfo: null,       // 결과 화면의 순위 { status: 'saving'|'saved'|'error', rankToday, rankAll, local }
   lastEntryId: null,    // 방금 저장한 기록 (랭킹 화면에서 강조)
   rankFrom: 'title',    // 랭킹 화면을 닫으면 돌아갈 곳
-  titleTop: [],         // 처음 화면에 보여줄 오늘의 TOP 3
+  titleTop: [],         // 처음 화면에 흘러가는 오늘의 TOP 10
 };
 
 // ---------- 랭킹 (Cloudflare 온라인 DB) ----------
@@ -979,8 +979,10 @@ const Ranking = {
 setInterval(() => { if (Ranking.pending().length) Ranking.flush(); }, 30_000);
 
 function refreshTitleTop() {
-  Ranking.top('today', 3).then((list) => { game.titleTop = list; }).catch(() => {});
+  Ranking.top('today', 10).then((list) => { game.titleTop = list; }).catch(() => {});
 }
+// 처음 화면에 머무는 동안에도 30초마다 새 기록을 반영한다
+setInterval(() => { if (game.state === 'title') refreshTitleTop(); }, 30_000);
 
 // 랭킹 화면
 // '오늘' 은 TOP 10 만, '전체' 는 100명까지 쪽을 넘겨 가며 본다
@@ -1484,6 +1486,12 @@ function updateCornerButtons() {
 
 // ---------- 글자·버튼 그리기 ----------
 const FONT = '"Galmuri11", "Galmuri9", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
+// 글자가 maxW 보다 넓으면 들어가도록 글자 크기를 줄여서 돌려준다
+function fitTextSize(str, size, maxW) {
+  ctx.font = `bold ${Math.round(size)}px ${FONT}`;
+  const w = ctx.measureText(str).width;
+  return w > maxW ? size * (maxW / w) : size;
+}
 function text(str, x, y, size, color = '#fff', align = 'center', opts = {}) {
   ctx.font = `bold ${Math.round(size)}px ${FONT}`;
   ctx.textAlign = align;
@@ -1570,18 +1578,50 @@ function drawTitle(time) {
 
   button('게임 시작', cx - U * 13, H * 0.84, U * 46, U * 12, openNameEntry, true, true);
   button('랭킹', cx + U * 26, H * 0.84, U * 22, U * 12, openRanking);
-  text('Space 시작 · R 랭킹 · T 총 조준 테스트 · F 전체화면 · S 설정 · M 소리', cx, H * 0.84 + U * 10, U * 2.6, '#c9a89a');
+  const hint = 'Space 시작 · R 랭킹 · T 총 테스트 · S 설정';
+  text(hint, cx, H * 0.84 + U * 10, U * 2.6, '#c9a89a');
+  // 오늘 랭킹은 버튼·안내 글자와 겹치지 않게 그 왼쪽까지만
+  ctx.font = `bold ${Math.round(U * 2.6)}px ${FONT}`;
+  const hintLeft = cx - ctx.measureText(hint).width / 2;
+  drawTitleTicker(time, Math.min(cx - U * 40, hintLeft - U * 3));
+}
 
-  // 오늘의 TOP 3
-  if (game.titleTop.length) {
-    const x = U * 4;
-    let y = H - U * 4 - (game.titleTop.length - 1) * U * 4.6;
-    text('오늘의 TOP 3', x, y - U * 5.5, U * 3.4, '#ffe14a', 'left');
-    game.titleTop.forEach((r, i) => {
-      text(`${i + 1}위  ${r.name}  ${r.score}점`, x, y, U * 3.2, MEDAL[i], 'left');
-      y += U * 4.6;
+// 처음 화면 왼쪽 아래: 오늘 랭킹 TOP 10 이 아래에서 위로 천천히 흘러 올라간다
+function drawTitleTicker(time, right) {
+  const list = game.titleTop;
+  if (!list.length) return;
+  const x = U * 4;
+  const maxW = Math.max(U * 22, right - x);
+  const rowH = U * 4.6;
+  const visible = 4;                       // 한 번에 보이는 줄 수
+  const boxBottom = H - U * 2.5;
+  const boxTop = boxBottom - rowH * visible;
+
+  text(`오늘의 랭킹 TOP ${list.length}`, x, boxTop - U * 3.5, U * 3.4, '#ffe14a', 'left');
+
+  // 줄 수가 보이는 칸보다 적으면 멈춰 있고, 많으면 끝없이 위로 흐른다 (한 바퀴 뒤 빈 줄 하나 두고 반복)
+  const scrolling = list.length > visible;
+  const loopH = (list.length + 1) * rowH;
+  const offset = scrolling ? (time * rowH / 1.6) % loopH : 0;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x - U, boxTop, maxW + U * 2, boxBottom - boxTop);
+  ctx.clip();
+  const copies = scrolling ? 2 : 1;
+  for (let c = 0; c < copies; c++) {
+    list.forEach((r, i) => {
+      const y = boxTop + rowH * (i + 0.5) + c * loopH - offset;
+      if (y < boxTop - rowH || y > boxBottom + rowH) return;
+      // 위·아래 가장자리에서는 흐릿하게 사라지고 나타난다
+      const edge = Math.min(y - boxTop, boxBottom - y);
+      ctx.globalAlpha = scrolling ? clamp(edge / (rowH * 0.9), 0, 1) : 1;
+      const str = `${i + 1}위  ${r.name}  ${r.score}점`;
+      text(str, x, y, fitTextSize(str, U * 3.2, maxW), MEDAL[i] || '#ffffff', 'left');
     });
   }
+  ctx.globalAlpha = 1;
+  ctx.restore();
 }
 const MEDAL = ['#ffd84a', '#d8d8e0', '#e09a5a'];
 const LEVEL_COLORS = ['#ffffff', '#ffe14a', '#ffb23a', '#ff7a3a', '#ff4a3a'];
