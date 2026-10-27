@@ -1922,12 +1922,12 @@ function draw(time) {
     text('P 또는 Space 를 누르면 계속합니다', W / 2, H * 0.45 + U * 11, U * 4, '#ffd9b0');
   }
 
-  // 조준점: '숨김'은 게임 중에만 적용하고, 메뉴 화면에서는 버튼을 고를 수 있게 항상 보인다
+  // 조준점은 게임 중(+총 조준 테스트)에만 그린다.
+  // 처음 화면·랭킹·결과 화면에서는 버튼을 누르기 쉽게 보통 마우스 커서를 보여 준다.
   const inGame = (game.state === 'play' || game.state === 'countdown') && !game.paused;
-  const mode = !inGame && settings.aimMode === 'hidden' ? 'big' : settings.aimMode;
-  // 큰 조준점을 그릴 때(조준 테스트 포함)는 시스템 커서를 숨긴다
-  const showBig = mode === 'big' || game.state === 'aimtest';
-  const cursor = showBig || mode === 'hidden' ? 'none' : 'crosshair';
+  const showBig = (inGame && settings.aimMode === 'big') || game.state === 'aimtest';
+  const hideCursor = showBig || (inGame && settings.aimMode === 'hidden');
+  const cursor = hideCursor ? 'none' : inGame ? 'crosshair' : 'default';
   if (canvas.style.cursor !== cursor) canvas.style.cursor = cursor;
   if (showBig && aim.seen && game.state !== 'aimtest') drawAim(aim.x, aim.y);
 }

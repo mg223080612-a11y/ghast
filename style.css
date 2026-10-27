@@ -24,7 +24,8 @@ html, body {
   width: 100vw;
   height: 100vh;
   touch-action: none;
-  cursor: crosshair;
+  /* 평소에는 보통 마우스 커서, 게임 중에만 game.js 가 조준점으로 바꾼다 */
+  cursor: default;
 }
 
 #corner-buttons {
