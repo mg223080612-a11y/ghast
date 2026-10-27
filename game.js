@@ -1316,6 +1316,11 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   Sound.init();
+  // 엑스거너 총에는 q·s·w·a·d·5 같은 키보드 버튼이 달려 있다.
+  // 게임 중에 학생이 잘못 눌러 판이 끝나거나(Q) 설정 창이 뜨지(S) 않도록 막는다.
+  // 진행요원이 게임을 중단하려면 P(일시정지) → Q.
+  const playing = (game.state === 'play' || game.state === 'countdown') && !game.paused;
+  if (playing && (e.code === 'KeyQ' || e.code === 'KeyS')) return;
   switch (e.code) {
     case 'Space':
     case 'Enter':
@@ -1929,7 +1934,7 @@ function draw(time) {
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
     ctx.fillRect(0, 0, W, H);
     text('일시정지', W / 2, H * 0.45, U * 12, '#ffffff');
-    text('P 또는 Space 를 누르면 계속합니다', W / 2, H * 0.45 + U * 11, U * 4, '#ffd9b0');
+    text('P 또는 Space 를 누르면 계속합니다  ·  Q 를 누르면 처음 화면으로', W / 2, H * 0.45 + U * 11, U * 4, '#ffd9b0');
   }
 
   // 조준점은 게임 중(+총 조준 테스트)에만 그린다.
