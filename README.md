@@ -74,4 +74,4 @@
 
 - 게임 수정 후 온라인 반영: `npx wrangler deploy`
 - 관리자 키 바꾸기: `npx wrangler secret put ADMIN_KEY` 후 `data/admin-key.txt` 도 같은 값으로
-- 점수 상한(가짜 점수 차단): `wrangler.toml` 의 `MAX_SCORE` (기본 500)
+- 점수 상한(가짜 점수 차단): `wrangler.toml` 의 `MAX_SCORE` (기본 800)

@@ -141,8 +141,7 @@ function buildGhastVariants() {
     if (paint) paint(g);
     return c;
   };
-  GV.normal = IMG.ghast;
-  GV.charge = make((g) => {
+  const chargeFace = (g) => {
     // 눈을 크게 뜨고 빨간 눈동자
     parallelogram(g, 34, 190, 72, 207, 16, '#262626');
     parallelogram(g, 116, 231, 158, 249, 15, '#262626');
@@ -151,12 +150,22 @@ function buildGhastVariants() {
     // 입을 크게 벌림
     parallelogram(g, 72, 312, 118, 333, 34, '#1b1b1b');
     parallelogram(g, 85, 326, 105, 335, 16, '#ff2418');
-  });
-  GV.hurt = make((g) => {
+  };
+  // 그림 전체에 색을 덧칠 (투명한 부분은 그대로)
+  const tint = (color) => (g) => {
     g.globalCompositeOperation = 'source-atop';
-    g.fillStyle = 'rgba(255, 30, 30, 0.6)';
+    g.fillStyle = color;
     g.fillRect(0, 0, GHAST_W, GHAST_H);
-  });
+    g.globalCompositeOperation = 'source-over';
+  };
+  const angry = tint('rgba(215, 35, 15, 0.42)');
+  const gold = tint('rgba(255, 196, 30, 0.55)');
+
+  // GV[이미지 이름] = { normal: 평소, charge: 화염구 충전 중 }
+  GV.normal = { normal: IMG.ghast, charge: make(chargeFace) };
+  GV.angry = { normal: make(angry), charge: make((g) => { angry(g); chargeFace(g); }) };
+  GV.gold = { normal: make(gold), charge: make(gold) };
+  GV.hurt = make(tint('rgba(255, 30, 30, 0.6)'));
 }
 
 // ---------- 효과음 (파일 없이 WebAudio 로 직접 합성) ----------
@@ -229,6 +238,8 @@ const Sound = {
   charge()  { this.tone(500, 0.55, { type: 'sawtooth', freqEnd: 1300, gain: 0.06, attack: 0.1 }); },
   shoot()   { this.noise(0.5, { type: 'bandpass', freq: 400, freqEnd: 2500, q: 2, gain: 0.7 }); },
   spawn()   { this.tone(rand(260, 340), 0.6, { type: 'sine', freqEnd: 180, gain: 0.08, attack: 0.15 }); },
+  thud()    { this.tone(220, 0.1, { type: 'square', freqEnd: 90, gain: 0.25 }); this.noise(0.08, { freq: 1200, freqEnd: 300, gain: 0.5 }); },
+  blink()   { this.tone(900, 0.18, { type: 'sine', freqEnd: 300, gain: 0.15 }); },
   escape()  { this.tone(420, 0.35, { type: 'triangle', freqEnd: 160, gain: 0.18 }); this.tone(300, 0.4, { type: 'sine', freqEnd: 120, gain: 0.12, delay: 0.08 }); },
   miss()    { this.noise(0.06, { type: 'highpass', freq: 1500, gain: 0.15 }); this.tone(180, 0.18, { type: 'square', freqEnd: 110, gain: 0.12 }); },
   tick()    { this.tone(1000, 0.05, { gain: 0.12 }); },
@@ -558,10 +569,54 @@ function difficulty() {
   };
 }
 
+// ---------- 가스트 종류 ----------
+// hp: 몇 번 맞혀야 하는지 / size·speed: 기본 가스트 대비 배수 / points: 처치 점수
+const GHAST_TYPES = {
+  normal: { name: '가스트', hp: 1, size: 1, speed: 1, img: 'normal', points: () => settings.killPoints },
+  small: { name: '아기 가스트', hp: 1, size: 0.6, speed: 1.5, img: 'normal', points: () => settings.killPoints + 1 },
+  big: { name: '큰 가스트', hp: 3, size: 1.35, speed: 0.7, img: 'normal', points: () => settings.killPoints + 3 },
+  angry: { name: '분노 가스트', hp: 2, size: 1, speed: 1.35, img: 'angry', points: () => settings.killPoints + 2 },
+  // 황금 가스트: 화염구를 쏘지 않고 금방 도망간다. 놓쳐도 감점 없음
+  gold: { name: '황금 가스트', hp: 1, size: 0.75, speed: 1.9, img: 'gold', points: () => settings.killPoints * 5, noShoot: true, noEscapePenalty: true },
+};
+// 레벨별 등장 확률 (%). 마지막 줄은 그 이상 레벨에도 그대로 쓴다
+const GHAST_ODDS = [
+  { normal: 80, small: 12, big: 8 },                          // Lv.1
+  { normal: 55, small: 20, big: 15, angry: 5, gold: 5 },      // Lv.2
+  { normal: 30, small: 20, big: 15, angry: 30, gold: 5 },     // Lv.3 — 악랄 모드 시작
+  { normal: 15, small: 20, big: 20, angry: 40, gold: 5 },     // Lv.4~
+];
+function pickGhastType(level) {
+  const odds = GHAST_ODDS[Math.min(level, GHAST_ODDS.length) - 1];
+  let r = Math.random() * 100;
+  for (const [type, pct] of Object.entries(odds)) {
+    r -= pct;
+    if (r < 0) return type;
+  }
+  return 'normal';
+}
+// 레벨이 오를수록 더 여러 번 맞혀야 한다: Lv.2·3 은 1번 더, Lv.4 부터는 2번 더
+const extraHp = (level) => Math.min(2, Math.floor(level / 2));
+
 // ---------- 가스트 ----------
 class Ghast {
   constructor(demo) {
     this.demo = demo;                 // 처음 화면에서 떠다니기만 하는 가스트
+    const level = demo ? 1 : (game.level || 1);
+    this.type = demo ? 'normal' : pickGhastType(level);
+    const T = this.T;
+    // 체력과 점수: 더 맞혀야 하는 만큼 1점씩 더 준다
+    this.hpMax = T.hp + (this.type === 'gold' ? 0 : extraHp(level));
+    this.hp = this.hpMax;
+    this.points = T.points() + (this.hpMax - T.hp);
+    // 악랄 모드: Lv.3 부터 갑자기 돌진하고, 맞으면 순간이동으로 피한다. Lv.4 부터는 화염구를 여러 발 쏜다
+    this.vicious = !demo && level >= 3;
+    this.fierce = !demo && level >= 4;
+    this.dashCD = rand(0.6, 1.4);
+    this.dashT = 0;
+    this.hurtT = 0;
+    this.blinkT = 0;
+
     this.z = rand(0.65, 1.15);        // 클수록 가까이(크게) 보임
     this.flip = 1;
     this.x = W / 2; this.y = H / 2;
@@ -573,11 +628,13 @@ class Ghast {
     this.alpha = 0;
     this.shots = Math.random() < 0.35 ? 2 : 1;
     this.floatDur = rand(1.4, 3.0) * difficulty().floatMul;
+    if (T.noShoot) this.floatDur = rand(2.2, 3.2); // 황금 가스트는 잠깐 머물다 도망
     this.chargeDur = difficulty().chargeTime;
     this.speedMul = rand(0.85, 1.2);  // 가스트마다 빠르기가 조금씩 다름
     this.dead = false;
   }
-  get w() { return U * 24 * this.z * (settings.ghastScale / 100); }
+  get T() { return GHAST_TYPES[this.type]; }
+  get w() { return U * 24 * this.z * this.T.size * (settings.ghastScale / 100); }
   get h() { return this.w * GHAST_H / GHAST_W; }
   center() { return { x: this.x, y: this.y + Math.sin(this.bob) * U * 1.2 }; }
 
@@ -611,10 +668,41 @@ class Ghast {
     this.retarget -= dt;
     if (this.retarget <= 0 && this.state !== 'leave' && this.state !== 'dying') this.pickTarget();
 
+    this.hurtT = Math.max(0, this.hurtT - dt);
+
+    // 악랄 모드: 맞은 뒤 잠깐 있다가 연기와 함께 다른 곳으로 순간이동
+    if (this.blinkT > 0) {
+      this.blinkT -= dt;
+      if (this.blinkT <= 0 && this.hittable()) {
+        puff(this.x, this.y, this.w, this.h);
+        this.pickTarget();
+        this.x = this.tx; this.y = this.ty;
+        this.pickTarget();
+        puff(this.x, this.y, this.w, this.h);
+        Sound.blink();
+      }
+    }
+    // 악랄 모드: 가끔 갑자기 방향을 틀어 휙 돌진한다
+    if (this.vicious && this.state === 'float') {
+      this.dashCD -= dt;
+      if (this.dashCD <= 0) {
+        this.pickTarget();
+        this.dashT = 0.35;
+        this.dashCD = rand(0.7, 1.5) / (this.fierce ? 1.3 : 1);
+      }
+    }
+    this.dashT = Math.max(0, this.dashT - dt);
+    // 황금 가스트는 반짝인다
+    if (this.type === 'gold' && Math.random() < dt * 12) {
+      const c = this.center();
+      addPart({ x: c.x + rand(-0.5, 0.5) * this.w, y: c.y + rand(-0.5, 0.5) * this.h, vy: -U * 3, size: U * 0.7, life: 0.5, color: pick(['#fff3b0', '#ffd84a']) });
+    }
+
     // 목표 지점으로 둥실둥실 이동
-    let speed = 0.8 * D.speed * this.speedMul;
+    let speed = 0.8 * D.speed * this.speedMul * this.T.speed;
+    if (this.dashT > 0) speed *= 3.5;
     if (this.state === 'charge') speed *= 0.2;
-    if (this.state === 'leave') speed = 1.4 * (this.forced ? 1 : D.level);
+    if (this.state === 'leave') speed = 1.4 * this.T.speed * (this.forced ? 1 : D.level);
     if (this.state === 'dying') speed = 0;
     const k = Math.min(1, dt * speed);
     this.x += (this.tx - this.x) * k;
@@ -627,6 +715,7 @@ class Ghast {
         break;
       case 'float':
         if (!this.demo && this.t >= this.floatDur) {
+          if (this.T.noShoot) { this.leave(); break; }
           this.state = 'charge'; this.t = 0; this.chargeDur = D.chargeTime;
           Sound.charge();
         }
@@ -634,7 +723,11 @@ class Ghast {
       case 'charge':
         if (this.t >= this.chargeDur) {
           const m = this.mouth();
-          fireballs.push(new Fireball(m.x, m.y, this.w * 0.42, D.flightTime));
+          // 악랄 모드 Lv.4 부터는 한 번에 여러 발 (분노 가스트는 3발)
+          const volley = this.fierce ? (this.type === 'angry' ? 3 : 2) : 1;
+          for (let i = 0; i < volley; i++) {
+            fireballs.push(new Fireball(m.x, m.y, this.w * 0.42, D.flightTime * rand(0.9, 1.15)));
+          }
           Sound.shoot();
           this.shots--;
           this.t = 0;
@@ -670,6 +763,18 @@ class Ghast {
     this.state = 'dying';
     this.t = 0;
   }
+  // 한 대 맞음 → 체력이 0 이 되면 true (처치)
+  hit() {
+    this.hp--;
+    if (this.hp <= 0) { this.kill(); return true; }
+    this.hurtT = 0.15;
+    // 충전 중에 맞으면 화염구 충전이 조금 늦어진다
+    if (this.state === 'charge') this.t = Math.max(0, this.t - 0.25);
+    // 악랄 모드: 맞으면 일정 확률로 순간이동해 피하고, 아니면 살짝 밀려난다
+    if (this.vicious && this.blinkT <= 0 && Math.random() < (this.fierce ? 0.5 : 0.35)) this.blinkT = 0.12;
+    else this.x += rand(-1, 1) * U * 2;
+    return false;
+  }
 
   draw(time) {
     const w = this.w, h = this.h;
@@ -687,12 +792,17 @@ class Ghast {
       ctx.fillRect(x - w, y - w, w * 2, w * 2);
     }
 
+    if (this.hurtT > 0) { x += rand(-1, 1) * U * 0.8; y += rand(-1, 1) * U * 0.8; }
+
     ctx.save();
-    ctx.globalAlpha = this.alpha;
+    // 악랄 모드 Lv.4 의 분노 가스트는 깜빡여서 잘 안 보인다
+    const flicker = this.fierce && this.type === 'angry' ? 0.55 + 0.45 * Math.abs(Math.sin(time * 2.5 + this.bob)) : 1;
+    ctx.globalAlpha = this.alpha * flicker;
     ctx.translate(x, y);
     const s = this.state === 'in' ? lerp(0.6, 1, this.alpha) : (this.state === 'dying' ? 1 + this.t * 0.8 : 1);
     ctx.scale(this.flip * s, s);
-    const img = this.state === 'dying' ? GV.hurt : this.state === 'charge' ? GV.charge : GV.normal;
+    const look = GV[this.T.img];
+    const img = this.state === 'dying' || this.hurtT > 0 ? GV.hurt : this.state === 'charge' ? look.charge : look.normal;
     ctx.drawImage(img, -w / 2, -h / 2, w, h);
     if (this.state === 'charge') {
       // 입 앞에서 화염구가 점점 커짐
@@ -702,6 +812,33 @@ class Ghast {
       ctx.drawImage(IMG.fireball, mx - fs / 2, my - fs / 2, fs, fs);
     }
     ctx.restore();
+
+    // 여러 번 맞혀야 하는 가스트는 머리 위에 남은 체력 칸 표시
+    if (this.hpMax > 1 && this.state !== 'dying') {
+      const pw = U * 2, gap = U * 0.6, ph = U * 1.2;
+      const total = this.hpMax * pw + (this.hpMax - 1) * gap;
+      const left = x - total / 2, top = y - h / 2 - U * 3;
+      ctx.globalAlpha = this.alpha;
+      for (let i = 0; i < this.hpMax; i++) {
+        const px = left + i * (pw + gap);
+        ctx.fillStyle = '#000';
+        ctx.fillRect(px - 2, top - 2, pw + 4, ph + 4);
+        ctx.fillStyle = i < this.hp ? '#ff3a2a' : '#3a3a3a';
+        ctx.fillRect(px, top, pw, ph);
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
+// 가스트가 나타나거나 순간이동할 때 피어오르는 연기
+function puff(x, y, w, h) {
+  for (let i = 0; i < 10; i++) {
+    addPart({
+      x: x + rand(-0.4, 0.4) * w, y: y + rand(-0.4, 0.4) * h,
+      vx: rand(-1, 1) * U * 4, vy: -U * rand(1, 4), drag: 2, size: rand(1.5, 3) * U,
+      grow: U * 2, life: rand(0.4, 0.8), color: pick(['#5a2a2a', '#7a4a4a', '#3a1a1a']),
+    });
   }
 }
 
@@ -977,15 +1114,15 @@ function spawnGhast(demo) {
   }
   g.pickTarget();
   ghasts.push(g);
-  // 나타날 때 연기 한 줌
-  for (let i = 0; i < 10; i++) {
-    addPart({
-      x: g.x + rand(-0.4, 0.4) * g.w, y: g.y + rand(-0.4, 0.4) * g.h,
-      vx: rand(-1, 1) * U * 4, vy: -U * rand(1, 4), drag: 2, size: rand(1.5, 3) * U,
-      grow: U * 2, life: rand(0.4, 0.8), color: pick(['#5a2a2a', '#7a4a4a', '#3a1a1a']),
-    });
+  puff(g.x, g.y, g.w, g.h); // 나타날 때 연기 한 줌
+  if (demo) return;
+  Sound.spawn();
+  // 특별한 가스트는 이름과 점수를 잠깐 띄워 알려 준다
+  if (g.type !== 'normal') {
+    const color = { small: '#bfe8ff', big: '#ffd9b0', angry: '#ff6a5a', gold: '#ffd84a' }[g.type];
+    addPart({ kind: 'text', text: `${g.T.name} ${g.points}점`, x: g.x, y: g.y - g.h * 0.6, vy: -U * 2, size: U * 3.4, life: 1.4, color, shadow: '#1a1a1a' });
   }
-  if (!demo) Sound.spawn();
+  if (g.type === 'gold') Sound.reward();
 }
 
 function goTitle() {
@@ -1012,7 +1149,7 @@ function startGame() {
   game.bonusCount = 0;
   game.level = 1;
   game.rewardShown = false;
-  game.stats = { shots: 0, kills: 0, deflects: 0, hitsTaken: 0, misses: 0, escapes: 0 };
+  game.stats = { shots: 0, hits: 0, kills: 0, deflects: 0, hitsTaken: 0, misses: 0, escapes: 0 };
   banner = null;
   fireballs = [];
   ghasts.forEach((g) => g.hittable() && g.leave(true));
@@ -1065,16 +1202,21 @@ function addScore(n) {
     }
     Sound.bonus();
     // 가스트의 눈물과 같은 점수에서 터지면 알림을 하나로 합친다
-    const sub = `+${settings.bonusSeconds}초 보너스  ·  가스트가 빨라져요!`;
-    if (rewardNow) showBanner(`가스트의 눈물 확보!  Lv.${game.level}`, sub, '#9ff6ff', 2.6);
-    else showBanner(`레벨 UP!  Lv.${game.level}`, `${reached}점 돌파  ·  ${sub}`, '#ffe14a', 2.4);
-    doFlash('#ffe14a', 0.25);
+    // 레벨마다 무엇이 바뀌는지 알려 준다
+    const what = game.level >= 4 ? '악랄 모드! 화염구를 여러 발 쏴요'
+      : game.level === 3 ? '가스트들이 화났다! 돌진하고 순간이동해요'
+      : '가스트가 빨라지고 더 단단해져요';
+    const sub = `+${settings.bonusSeconds}초 보너스  ·  ${what}`;
+    const color = game.level >= 3 ? '#ff6a5a' : '#ffe14a';
+    if (rewardNow) showBanner(`가스트의 눈물 확보!  Lv.${game.level}`, sub, '#9ff6ff', 2.8);
+    else showBanner(`레벨 UP!  Lv.${game.level}`, sub, color, 2.6);
+    doFlash(game.level >= 3 ? '#ff3a2a' : '#ffe14a', 0.25);
   }
 }
 
 // 가스트를 맞히지 못하고 화면 밖으로 흘려보냄
 function ghastEscaped(gh) {
-  if (game.state !== 'play') return;
+  if (game.state !== 'play' || gh.T.noEscapePenalty) return; // 황금 가스트는 놓쳐도 감점 없음
   game.stats.escapes++;
   Sound.escape();
   if (settings.escapePenalty > 0) {
@@ -1159,15 +1301,22 @@ function onTap(x, y) {
   // 2) 가까운(큰) 가스트부터
   const g = [...ghasts].sort((a, b) => b.z - a.z).find((o) => o.hittable() && o.hitTest(x, y));
   if (g) {
-    const charging = g.state === 'charge';
-    g.kill();
+    game.stats.hits++;
+    const c = g.center();
+    if (!g.hit()) {
+      // 아직 체력이 남음: '퍽!' 하고 흔들림
+      Sound.thud();
+      shake = Math.max(shake, U * 0.4);
+      addPart({ kind: 'text', text: pick(['퍽!', '쿵!', '팍!']), x: c.x + rand(-0.2, 0.2) * g.w, y: c.y - g.h * 0.2, vy: -U * 6, size: U * 5, life: 0.5, rot: rand(-0.3, 0.3), color: '#ffffff', shadow: '#7a1a0a' });
+      return;
+    }
     game.stats.kills++;
     Sound.hit();
     shake = Math.max(shake, U * 0.8);
     doFlash('#ffffff', 0.12);
-    const c = g.center();
-    popupScore(c.x + g.w * 0.3, c.y - g.h * 0.5, `+${settings.killPoints}`, charging ? '#ffd25a' : '#7dff6a');
-    addScore(settings.killPoints);
+    const color = g.type === 'gold' ? '#ffd84a' : g.points > settings.killPoints ? '#ffb23a' : '#7dff6a';
+    popupScore(c.x + g.w * 0.3, c.y - g.h * 0.5, `+${g.points}`, color);
+    addScore(g.points);
     return;
   }
 
@@ -1449,9 +1598,9 @@ function drawTitle(time) {
   panel(cx - pw / 2, py, pw, ph, 0.68);
   const lines = [
     ['네더의 가스트가 화염구를 쏘기 전에 맞혀라!', '#ffffff', 5],
-    [`가스트 처치 +${settings.killPoints}점   ·   날아오는 화염구 맞히기 +${settings.deflectPoints}점`, '#ffd9b0', 3.4],
+    [`가스트 종류마다 +${settings.killPoints}~${settings.killPoints * 5}점  ·  화염구 맞히기 +${settings.deflectPoints}점`, '#ffd9b0', 3.4],
     [`배경을 맞히면 -${settings.missPenalty}점  ·  가스트를 놓치면 -${settings.escapePenalty}점  ·  화염구에 맞으면 -${settings.hitPenalty}점`, '#ff9a8a', 3.3],
-    [`제한 시간 ${timeLabel(settings.gameSeconds)}   ·   ${bonusSteps()}점 모을 때마다 +${settings.bonusSeconds}초 & 레벨 UP!`, '#ffe14a', 3.4],
+    [`제한 시간 ${timeLabel(settings.gameSeconds)}   ·   ${bonusSteps()}점마다 +${settings.bonusSeconds}초 & 레벨 UP!`, '#ffe14a', 3.4],
     [`${settings.rewardScore}점 이상이면 '가스트의 눈물'을 드려요`, '#9ff6ff', 4],
     ['※ 화면만 쏘세요! 사람을 향해 쏘면 안 돼요', '#ff8a7a', 3.2],
   ];
@@ -1633,7 +1782,8 @@ function drawResult(time) {
   const st = game.stats;
   text(`${game.player || '이름없음'} 님 · 미션 종료!`, cx, py + U * 7, U * 6.5, '#ffcf5a');
   text(`${game.score}점`, cx, py + U * 20, U * 15, '#ffffff', 'center', { shadow: '#a3200c' });
-  const acc = st.shots ? Math.round(((st.kills + st.deflects) / st.shots) * 100) : 0;
+  // 명중률: 가스트를 맞힌 횟수(처치 못 한 타격 포함) + 화염구 반사 / 쏜 횟수
+  const acc = st.shots ? Math.round((((st.hits ?? st.kills) + st.deflects) / st.shots) * 100) : 0;
   text(`처치 ${st.kills}  ·  반사 ${st.deflects}  ·  빗나감 ${st.misses}  ·  놓침 ${st.escapes}  ·  피격 ${st.hitsTaken}  ·  명중률 ${acc}%  ·  레벨 ${game.level}`, cx, py + U * 31, U * 3.2, '#ffd9b0');
 
   // 순위
@@ -1790,9 +1940,9 @@ function draw(time) {
 // 큰 조준점 (프로젝터 화면에서도 잘 보이게). 크기는 설정의 '조준점 크기'
 function drawAim(x, y) {
   const s = clamp(settings.aimSize, 50, 300) / 100;
-  const r = U * 5 * s, gap = U * 1.4 * s, len = U * 3.2 * s, t = Math.max(3, U * 0.8 * s);
+  const r = U * 3.8 * s, gap = U * 1.1 * s, len = U * 2.4 * s, t = Math.max(3, U * 0.6 * s);
   // 검은 테두리 → 노란 빛 → 흰 선 순서로 겹쳐 어두운 네더 배경에서도 또렷하게
-  for (const [color, w] of [['rgba(0,0,0,0.85)', t + U * 0.9 * s], ['rgba(255,225,74,0.9)', t + U * 0.35 * s], ['#ffffff', t]]) {
+  for (const [color, w] of [['rgba(0,0,0,0.85)', t + U * 0.7 * s], ['rgba(255,225,74,0.9)', t + U * 0.28 * s], ['#ffffff', t]]) {
     ctx.strokeStyle = color;
     ctx.lineWidth = w;
     ctx.lineCap = 'square';
