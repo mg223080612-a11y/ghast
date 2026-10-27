@@ -14,7 +14,7 @@ const DEFAULTS = {
   // 이후로는 마지막 값(70점)을 모을 때마다. 점수로 치면 30 → 80 → 150 → 220 …
   bonusGaps: '30, 50, 70',
   bonusSeconds: 7,     // 이만큼 시간 추가
-  rewardScore: 30,     // 이 점수 이상이면 가스트의 눈물(밀키스)
+  rewardScore: 100,    // 이 점수 이상이면 가스트의 눈물(밀키스)
   killPoints: 2,       // 가스트 처치
   deflectPoints: 1,    // 날아오는 화염구 맞히기
   hitPenalty: 1,       // 화염구에 맞으면 감점
@@ -33,7 +33,7 @@ const DEFAULTS = {
   showTouches: true,   // 터치(탄착) 위치를 화면에 표시
 };
 // 기본 규칙이 바뀌면 이름 뒤 숫자를 올려 예전에 저장된 설정을 무시한다
-const SETTINGS_KEY = 'ghast-shooting-settings-v9';
+const SETTINGS_KEY = 'ghast-shooting-settings-v10';
 let settings = loadSettings();
 
 function loadSettings() {
