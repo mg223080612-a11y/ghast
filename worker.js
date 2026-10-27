@@ -70,13 +70,14 @@ async function handle(request, env, url) {
     const name = cleanName(body.name);
     if (!name) return json(400, { error: '닉네임이 비어 있습니다' });
 
-    // 40초 게임에서 나올 수 없는 점수는 받지 않는다 (가짜 기록 방지). 한도는 wrangler.toml 의 MAX_SCORE
-    const maxScore = toInt(env.MAX_SCORE, 1, 1_000_000, 500);
-    if (Number(body.score) > maxScore || Number(body.kills) > maxScore) {
+    // 점수 상한: wrangler.toml 에 MAX_SCORE 를 적으면 그보다 높은 점수는 받지 않는다 (가짜 기록 방지).
+    // 지금은 상한 없이 운영 — 값이 없으면 검사하지 않는다.
+    const maxScore = env.MAX_SCORE ? toInt(env.MAX_SCORE, 1, 1_000_000_000) : 0;
+    if (maxScore && (Number(body.score) > maxScore || Number(body.kills) > maxScore)) {
       return json(400, { error: `점수가 너무 높아 저장하지 않았습니다 (최대 ${maxScore}점)` });
     }
-    const score = toInt(body.score, 0, maxScore);
-    const kills = toInt(body.kills, 0, maxScore);
+    const score = toInt(body.score, 0, 1_000_000_000);
+    const kills = toInt(body.kills, 0, 1_000_000_000);
     const since = toInt(body.since, 0, Number.MAX_SAFE_INTEGER, 0);
     // 인터넷이 끊겼을 때 PC 에 보관했다가 나중에 올리는 기록은 원래 플레이한 시각을 쓴다.
     // (미래 시각이나 일주일보다 오래된 시각은 받지 않고 지금 시각으로)
