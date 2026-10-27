@@ -994,8 +994,10 @@ function refreshTitleTop() {
 }
 
 // 랭킹 화면
-// 랭킹은 TOP 100 까지 불러와서 한 화면에 perPage 명씩 넘겨 본다
-const RANK_LIMIT = 100;
+// '오늘' 은 TOP 10 만, '전체' 는 100명까지 쪽을 넘겨 가며 본다
+const RANK_TODAY_LIMIT = 10;
+const RANK_ALL_LIMIT = 100;
+const rankLimit = (scope) => (scope === 'today' ? RANK_TODAY_LIMIT : RANK_ALL_LIMIT);
 const rankView = { scope: 'today', list: null, req: 0, page: 0, perPage: 10 };
 function openRanking() {
   game.rankFrom = game.state === 'result' ? 'result' : 'title';
@@ -1008,7 +1010,7 @@ function setRankScope(scope) {
   rankView.list = null;
   rankView.page = 0;
   const req = ++rankView.req;
-  Ranking.top(scope, RANK_LIMIT)
+  Ranking.top(scope, rankLimit(scope))
     .then((list) => {
       if (req !== rankView.req) return;
       rankView.list = list;
@@ -1640,8 +1642,9 @@ function drawRanking() {
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
   ctx.fillRect(0, 0, W, H);
   const cx = W / 2;
-  // 화면이 넓으면(프로젝터) 두 줄로 나눠 한 번에 20명, 좁으면 10명씩
-  const cols = W - U * 8 >= U * 140 ? 2 : 1;
+  // '오늘' 은 TOP 10 한 줄, '전체' 는 넓은 화면(프로젝터)에서 두 줄로 한 번에 20명
+  const today = rankView.scope === 'today';
+  const cols = !today && W - U * 8 >= U * 140 ? 2 : 1;
   const pw = Math.min(W - U * 8, cols === 2 ? U * 150 : U * 100);
   const ph = Math.min(H - U * 4, U * 100);
   const px = cx - pw / 2, py = (H - ph) / 2;
@@ -1650,11 +1653,11 @@ function drawRanking() {
   const list = rankView.list;
   const per = cols * 10;
   if (rankView.perPage !== per) { rankView.perPage = per; rankView.page = 0; }
-  const pages = rankPages();
-  rankView.page = clamp(rankView.page, 0, pages - 1);
+  const pages = today ? 1 : rankPages();
+  rankView.page = today ? 0 : clamp(rankView.page, 0, pages - 1);
   const start = rankView.page * per;
 
-  text(`랭킹 TOP ${RANK_LIMIT}`, cx, py + U * 7, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
+  text(today ? '오늘의 TOP 10' : '전체 랭킹', cx, py + U * 7, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
   button('오늘', cx - U * 13, py + U * 17, U * 22, U * 7, () => setRankScope('today'), true, rankView.scope === 'today');
   button('전체', cx + U * 13, py + U * 17, U * 22, U * 7, () => setRankScope('all'), true, rankView.scope === 'all');
 
@@ -1705,14 +1708,21 @@ function drawRanking() {
     }
   }
 
-  // 아래: 이전 · 돌아가기 · 다음, 그리고 지금 보고 있는 순위 범위
+  // 아래: (전체일 때만) 이전 · 다음 과 지금 보고 있는 순위 범위
   const by = py + ph - U * 7;
-  button('◀ 이전', cx - U * 34, by, U * 24, U * 8, () => turnRankPage(-1), rankView.page > 0);
-  button('돌아가기', cx, by, U * 30, U * 8, closeRanking);
-  button('다음 ▶', cx + U * 34, by, U * 24, U * 8, () => turnRankPage(1), rankView.page < pages - 1);
+  if (today) {
+    button('돌아가기', cx, by, U * 36, U * 8, closeRanking);
+  } else {
+    button('◀ 이전', cx - U * 34, by, U * 24, U * 8, () => turnRankPage(-1), rankView.page > 0);
+    button('돌아가기', cx, by, U * 30, U * 8, closeRanking);
+    button('다음 ▶', cx + U * 34, by, U * 24, U * 8, () => turnRankPage(1), rankView.page < pages - 1);
+  }
   if (list?.length) {
     const end = Math.min(list.length, start + per);
-    text(`${start + 1}~${end}위  ·  ${rankView.page + 1}/${pages}쪽  ·  총 ${list.length}명${list.length >= RANK_LIMIT ? ' (상위 100명까지 표시)' : ''}`, cx, by - U * 7, U * 2.8, '#c9a89a');
+    const info = today
+      ? '오늘 올라온 기록 중 상위 10명  ·  전체 랭킹은 [전체] 에서'
+      : `${start + 1}~${end}위  ·  ${rankView.page + 1}/${pages}쪽  ·  총 ${list.length}명${list.length >= RANK_ALL_LIMIT ? ` (상위 ${RANK_ALL_LIMIT}명까지 표시)` : ''}`;
+    text(info, cx, by - U * 7, U * 2.8, '#c9a89a');
   }
 }
 
