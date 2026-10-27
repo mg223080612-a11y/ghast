@@ -994,7 +994,9 @@ function refreshTitleTop() {
 }
 
 // 랭킹 화면
-const rankView = { scope: 'today', list: null, req: 0 };
+// 랭킹은 TOP 100 까지 불러와서 한 화면에 perPage 명씩 넘겨 본다
+const RANK_LIMIT = 100;
+const rankView = { scope: 'today', list: null, req: 0, page: 0, perPage: 10 };
 function openRanking() {
   game.rankFrom = game.state === 'result' ? 'result' : 'title';
   game.state = 'ranking';
@@ -1004,11 +1006,20 @@ function openRanking() {
 function setRankScope(scope) {
   rankView.scope = scope;
   rankView.list = null;
+  rankView.page = 0;
   const req = ++rankView.req;
-  Ranking.top(scope, 10)
-    .then((list) => { if (req === rankView.req) rankView.list = list; })
+  Ranking.top(scope, RANK_LIMIT)
+    .then((list) => {
+      if (req !== rankView.req) return;
+      rankView.list = list;
+      // 방금 한 판의 기록이 있으면 그 기록이 있는 쪽을 먼저 보여 준다
+      const mine = list.findIndex((r) => r.id === game.lastEntryId);
+      if (mine >= 0) rankView.page = Math.floor(mine / rankView.perPage);
+    })
     .catch(() => { if (req === rankView.req) rankView.list = []; });
 }
+function rankPages() { return Math.max(1, Math.ceil((rankView.list?.length || 0) / rankView.perPage)); }
+function turnRankPage(delta) { rankView.page = clamp(rankView.page + delta, 0, rankPages() - 1); }
 // 이 노트북의 serve.cjs 로 열었으면 관리자 키를 자동으로 채운다 (data/admin-key.txt)
 async function loadLocalAdminKey() {
   if (settings.adminKey || !['localhost', '127.0.0.1'].includes(location.hostname)) return;
@@ -1316,6 +1327,14 @@ window.addEventListener('keydown', (e) => {
       else if (game.state === 'aimtest') goTitle();
       else if (game.state === 'play' && game.paused) game.paused = false;
       break;
+    case 'ArrowLeft':
+    case 'PageUp':
+      if (game.state === 'ranking') turnRankPage(-1);
+      break;
+    case 'ArrowRight':
+    case 'PageDown':
+      if (game.state === 'ranking') turnRankPage(1);
+      break;
     case 'KeyR':
       if (game.state === 'title' || (game.state === 'result' && game.resultTime > RESULT_LOCK)) openRanking();
       else if (game.state === 'ranking') closeRanking();
@@ -1621,45 +1640,80 @@ function drawRanking() {
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
   ctx.fillRect(0, 0, W, H);
   const cx = W / 2;
-  const pw = Math.min(W - U * 8, U * 100);
+  // 화면이 넓으면(프로젝터) 두 줄로 나눠 한 번에 20명, 좁으면 10명씩
+  const cols = W - U * 8 >= U * 140 ? 2 : 1;
+  const pw = Math.min(W - U * 8, cols === 2 ? U * 150 : U * 100);
   const ph = Math.min(H - U * 4, U * 100);
   const px = cx - pw / 2, py = (H - ph) / 2;
   panel(px, py, pw, ph, 0.88);
 
-  text('랭킹 TOP 10', cx, py + U * 7, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
+  const list = rankView.list;
+  const per = cols * 10;
+  if (rankView.perPage !== per) { rankView.perPage = per; rankView.page = 0; }
+  const pages = rankPages();
+  rankView.page = clamp(rankView.page, 0, pages - 1);
+  const start = rankView.page * per;
+
+  text(`랭킹 TOP ${RANK_LIMIT}`, cx, py + U * 7, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
   button('오늘', cx - U * 13, py + U * 17, U * 22, U * 7, () => setRankScope('today'), true, rankView.scope === 'today');
   button('전체', cx + U * 13, py + U * 17, U * 22, U * 7, () => setRankScope('all'), true, rankView.scope === 'all');
 
-  const colRank = px + U * 8, colName = px + U * 16, colKills = px + pw - U * 26, colScore = px + pw - U * 6;
-  const headY = py + U * 26;
-  text('순위', colRank, headY, U * 2.8, '#c9a89a');
-  text('닉네임', colName, headY, U * 2.8, '#c9a89a', 'left');
-  text('처치', colKills, headY, U * 2.8, '#c9a89a');
-  text('점수', colScore, headY, U * 2.8, '#c9a89a', 'right');
-
-  const top = py + U * 31, bottom = py + ph - U * 13;
+  const top = py + U * 31, bottom = py + ph - U * 17;
   const rowH = Math.min(U * 6.4, (bottom - top) / 10);
-  const list = rankView.list;
+  const colW = (pw - U * 6) / cols;
+  const size = Math.min(U * 3.8, rowH * 0.62);
+  // 긴 닉네임은 옆 칸을 침범하지 않게 글자를 줄인다
+  const fit = (str, s, maxW) => {
+    ctx.font = `bold ${Math.round(s)}px ${FONT}`;
+    const w = ctx.measureText(str).width;
+    return w > maxW ? s * (maxW / w) : s;
+  };
+
+  // 칸 하나(10명)를 그린다
+  const drawColumn = (c, rows, firstRank) => {
+    const left = px + U * 3 + c * colW;
+    const colRank = left + U * 5, colName = left + U * 12, colKills = left + colW - U * 21, colScore = left + colW - U * 3;
+    const headY = py + U * 26;
+    text('순위', colRank, headY, U * 2.8, '#c9a89a');
+    text('닉네임', colName, headY, U * 2.8, '#c9a89a', 'left');
+    text('처치', colKills, headY, U * 2.8, '#c9a89a');
+    text('점수', colScore, headY, U * 2.8, '#c9a89a', 'right');
+    rows.forEach((r, i) => {
+      const rank = firstRank + i;
+      const y = top + rowH * (i + 0.5);
+      if (r.id === game.lastEntryId) {
+        ctx.fillStyle = 'rgba(255, 225, 74, 0.2)';
+        ctx.fillRect(left, y - rowH / 2, colW - U * 1, rowH);
+      }
+      const color = MEDAL[rank - 1] || '#ffffff';
+      text(`${rank}`, colRank, y, size, color);
+      text(r.name, colName, y, fit(r.name, size, colKills - colName - U * 5), color, 'left');
+      text(String(r.kills ?? 0), colKills, y, size * 0.85, '#ffd9b0');
+      text(`${r.score}점${r.pending ? ' *' : ''}`, colScore, y, size, color, 'right');
+    });
+  };
+
   if (!list) {
     text('불러오는 중…', cx, top + rowH * 3, U * 4, '#ffffff');
   } else if (!list.length) {
     text(rankView.scope === 'today' ? '오늘은 아직 기록이 없어요' : '아직 기록이 없어요', cx, top + rowH * 3, U * 4, '#ffffff');
   } else {
-    list.forEach((r, i) => {
-      const y = top + rowH * (i + 0.5);
-      if (r.id === game.lastEntryId) {
-        ctx.fillStyle = 'rgba(255, 225, 74, 0.2)';
-        ctx.fillRect(px + U * 3, y - rowH / 2, pw - U * 6, rowH);
-      }
-      const color = MEDAL[i] || '#ffffff';
-      const size = Math.min(U * 3.8, rowH * 0.62);
-      text(`${i + 1}`, colRank, y, size, color);
-      text(r.name, colName, y, size, color, 'left');
-      text(String(r.kills ?? 0), colKills, y, size * 0.85, '#ffd9b0');
-      text(`${r.score}점`, colScore, y, size, color, 'right');
-    });
+    for (let c = 0; c < cols; c++) {
+      const from = start + c * 10;
+      const rows = list.slice(from, from + 10);
+      if (rows.length) drawColumn(c, rows, from + 1);
+    }
   }
-  button('돌아가기', cx, py + ph - U * 7, U * 36, U * 8, closeRanking);
+
+  // 아래: 이전 · 돌아가기 · 다음, 그리고 지금 보고 있는 순위 범위
+  const by = py + ph - U * 7;
+  button('◀ 이전', cx - U * 34, by, U * 24, U * 8, () => turnRankPage(-1), rankView.page > 0);
+  button('돌아가기', cx, by, U * 30, U * 8, closeRanking);
+  button('다음 ▶', cx + U * 34, by, U * 24, U * 8, () => turnRankPage(1), rankView.page < pages - 1);
+  if (list?.length) {
+    const end = Math.min(list.length, start + per);
+    text(`${start + 1}~${end}위  ·  ${rankView.page + 1}/${pages}쪽  ·  총 ${list.length}명${list.length >= RANK_LIMIT ? ' (상위 100명까지 표시)' : ''}`, cx, by - U * 7, U * 2.8, '#c9a89a');
+  }
 }
 
 function drawHUD(time) {
