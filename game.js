@@ -1615,15 +1615,78 @@ function drawTitleTicker(time, right) {
       if (y < boxTop - rowH || y > boxBottom + rowH) return;
       // 위·아래 가장자리에서는 흐릿하게 사라지고 나타난다
       const edge = Math.min(y - boxTop, boxBottom - y);
-      ctx.globalAlpha = scrolling ? clamp(edge / (rowH * 0.9), 0, 1) : 1;
+      const fade = scrolling ? clamp(edge / (rowH * 0.9), 0, 1) : 1;
+      ctx.globalAlpha = fade;
       const str = `${i + 1}위  ${r.name}  ${r.score}점`;
-      text(str, x, y, fitTextSize(str, U * 3.2, maxW), MEDAL[i] || '#ffffff', 'left');
+      const crownW = U * 4.2;
+      // 1등은 줄 끝에 왕관을 달 자리를 남겨 둔다
+      const size = fitTextSize(str, U * 3.2, i === 0 ? maxW - crownW - U * 1.5 : maxW);
+      text(str, x, y, size, MEDAL[i] || '#ffffff', 'left');
+      if (i === 0) {
+        ctx.font = `bold ${Math.round(size)}px ${FONT}`;
+        const tw = ctx.measureText(str).width;
+        drawSparkles(x - U, y - rowH * 0.5, tw + crownW + U * 3, rowH, time, 5, 7, fade);
+        drawCrown(x + tw + U * 1.2 + crownW / 2, y - U * 0.3, crownW, time, fade);
+        ctx.globalAlpha = fade;
+      }
     });
   }
   ctx.globalAlpha = 1;
   ctx.restore();
 }
 const MEDAL = ['#ffd84a', '#d8d8e0', '#e09a5a'];
+
+// ---------- 1등 꾸미기: 왕관 + 반짝이 ----------
+// 픽셀 왕관 (X 금, R 빨간 보석, B 파란 보석)
+const CROWN = [
+  'X...X...X',
+  'XX.XXX.XX',
+  'XXXXXXXXX',
+  'XRXXBXXRX',
+  'XXXXXXXXX',
+];
+function drawCrown(cx, cy, w, time, alpha = 1) {
+  const p = w / 9, h = p * CROWN.length;
+  const x0 = cx - w / 2, y0 = cy - h / 2 + Math.sin(time * 3) * p * 0.6; // 살짝 들썩
+  ctx.globalAlpha = alpha;
+  // 검은 테두리
+  ctx.fillStyle = 'rgba(0,0,0,0.85)';
+  CROWN.forEach((row, r) => [...row].forEach((ch, c) => {
+    if (ch !== '.') ctx.fillRect(x0 + c * p - p * 0.35, y0 + r * p - p * 0.35, p * 1.7, p * 1.7);
+  }));
+  CROWN.forEach((row, r) => [...row].forEach((ch, c) => {
+    if (ch === '.') return;
+    ctx.fillStyle = ch === 'R' ? '#ff3a4a' : ch === 'B' ? '#4ad8ff' : r === CROWN.length - 1 ? '#d98c1a' : '#ffd84a';
+    ctx.fillRect(x0 + c * p, y0 + r * p, Math.ceil(p), Math.ceil(p));
+  }));
+  // 3초마다 왕관 위를 지나가는 빛줄기
+  const shine = (time * 0.9) % 3;
+  if (shine < 1) {
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillRect(x0 + shine * (w - p), y0 + p * 2, p, p * 3);
+  }
+  ctx.globalAlpha = 1;
+}
+// 영역 안에서 작은 별이 반짝였다 사라지고, 사라질 때마다 다른 자리에서 다시 반짝인다
+function drawSparkles(x, y, w, h, time, count = 6, seed = 1, alpha = 1) {
+  for (let i = 0; i < count; i++) {
+    const phase = hash(seed * 53 + i * 29) * Math.PI * 2;
+    const t = time * 3 + phase;
+    const cycle = Math.floor(t / (Math.PI * 2));
+    const s = Math.max(0, Math.sin(t));
+    if (s < 0.05) continue;
+    const px = x + hash(seed * 97 + i * 13 + cycle * 101) * w;
+    const py = y + hash(seed * 31 + i * 7 + cycle * 211) * h;
+    const r = U * (0.5 + 0.9 * s), th = Math.max(1.5, U * 0.28);
+    ctx.globalAlpha = alpha * s;
+    ctx.fillStyle = '#fff3a8';
+    ctx.fillRect(px - r, py - th / 2, r * 2, th);
+    ctx.fillRect(px - th / 2, py - r, th, r * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(px - th, py - th, th * 2, th * 2);
+  }
+  ctx.globalAlpha = 1;
+}
 const LEVEL_COLORS = ['#ffffff', '#ffe14a', '#ffb23a', '#ff7a3a', '#ff4a3a'];
 
 function drawAimTest() {
@@ -1672,7 +1735,7 @@ function drawAimTest() {
   if (aim.seen) drawAim(aim.x, aim.y);
 }
 
-function drawRanking() {
+function drawRanking(time) {
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
   ctx.fillRect(0, 0, W, H);
   const cx = W / 2;
@@ -1723,7 +1786,14 @@ function drawRanking() {
         ctx.fillRect(left, y - rowH / 2, colW - U * 1, rowH);
       }
       const color = MEDAL[rank - 1] || '#ffffff';
+      // 1등: 금빛 줄 + 반짝이 (글자보다 먼저 그려 뒤에 깔리게)
+      if (rank === 1) {
+        ctx.fillStyle = 'rgba(255, 216, 74, 0.12)';
+        ctx.fillRect(left, y - rowH / 2, colW - U * 1, rowH);
+        drawSparkles(left, y - rowH * 0.8, colW - U * 1, rowH * 1.3, time, 10, 3);
+      }
       text(`${rank}`, colRank, y, size, color);
+      if (rank === 1) drawCrown(colRank, y - size * 0.95, U * 4.6, time); // 순위 '1' 위에 왕관을 씌운다
       text(r.name, colName, y, fit(r.name, size, colKills - colName - U * 5), color, 'left');
       text(String(r.kills ?? 0), colKills, y, size * 0.85, '#ffd9b0');
       text(`${r.score}점${r.pending ? ' *' : ''}`, colScore, y, size, color, 'right');
@@ -1955,7 +2025,7 @@ function draw(time) {
   if (game.state === 'countdown') { drawHUD(time); drawCountdown(); }
   if (game.state === 'play') drawHUD(time);
   if (game.state === 'result') drawResult(time);
-  if (game.state === 'ranking') drawRanking();
+  if (game.state === 'ranking') drawRanking(time);
   if (game.state === 'aimtest') drawAimTest();
   drawBanner();
 
