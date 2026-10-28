@@ -12,8 +12,9 @@
   <!-- 게임 화면 전체를 그리는 캔버스 -->
   <canvas id="game"></canvas>
 
-  <!-- 처음 화면/결과 화면에서만 보이는 운영 버튼 -->
+  <!-- 운영 버튼: 처음 화면 버튼은 처음 화면 말고 어디서나, 나머지는 처음 화면/결과 화면에서만 -->
   <div id="corner-buttons">
+    <button type="button" id="btn-home" title="처음 화면으로 (Home)">🏠 처음 화면</button>
     <button type="button" id="btn-gunsetup" title="총 연결 (G) — 2인 대결용 1P/2P 지정">🔫 총 연결</button>
     <button type="button" id="btn-aimtest" title="총 조준 테스트 (T)">🎯 총 테스트</button>
     <button type="button" id="btn-fullscreen" title="전체화면 (F)">⛶ 전체화면</button>
@@ -38,6 +39,13 @@
         <label>난이도 (0.5 쉬움 ~ 2 어려움)<input type="number" name="difficulty" min="0.3" max="3" step="0.1"></label>
         <label>판정 여유 (%)<input type="number" name="hitPadding" min="0" max="60" step="5"></label>
         <label>가스트 크기 (%)<input type="number" name="ghastScale" min="50" max="200" step="10"></label>
+        <label>화질 (버벅이면 '가볍게')
+          <select name="quality">
+            <option value="normal">보통 (권장)</option>
+            <option value="light">가볍게 (저사양 노트북)</option>
+            <option value="sharp">선명하게 (느릴 수 있음)</option>
+          </select>
+        </label>
         <label>전체 소리 크기 (0 ~ 1)<input type="number" name="volume" min="0" max="1" step="0.1"></label>
         <label>배경 음악 크기 (0 = 끄기)<input type="number" name="musicVolume" min="0" max="1" step="0.1"></label>
         <label>입력 장치

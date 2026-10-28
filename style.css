@@ -36,6 +36,11 @@ html, body {
   gap: 8px;
 }
 #corner-buttons.hidden { display: none; }
+#corner-buttons button[hidden] { display: none; }
+/* 게임 중에는 점수판을 가리지 않게 오른쪽 아래(바닥 쪽)에 작고 흐리게 */
+#corner-buttons.in-game { top: auto; bottom: 12px; opacity: 0.55; }
+#corner-buttons.in-game:hover { opacity: 1; }
+#corner-buttons.in-game button { font-size: 13px; padding: 6px 10px; }
 
 button {
   font-family: var(--font);

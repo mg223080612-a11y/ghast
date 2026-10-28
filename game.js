@@ -29,6 +29,7 @@ const DEFAULTS = {
   difficulty: 1,       // 0.5 쉬움 ~ 2 어려움
   hitPadding: 15,      // 가스트 판정 범위를 몇 % 넓힐지
   ghastScale: 100,     // 가스트 크기 (%)
+  quality: 'normal',   // 화질: 'normal' 보통(빠름) / 'light' 가볍게(저사양) / 'sharp' 선명하게(느릴 수 있음)
   volume: 0.8,         // 전체 소리 크기 (효과음 + 음악)
   musicVolume: 0.5,    // 배경 음악 크기 (0 이면 음악 끄기)
   inputMode: 'gun',    // 'gun' = 라이트건(마우스로 인식) / 'touch' = 프로젝터 터치 센서
@@ -97,7 +98,11 @@ let W = 0, H = 0, DPR = 1;
 let U = 10; // 화면 크기에 비례하는 기본 단위. 글자·가스트 크기가 모두 이 값을 따른다.
 
 function resize() {
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  // 그리는 해상도. 노트북 화면 배율(125%·150%)을 그대로 따르면 픽셀 수가 1.5~2배가 되어
+  // 프로젝터 전체 화면에서 크게 버벅인다. 픽셀 그림이라 1배로도 충분하다.
+  //   normal: 1배 (기본) / light: 0.75배 (저사양 노트북) / sharp: 화면 배율 그대로 (최대 2배)
+  DPR = settings.quality === 'sharp' ? Math.min(window.devicePixelRatio || 1, 2)
+    : settings.quality === 'light' ? 0.75 : 1;
   W = window.innerWidth;
   H = window.innerHeight;
   canvas.width = Math.round(W * DPR);
@@ -355,19 +360,25 @@ const Music = {
     g.gain.exponentialRampToValueAtTime(gain, t + attack);
     g.gain.setValueAtTime(gain, t + Math.max(attack, dur * 0.6));
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    let src = o;
-    if (cutoff) {
-      const f = ctx.createBiquadFilter();
-      f.type = 'lowpass';
-      f.frequency.value = cutoff;
-      o.connect(f);
-      src = f;
-    }
-    src.connect(g);
-    g.connect(this.out);
+    o.connect(g);
+    // 음색을 부드럽게 하는 필터는 음마다 새로 만들지 않고 같은 필터를 함께 쓴다 (컴퓨터 부담 줄이기)
+    g.connect(cutoff ? this.bus('lowpass', cutoff) : this.out);
     if (echo) g.connect(this.echo);
     o.start(t);
     o.stop(t + dur + 0.05);
+  },
+  // 함께 쓰는 필터: 종류·주파수가 같으면 하나만 만들어 계속 쓴다
+  buses: new Map(),
+  bus(type, freq, q = 1) {
+    const key = `${type}|${freq}|${q}`;
+    let f = this.buses.get(key);
+    if (!f) {
+      f = Sound.ctx.createBiquadFilter();
+      f.type = type; f.frequency.value = freq; f.Q.value = q;
+      f.connect(this.out);
+      this.buses.set(key, f);
+    }
+    return f;
   },
   kick(t, gain = 0.45) {
     const ctx = Sound.ctx;
@@ -385,12 +396,10 @@ const Music = {
     const ctx = Sound.ctx;
     const src = ctx.createBufferSource();
     src.buffer = Sound.noiseBuf;
-    const f = ctx.createBiquadFilter();
-    f.type = type; f.frequency.value = freq; f.Q.value = q;
     const g = ctx.createGain();
     g.gain.setValueAtTime(gain, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    src.connect(f); f.connect(g); g.connect(this.out);
+    src.connect(g); g.connect(this.bus(type, freq, q));
     src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.02);
   },
   hat(t, gain, open = false) { this.noiseHit(t, { freq: 7500, dur: open ? 0.12 : 0.035, gain }); },
@@ -682,7 +691,10 @@ function updateEmbers(dt) {
 
 // ---------- 파티클 (팡팡 터지는 효과) ----------
 const parts = [];
+const MAX_PARTS = 350; // 효과가 한꺼번에 너무 많이 쌓여 버벅이지 않게
 function addPart(p) {
+  // 글자 효과(점수·'팡!')는 꼭 보여야 하니 남기고, 작은 조각은 많으면 새로 만들지 않는다
+  if (parts.length >= MAX_PARTS && p.kind !== 'text') return;
   parts.push({
     x: 0, y: 0, vx: 0, vy: 0, g: 0, drag: 0, life: 1, age: 0,
     size: U, grow: 0, color: '#fff', kind: 'sq', rot: 0, vr: 0, ...p,
@@ -1005,11 +1017,7 @@ class Ghast {
     // 충전 중이면 뒤에 붉은 경고 빛
     if (this.state === 'charge') {
       const p = this.t / this.chargeDur;
-      const glow = ctx.createRadialGradient(x, y, w * 0.2, x, y, w * 0.9);
-      glow.addColorStop(0, `rgba(255, 60, 20, ${0.35 * p})`);
-      glow.addColorStop(1, 'rgba(255, 60, 20, 0)');
-      ctx.fillStyle = glow;
-      ctx.fillRect(x - w, y - w, w * 2, w * 2);
+      drawGlow(x, y, w * 0.9, '255,60,20', 0.35 * p);
     }
 
     ctx.save();
@@ -1031,6 +1039,32 @@ class Ghast {
     }
     ctx.restore();
   }
+}
+
+// 둥근 빛 번짐. 매 프레임 그라데이션을 새로 만들지 않고, 색마다 한 번 그린 그림을 늘려 쓴다
+const glowCache = new Map();
+function drawGlow(x, y, radius, rgb, alpha) {
+  if (alpha <= 0.01 || radius <= 0) return;
+  let img = glowCache.get(rgb);
+  if (!img) {
+    img = document.createElement('canvas');
+    img.width = img.height = 128;
+    const g = img.getContext('2d');
+    const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    grad.addColorStop(0, `rgba(${rgb},1)`);
+    grad.addColorStop(0.2, `rgba(${rgb},1)`);
+    grad.addColorStop(1, `rgba(${rgb},0)`);
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 128, 128);
+    glowCache.set(rgb, img);
+  }
+  const prev = ctx.globalAlpha;
+  const smooth = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = true; // 빛은 부드럽게 늘려야 계단이 안 생긴다
+  ctx.globalAlpha = prev * clamp(alpha, 0, 1);
+  ctx.drawImage(img, x - radius, y - radius, radius * 2, radius * 2);
+  ctx.globalAlpha = prev;
+  ctx.imageSmoothingEnabled = smooth;
 }
 
 // 가스트가 나타날 때 피어오르는 연기
@@ -1080,11 +1114,7 @@ class Fireball {
   }
   draw() {
     const s = this.size;
-    const glow = ctx.createRadialGradient(this.x, this.y, s * 0.2, this.x, this.y, s);
-    glow.addColorStop(0, 'rgba(255, 150, 40, 0.45)');
-    glow.addColorStop(1, 'rgba(255, 150, 40, 0)');
-    ctx.fillStyle = glow;
-    ctx.fillRect(this.x - s, this.y - s, s * 2, s * 2);
+    drawGlow(this.x, this.y, s, '255,150,40', 0.45);
     ctx.save();
     ctx.translate(this.x, this.y);
     ctx.rotate(this.rot);
@@ -1354,6 +1384,7 @@ function goTitle() {
   game.state = 'title';
   game.level = 1; // 처음 화면의 가스트는 천천히
   game.paused = false;
+  game.confirmHome = false;
   fireballs = [];
   ghasts.forEach((g) => g.hittable() && g.leave(true));
   refreshTitleTop();
@@ -1531,7 +1562,14 @@ function onTap(x, y, who = 0) {
     if (g) { g.kill(); Sound.hit(); }
     return;
   }
-  if (game.state !== 'play' || game.paused) return;
+  // 일시정지 화면: '계속하기 / 처음 화면' 버튼만 받는다
+  if (game.state === 'play' && game.paused) {
+    for (const b of buttons) {
+      if (b.enabled && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { b.action(); return; }
+    }
+    return;
+  }
+  if (game.state !== 'play') return;
   const shooter = game.players[who];
   if (!shooter) return;
   const versus = game.mode === 'versus';
@@ -1597,6 +1635,7 @@ const aim = { x: 0, y: 0, seen: false };
 window.addEventListener('pointermove', (e) => {
   if (e.pointerType !== 'mouse') return;
   aim.x = e.clientX; aim.y = e.clientY; aim.seen = true;
+  aim.movedAt = performance.now(); // 총 연결 화면에서 '총이 마우스 모드' 를 알아채는 데 쓴다
 });
 
 // ---------- 총 2대 (게임패드) ----------
@@ -1617,6 +1656,12 @@ const Guns = {
   // 최근 몇 초 안에 움직이거나 버튼을 누른 총이 있는지
   active(ms = 5000) { const now = performance.now(); return this.list().some((s) => now - s.lastActive < ms); },
   playerOf(s) { return this.saved.p1 === s.key ? 0 : this.saved.p2 === s.key ? 1 : -1; },
+  // 2인 대결 준비 완료: 1P·2P 로 지정된 총 2대가 지금 게임패드로 연결돼 있음
+  readyForVersus() {
+    const keys = this.list().map((s) => s.key);
+    return !!this.saved.p1 && !!this.saved.p2 && this.saved.p1 !== this.saved.p2
+      && keys.includes(this.saved.p1) && keys.includes(this.saved.p2);
+  },
   triggerOf(s) { return this.saved.trigger[s.key] ?? 0; },
 
   // 조준에 쓸 축: 설정에서 고르거나(0·1 / 2·3), 자동이면 더 많이 움직인 쪽
@@ -1728,7 +1773,10 @@ window.addEventListener('keydown', (e) => {
       else if (game.state === 'ranking') closeRanking();
       else if (game.state === 'aimtest') goTitle();
       else if (game.state === 'gunsetup') closeGunSetup();
-      else if (game.state === 'play' && game.paused) game.paused = false;
+      else if (game.state === 'play' && game.paused) resumeGame();
+      break;
+    case 'Home':     // 처음 화면 버튼과 같음
+      goHome();
       break;
     case 'Digit2':   // 처음 화면에서 2 = 2인 대결
     case 'Numpad2':
@@ -1755,7 +1803,7 @@ window.addEventListener('keydown', (e) => {
       else if (game.state === 'aimtest') goTitle();
       break;
     case 'KeyP':
-      if (game.state === 'play') game.paused = !game.paused;
+      if (game.state === 'play') { if (game.paused) resumeGame(); else game.paused = true; }
       break;
     case 'KeyQ':
     case 'Escape':
@@ -1848,6 +1896,16 @@ let nameMode = 'solo';
 // mode: 'solo' 1인 기록전(닉네임 필수, 랭킹 저장) / 'versus' 2인 대결(이름 두 개, 비우면 1P·2P)
 function openNameEntry(mode = 'solo') {
   Sound.init();
+  // 2인 대결은 총 2대가 '게임패드(조이스틱 모드)'로 따로 잡혀야 한다.
+  // 마우스 모드면 두 총이 커서 하나를 같이 움직여 1P 만 점수가 오르므로, 시작하지 않고 총 연결 화면으로 안내
+  if (mode === 'versus' && !Guns.readyForVersus()) {
+    openGunSetup();
+    Guns.message = Guns.list().length < 2
+      ? '2인 대결은 두 총을 조이스틱 모드로 연결해야 해요 (지금은 1P 만 점수가 올라요)'
+      : '1P·2P 총을 지정해 주세요';
+    if (Guns.list().length >= 2) Guns.assigning = Guns.saved.p1 ? 1 : 0;
+    return;
+  }
   if (game.state !== 'title') goTitle();
   nameMode = mode;
   const versus = mode === 'versus';
@@ -1912,6 +1970,9 @@ form.addEventListener('submit', (e) => {
   Sound.applyVolume();
   closeSettings();
   Music.refreshVolume();
+  // 화질을 바꿨으면 그리는 해상도를 다시 맞추고, 그 해상도로 글자 그림을 새로 만든다
+  resize();
+  textCache.clear();
 });
 document.getElementById('settings-reset').addEventListener('click', () => fillForm(DEFAULTS));
 document.getElementById('settings-close').addEventListener('click', closeSettings);
@@ -1920,8 +1981,33 @@ document.getElementById('btn-fullscreen').addEventListener('click', toggleFullsc
 document.getElementById('btn-aimtest').addEventListener('click', () => { Sound.init(); openAimTest(); });
 document.getElementById('btn-gunsetup').addEventListener('click', () => { Sound.init(); openGunSetup(); });
 function updateCornerButtons() {
-  document.getElementById('corner-buttons').classList.toggle('hidden', game.state !== 'title' && game.state !== 'result');
+  const menu = game.state === 'title' || game.state === 'result';
+  for (const id of ['btn-gunsetup', 'btn-aimtest', 'btn-fullscreen', 'btn-settings']) {
+    document.getElementById(id).hidden = !menu;
+  }
+  // 처음 화면 버튼: 처음 화면이 아닌 곳 어디서나
+  document.getElementById('btn-home').hidden = game.state === 'title';
+  const corner = document.getElementById('corner-buttons');
+  corner.classList.remove('hidden');
+  corner.classList.toggle('in-game', game.state === 'play' || game.state === 'countdown');
 }
+
+function resumeGame() {
+  game.paused = false;
+  game.confirmHome = false;
+}
+// 처음 화면으로. 게임 중이면 잘못 눌러도 판이 날아가지 않게 일시정지하고 한 번 더 묻는다
+function goHome() {
+  if (nameOpen()) closeNameEntry();
+  if (game.state === 'play') { game.paused = true; game.confirmHome = true; return; }
+  if (game.state === 'gunsetup') { closeGunSetup(); return; }
+  goTitle();
+}
+document.getElementById('btn-home').addEventListener('click', (e) => {
+  e.currentTarget.blur(); // Space·Enter 가 이 버튼을 다시 누르지 않게
+  Sound.init();
+  goHome();
+});
 
 // ---------- 글자·버튼 그리기 ----------
 const FONT = '"Galmuri11", "Galmuri9", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
@@ -1931,20 +2017,58 @@ function fitTextSize(str, size, maxW) {
   const w = ctx.measureText(str).width;
   return w > maxW ? size * (maxW / w) : size;
 }
+// 테두리·그림자 있는 글자는 그리기가 비싸서, 한 번 그린 글자는 작은 그림으로 저장해 두고 다시 쓴다.
+// (점수·타이머처럼 바뀌는 글자도 같은 값이 반복되므로 대부분 저장된 그림으로 그려진다)
+const textCache = new Map();
+const TEXT_CACHE_MAX = 600;
+function textSprite(str, size, color, shadow) {
+  const key = `${size}|${color}|${shadow}|${str}`;
+  let sp = textCache.get(key);
+  if (sp) {
+    textCache.delete(key); // 최근에 쓴 것을 뒤로 (오래 안 쓴 것부터 지운다)
+    textCache.set(key, sp);
+    return sp;
+  }
+  const g = document.createElement('canvas').getContext('2d');
+  const font = `bold ${size}px ${FONT}`;
+  g.font = font;
+  const off = Math.max(2, size * 0.08), lw = size * 0.18;
+  const pad = Math.ceil(lw / 2 + 2);
+  const tw = g.measureText(str).width;
+  const w = Math.ceil(tw + off + pad * 2);
+  const h = Math.ceil(size * 1.5 + off + pad * 2);
+  g.canvas.width = Math.max(1, Math.ceil(w * DPR));
+  g.canvas.height = Math.max(1, Math.ceil(h * DPR));
+  g.scale(DPR, DPR);
+  g.font = font;
+  g.textAlign = 'left';
+  g.textBaseline = 'middle';
+  g.lineJoin = 'round';
+  g.lineWidth = lw;
+  g.strokeStyle = 'rgba(0,0,0,0.85)';
+  const cy = pad + size * 0.75;
+  g.strokeText(str, pad + off, cy + off);
+  g.fillStyle = shadow;
+  g.fillText(str, pad + off, cy + off);
+  g.strokeText(str, pad, cy);
+  g.fillStyle = color;
+  g.fillText(str, pad, cy);
+  sp = { canvas: g.canvas, w, h, pad, cy, tw };
+  textCache.set(key, sp);
+  if (textCache.size > TEXT_CACHE_MAX) textCache.delete(textCache.keys().next().value);
+  return sp;
+}
+// 글꼴(갈무리)이 늦게 내려받아지면 그 전에 저장한 글자 그림은 버리고 다시 그린다
+document.fonts?.addEventListener?.('loadingdone', () => textCache.clear());
+document.fonts?.ready?.then(() => textCache.clear());
+
 function text(str, x, y, size, color = '#fff', align = 'center', opts = {}) {
-  ctx.font = `bold ${Math.round(size)}px ${FONT}`;
-  ctx.textAlign = align;
-  ctx.textBaseline = 'middle';
-  const off = Math.max(2, size * 0.08);
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = size * 0.18;
-  ctx.strokeStyle = 'rgba(0,0,0,0.85)';
-  ctx.strokeText(str, x + off, y + off);
-  ctx.fillStyle = opts.shadow || '#2a0d06';
-  ctx.fillText(str, x + off, y + off);
-  ctx.strokeText(str, x, y);
-  ctx.fillStyle = color;
-  ctx.fillText(str, x, y);
+  str = String(str);
+  if (!str) return;
+  const sp = textSprite(str, Math.round(size), color, opts.shadow || '#2a0d06');
+  // 글자 그림의 기준점(왼쪽 위)을 정렬에 맞춰 옮긴다
+  const left = align === 'left' ? x - sp.pad : align === 'right' ? x - sp.tw - sp.pad : x - sp.tw / 2 - sp.pad;
+  ctx.drawImage(sp.canvas, left, y - sp.cy, sp.w, sp.h);
 }
 function panel(x, y, w, h, alpha = 0.6) {
   ctx.fillStyle = `rgba(10, 2, 2, ${alpha})`;
@@ -2144,11 +2268,20 @@ function drawGunSetup() {
 
   const pads = Guns.list();
   let y = py + U * 22;
+  // 총이 아직 마우스 모드인지: 게임패드는 없는데 마우스 커서가 방금 움직였다
+  const mouseMode = pads.length < 2 && aim.movedAt && performance.now() - aim.movedAt < 3000;
   if (!pads.length) {
-    text('아직 게임패드로 잡힌 총이 없어요', cx, y + U * 6, U * 4.2, '#ff8a7a');
-    text('① 수신기가 꽂혀 있고 총 전원이 켜졌는지  ② 조이스틱 모드인지  ③ 방아쇠를 한 번 당겼는지 확인하세요', cx, y + U * 13, U * 2.8, '#ffffff');
-    text('1인 기록전은 마우스(라이트건) 모드로도 그대로 할 수 있어요', cx, y + U * 19, U * 2.8, '#c9a89a');
+    text(`게임패드로 잡힌 총: 0대 / 2대 필요`, cx, y + U * 4, U * 4.2, '#ff8a7a');
+    if (mouseMode) {
+      text('총이 지금 마우스 모드예요 → 두 총 모두 Space + 5 + 조이스틱 왼쪽 을 누르세요', cx, y + U * 11, U * 3.2, '#ffe14a');
+    }
+    text('① 수신기 2개가 꽂혀 있고 총 전원이 켜졌는지  ② 조이스틱 모드인지  ③ 방아쇠를 한 번씩 당겼는지', cx, y + U * 17, U * 2.8, '#ffffff');
+    text('④ 총이 1대만 잡히면 두 총·수신기 짝의 DIP 스위치가 서로 다른지 확인', cx, y + U * 22, U * 2.8, '#ffffff');
+    text('1인 기록전은 마우스(라이트건) 모드로도 그대로 할 수 있어요', cx, y + U * 28, U * 2.8, '#c9a89a');
   } else {
+    if (pads.length < 2) {
+      text(`게임패드로 잡힌 총: ${pads.length}대 / 2대 필요 — 다른 총의 방아쇠도 당겨 보세요 (안 잡히면 DIP 스위치 확인)`, cx, py + ph - U * 39, U * 2.8, '#ff8a7a');
+    }
     pads.forEach((s, i) => {
       const who = Guns.playerOf(s);
       const color = who >= 0 ? PLAYER_COLORS[who] : '#ffffff';
@@ -2162,9 +2295,13 @@ function drawGunSetup() {
     });
   }
 
-  // 안내 문구: 지금 무엇을 해야 하는지
-  const ask = Guns.assigning !== null ? `${Guns.assigning + 1}P 총의 방아쇠를 당기세요` : Guns.message;
-  if (ask) text(ask, cx, py + ph - U * 33, U * 4, Guns.assigning !== null ? PLAYER_COLORS[Guns.assigning] : '#9ff6ff');
+  // 안내 문구: 지금 무엇을 해야 하는지. 두 총이 다 준비되면 바로 대결을 시작할 수 있는 버튼
+  if (Guns.assigning === null && Guns.readyForVersus()) {
+    button('2인 대결 시작 ▶', cx, py + ph - U * 33, U * 50, U * 8, () => { closeGunSetup(); openNameEntry('versus'); }, true, true);
+  } else {
+    const ask = Guns.assigning !== null ? `${Guns.assigning + 1}P 총의 방아쇠를 당기세요` : Guns.message;
+    if (ask) text(ask, cx, py + ph - U * 33, fitTextSize(ask, U * 4, pw - U * 8), Guns.assigning !== null ? PLAYER_COLORS[Guns.assigning] : '#9ff6ff');
+  }
   const p1 = Guns.saved.p1 ? '지정됨' : '없음', p2 = Guns.saved.p2 ? '지정됨' : '없음';
   text(`1P: ${p1}   ·   2P: ${p2}   ·   두 총 조준점이 화면에 따라다니면 준비 끝`, cx, py + ph - U * 27, U * 2.8, '#ffffff');
 
@@ -2499,11 +2636,7 @@ function drawResult(time) {
 
   if (win) {
     const ts = U * 15, ty = py + U * 53 + Math.sin(time * 3) * U;
-    const glow = ctx.createRadialGradient(cx, ty, 0, cx, ty, ts * 1.4);
-    glow.addColorStop(0, 'rgba(160, 246, 255, 0.55)');
-    glow.addColorStop(1, 'rgba(160, 246, 255, 0)');
-    ctx.fillStyle = glow;
-    ctx.fillRect(cx - ts * 1.5, ty - ts * 1.5, ts * 3, ts * 3);
+    drawGlow(cx, ty, ts * 1.4, '160,246,255', 0.55);
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(IMG.tear, cx - ts / 2, ty - ts / 2, ts, ts);
     text('가스트의 눈물 획득!', cx, py + U * 66, U * 6, '#9ff6ff');
@@ -2625,10 +2758,14 @@ function draw(time) {
   drawBanner();
 
   if (game.paused) {
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(0, 0, W, H);
-    text('일시정지', W / 2, H * 0.45, U * 12, '#ffffff');
-    text('P 또는 Space 를 누르면 계속합니다  ·  Q 를 누르면 처음 화면으로', W / 2, H * 0.45 + U * 11, U * 4, '#ffd9b0');
+    // 처음 화면 버튼으로 멈췄으면 한 번 더 묻는다 (이번 판 점수는 저장되지 않음)
+    const asking = game.confirmHome;
+    text(asking ? '처음 화면으로 갈까요?' : '일시정지', W / 2, H * 0.38, U * (asking ? 9 : 12), '#ffffff');
+    text(asking ? '이번 판은 끝나고 점수는 저장되지 않아요' : 'P 또는 Space 를 누르면 계속합니다', W / 2, H * 0.38 + U * 10, U * 4, '#ffd9b0');
+    button('계속하기', W / 2 - U * 22, H * 0.62, U * 38, U * 11, resumeGame, true, true);
+    button('처음 화면', W / 2 + U * 22, H * 0.62, U * 38, U * 11, goTitle);
   }
 
   // 조준점은 게임 중(+총 조준 테스트)에만 그린다.
