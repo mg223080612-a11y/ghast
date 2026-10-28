@@ -126,6 +126,11 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
   outline: none;
 }
 #name-form input:focus { border-color: var(--accent); }
+#name-form input + input { margin-top: 12px; }
+#name-form input[hidden] { display: none; }
+/* 2인 대결: 1P 하늘색, 2P 분홍 (게임 안 조준점 색과 같게) */
+#name-form.versus input[name="nickname"] { border-color: #5ae8ff; }
+#name-form.versus input[name="nickname2"] { border-color: #ff7ad9; }
 #name-form .hint { margin: 12px 0 0; font-size: 16px; opacity: 0.8; }
 #name-form .hint.error { color: #ff8a7a; opacity: 1; }
 #name-form .actions { display: flex; justify-content: center; gap: 12px; margin-top: 24px; }

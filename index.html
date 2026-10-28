@@ -14,6 +14,7 @@
 
   <!-- 처음 화면/결과 화면에서만 보이는 운영 버튼 -->
   <div id="corner-buttons">
+    <button type="button" id="btn-gunsetup" title="총 연결 (G) — 2인 대결용 1P/2P 지정">🔫 총 연결</button>
     <button type="button" id="btn-aimtest" title="총 조준 테스트 (T)">🎯 총 테스트</button>
     <button type="button" id="btn-fullscreen" title="전체화면 (F)">⛶ 전체화면</button>
     <button type="button" id="btn-settings" title="설정 (S)">⚙ 설정</button>
@@ -76,8 +77,10 @@
   <!-- 게임 시작 전 닉네임 입력 -->
   <div id="name-entry" class="overlay" hidden>
     <form id="name-form" autocomplete="off">
-      <h2>닉네임을 입력하세요</h2>
+      <h2 id="name-title">닉네임을 입력하세요</h2>
       <input name="nickname" maxlength="12" placeholder="예: 가스트헌터" spellcheck="false">
+      <!-- 2인 대결일 때만 보이는 2P 이름 칸 -->
+      <input name="nickname2" maxlength="12" placeholder="2P 이름" spellcheck="false" hidden>
       <p class="hint" id="name-hint">랭킹에 이 이름으로 기록돼요 (최대 12자)</p>
       <div class="actions">
         <button type="button" id="name-cancel">취소</button>
