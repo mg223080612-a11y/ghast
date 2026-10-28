@@ -19,16 +19,25 @@ html, body {
   -webkit-touch-callout: none;
 }
 
-#game {
+/* 두 캔버스를 겹친다: 아래 배경(#bg), 위 게임(#game) */
+#bg, #game {
+  position: fixed;
+  top: 0;
+  left: 0;
   display: block;
   width: 100vw;
   height: 100vh;
+}
+#bg { z-index: 0; pointer-events: none; }
+#game {
+  z-index: 1;
   touch-action: none;
   /* 평소에는 보통 마우스 커서, 게임 중에만 game.js 가 조준점으로 바꾼다 */
   cursor: default;
 }
 
 #corner-buttons {
+  z-index: 2;
   position: fixed;
   top: 12px;
   right: 12px;
@@ -56,6 +65,7 @@ button:hover { background: #6e6e8a; }
 button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset -2px -2px 0 #24461a; }
 
 #settings {
+  z-index: 3;
   position: fixed;
   inset: 0;
   display: grid;
@@ -102,6 +112,7 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
 
 /* 닉네임 입력 (프로젝터에서도 잘 보이게 크게) */
 #name-entry {
+  z-index: 3;
   position: fixed;
   inset: 0;
   display: grid;

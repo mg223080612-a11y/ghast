@@ -10,7 +10,8 @@
 </head>
 <body>
   <!-- 게임 화면 전체를 그리는 캔버스 -->
-  <canvas id="game"></canvas>
+  <canvas id="bg"></canvas>   <!-- 움직이지 않는 네더 배경 (한 번만 그림) -->
+  <canvas id="game"></canvas> <!-- 가스트·효과·글자 (매 프레임) -->
 
   <!-- 운영 버튼: 처음 화면 버튼은 처음 화면 말고 어디서나, 나머지는 처음 화면/결과 화면에서만 -->
   <div id="corner-buttons">
@@ -63,6 +64,7 @@
         <label>큰 조준점 크기 (%)<input type="number" name="aimSize" min="50" max="300" step="10"></label>
         <label>터치 중복 무시 (ms, 터치 모드에서만)<input type="number" name="debounceMs" min="0" max="500" step="10"></label>
         <label class="check"><input type="checkbox" name="showTouches"> 터치 위치 표시</label>
+        <label class="check"><input type="checkbox" name="showFps"> FPS 표시 (속도 확인용)</label>
       </div>
       <div class="actions">
         <button type="button" id="settings-reset">기본값</button>

@@ -30,6 +30,7 @@ const DEFAULTS = {
   hitPadding: 15,      // 가스트 판정 범위를 몇 % 넓힐지
   ghastScale: 100,     // 가스트 크기 (%)
   quality: 'normal',   // 화질: 'normal' 보통(빠름) / 'light' 가볍게(저사양) / 'sharp' 선명하게(느릴 수 있음)
+  showFps: false,      // 왼쪽 아래에 FPS(화면 갱신 속도) 표시
   volume: 0.8,         // 효과음 크기
   inputMode: 'gun',    // 'gun' = 라이트건(마우스로 인식) / 'touch' = 프로젝터 터치 센서
   aimMode: 'big',      // 조준점: 'big' 큰 조준점 / 'small' 작은 마우스 십자 / 'hidden' 게임 중 숨김
@@ -91,8 +92,12 @@ function shade(hex, f) {
 }
 
 // ---------- 캔버스 ----------
+// 화면은 두 겹: 아래 #bg 에는 움직이지 않는 네더 배경을 한 번만 그리고,
+// 위 #game 에는 매 프레임 가스트·효과·글자만 그린다 (매번 화면 전체 배경을 다시 칠하지 않아 가볍다)
+const bgCanvas = document.getElementById('bg');
 const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+// desynchronized: 브라우저가 그림을 기다렸다 한꺼번에 내보내지 않고 바로 화면에 올리도록 (반응 지연 줄이기)
+const ctx = canvas.getContext('2d', { desynchronized: true });
 let W = 0, H = 0, DPR = 1;
 let U = 10; // 화면 크기에 비례하는 기본 단위. 글자·가스트 크기가 모두 이 값을 따른다.
 
@@ -275,7 +280,7 @@ function buildBackground() {
   BLK = Math.max(6, Math.round(H / 64));
   const cols = Math.ceil(W / BLK) + 1;
 
-  bg = document.createElement('canvas');
+  bg = bgCanvas;
   bg.width = Math.round(W * DPR);
   bg.height = Math.round(H * DPR);
   const g = bg.getContext('2d');
@@ -384,9 +389,9 @@ function buildBackground() {
 }
 
 const LAVA = ['#ff8a1c', '#ffb23a', '#e0601a', '#ffd25a', '#c94812', '#ff9e2c'];
+// 움직이는 배경만 (흐르는 용암·불꽃·불티). 나머지 배경은 아래 #bg 캔버스에 한 번 그려져 있다
 function drawBackground(time) {
   if (!bg || bg.width === 0 || bg.height === 0) return; // 창이 숨겨져 크기가 0일 때
-  ctx.drawImage(bg, 0, 0, W, H);
 
   // 흘러내리는 용암
   for (const f of lavaFalls) {
@@ -501,15 +506,16 @@ function drawParts() {
 function burstGhast(gh) {
   const { x, y } = gh.center();
   const w = gh.w, h = gh.h;
-  for (let i = 0; i < 26; i++) {
+  // 조각 수는 줄이고(가볍게) 크기를 조금 키워 '팡' 느낌은 그대로
+  for (let i = 0; i < 16; i++) {
     addPart({
       x: x + rand(-0.45, 0.45) * w, y: y + rand(-0.45, 0.3) * h,
       vx: rand(-1, 1) * U * 12, vy: rand(-14, -2) * U, drag: 2.5,
-      size: rand(1.5, 3.5) * U * gh.z, grow: U * 3, life: rand(0.5, 1.0),
+      size: rand(1.9, 4.2) * U * gh.z, grow: U * 3, life: rand(0.5, 1.0),
       color: pick(['#ffffff', '#ececec', '#d2d2d2', '#b4b4b4']),
     });
   }
-  for (let i = 0; i < 18; i++) {
+  for (let i = 0; i < 12; i++) {
     const ang = rand(0, Math.PI * 2), sp = rand(20, 60) * U;
     addPart({
       x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, g: U * 60, drag: 1.5,
@@ -535,11 +541,11 @@ function burstGhast(gh) {
 }
 
 function burstFire(x, y, scale) {
-  for (let i = 0; i < 30 * scale; i++) {
+  for (let i = 0; i < 20 * scale; i++) {
     const ang = rand(0, Math.PI * 2), sp = rand(15, 70) * U * scale;
     addPart({
       x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, g: U * 30, drag: 2,
-      size: rand(1, 3) * U * scale, grow: U * 2, life: rand(0.4, 0.9),
+      size: rand(1.2, 3.4) * U * scale, grow: U * 2, life: rand(0.4, 0.9),
       color: pick(['#ffd25a', '#ff8a1c', '#fff3b0', '#ff5a1a', '#5a5a5a', '#3a3a3a']),
     });
   }
@@ -739,7 +745,8 @@ class Ghast {
         }
         break;
       case 'dying':
-        if (this.t >= 0.18) { burstGhast(this); Sound.pop(); this.dead = true; }
+        // 맞힌 뒤 아주 잠깐(0.05초)만 빨갛게 번쩍이고 바로 '팡!' — 쏜 순간 터지는 느낌이 나게
+        if (this.t >= 0.05) { burstGhast(this); Sound.pop(); this.dead = true; }
         break;
     }
   }
@@ -1488,6 +1495,9 @@ const Guns = {
     }
   },
 };
+// 방아쇠를 놓치지 않고 바로 반응하도록, 화면 그리기(1초 60번)와 따로 1초 약 250번 총 상태를 읽는다.
+// 방아쇠를 당긴 순간의 조준 위치로 바로 맞았는지 판정하고, 효과는 다음 화면에 그려진다.
+setInterval(() => { if (W > 0) Guns.poll(); }, 4);
 // 길게 누르기(오른쪽 클릭) 메뉴, 확대 제스처 막기
 window.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('gesturestart', (e) => e.preventDefault());
@@ -2420,7 +2430,7 @@ function drawBanner() {
 
 // ---------- 매 프레임 ----------
 function update(dt) {
-  Guns.poll(); // 게임패드로 연결된 총의 조준·방아쇠 읽기
+  Guns.poll(); // 화면 그리기 직전에도 한 번 더 (조준점 위치를 최신으로)
   updateEmbers(dt);
 
   if (game.state === 'title') {
@@ -2478,14 +2488,25 @@ function update(dt) {
   if (banner) { banner.t += dt; if (banner.t >= banner.dur) banner = null; }
 }
 
+let bgShaken = false;
 function draw(time) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height); // 위 캔버스만 지운다 (배경은 아래 캔버스에 그대로)
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.imageSmoothingEnabled = false;
   buttons = [];
 
-  // 흔들림은 게임 세계에만 적용
+  // 흔들림은 게임 세계에만 적용 (아래 배경 캔버스는 CSS 로 같이 흔든다)
   ctx.save();
-  if (shake > 0) ctx.translate(rand(-1, 1) * shake, rand(-1, 1) * shake);
+  if (shake > 0) {
+    const dx = rand(-1, 1) * shake, dy = rand(-1, 1) * shake;
+    ctx.translate(dx, dy);
+    bgCanvas.style.transform = `translate(${dx}px, ${dy}px)`;
+    bgShaken = true;
+  } else if (bgShaken) {
+    bgCanvas.style.transform = '';
+    bgShaken = false;
+  }
   drawBackground(time);
   [...ghasts].sort((a, b) => a.z - b.z).forEach((g) => g.draw(time));
   [...fireballs].sort((a, b) => a.p - b.p).forEach((f) => f.draw());
@@ -2561,11 +2582,27 @@ function drawAim(x, y, glow = null, label = '') {
 }
 
 let last = performance.now();
+// FPS(1초에 화면을 몇 번 그리는지) — 설정에서 켜면 왼쪽 아래에 표시. 60 근처면 부드럽고, 30 아래면 버벅임
+const fpsMeter = { frames: 0, since: performance.now(), value: 0, worst: 0 };
 function frame(now) {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  const gap = now - last;
+  const dt = Math.min(0.05, gap / 1000);
   last = now;
   update(dt);
   draw(now / 1000);
+  fpsMeter.frames++;
+  fpsMeter.worst = Math.max(fpsMeter.worst, gap);
+  if (now - fpsMeter.since >= 1000) {
+    fpsMeter.value = Math.round((fpsMeter.frames * 1000) / (now - fpsMeter.since));
+    fpsMeter.lastWorst = Math.round(fpsMeter.worst);
+    fpsMeter.frames = 0;
+    fpsMeter.worst = 0;
+    fpsMeter.since = now;
+  }
+  if (settings.showFps) {
+    const color = fpsMeter.value >= 50 ? '#7dff6a' : fpsMeter.value >= 30 ? '#ffe14a' : '#ff5a4a';
+    text(`${fpsMeter.value} fps · 최장 ${fpsMeter.lastWorst ?? 0}ms`, U * 2, H - U * 2, U * 2.4, color, 'left');
+  }
   requestAnimationFrame(frame);
 }
 
