@@ -30,8 +30,7 @@ const DEFAULTS = {
   hitPadding: 15,      // 가스트 판정 범위를 몇 % 넓힐지
   ghastScale: 100,     // 가스트 크기 (%)
   quality: 'normal',   // 화질: 'normal' 보통(빠름) / 'light' 가볍게(저사양) / 'sharp' 선명하게(느릴 수 있음)
-  volume: 0.8,         // 전체 소리 크기 (효과음 + 음악)
-  musicVolume: 0.5,    // 배경 음악 크기 (0 이면 음악 끄기)
+  volume: 0.8,         // 효과음 크기
   inputMode: 'gun',    // 'gun' = 라이트건(마우스로 인식) / 'touch' = 프로젝터 터치 센서
   aimMode: 'big',      // 조준점: 'big' 큰 조준점 / 'small' 작은 마우스 십자 / 'hidden' 게임 중 숨김
   aimSize: 100,        // 큰 조준점 크기 (%)
@@ -259,258 +258,6 @@ const Sound = {
     notes.forEach((f, i) => this.tone(f, 0.28, { gain: 0.2, delay: i * 0.14 }));
   },
 };
-
-// ---------- 배경 음악 (직접 작곡한 8비트 음악) ----------
-// 음악 파일 없이 WebAudio 로 그때그때 연주한다. 저작권 걱정이 없고 인터넷이 없어도 나온다.
-//  · 'title' 처음 화면·랭킹: 신비롭지만 들썩이는 네더 분위기 (Dm – B♭ – E♭ – A, 100 BPM)
-//  · 'play'  게임 중: 신나는 8비트 전투곡 (Dm – B♭ – F – C, 150 BPM). 레벨이 오를수록 빨라지고 악기가 늘어난다
-// 16분음표 한 칸씩 0.15초 앞서 미리 예약해 두는 방식이라 화면이 버벅여도 박자가 흔들리지 않는다.
-const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12); // 음 번호(MIDI) → 주파수. 69 = 라(A4)
-
-const TITLE_CHORDS = [[50, 53, 57], [46, 50, 53], [51, 55, 58], [45, 49, 52]]; // Dm B♭ E♭ A
-// 게임 곡 화음 (마디마다): Dm B♭ F C — 단조지만 힘차게 올라가는 진행
-const PLAY_CHORDS = [[62, 65, 69], [58, 62, 65], [65, 69, 72], [60, 64, 67]];
-const PLAY_ROOTS = [38, 34, 41, 36];                 // 베이스 뿌리음: D B♭ F C
-// 멜로디 [마디, 칸(0~15), 음, 길이(16분음표 몇 개)] — 높이 치고 올라가는 후렴
-const PLAY_LEAD = [
-  [0, 0, 69, 2], [0, 2, 74, 2], [0, 4, 77, 2], [0, 6, 81, 2], [0, 8, 79, 1], [0, 9, 81, 1], [0, 10, 79, 2], [0, 12, 77, 2], [0, 14, 76, 2],
-  [1, 0, 77, 2], [1, 2, 74, 2], [1, 4, 70, 2], [1, 6, 74, 2], [1, 8, 77, 2], [1, 10, 79, 2], [1, 12, 77, 2], [1, 14, 74, 2],
-  [2, 0, 72, 2], [2, 2, 77, 2], [2, 4, 81, 2], [2, 6, 84, 2], [2, 8, 82, 1], [2, 9, 81, 1], [2, 10, 79, 2], [2, 12, 81, 2], [2, 14, 77, 2],
-  [3, 0, 76, 2], [3, 2, 79, 2], [3, 4, 84, 3], [3, 7, 82, 1], [3, 8, 81, 2], [3, 10, 79, 2], [3, 12, 76, 1], [3, 13, 77, 1], [3, 14, 79, 2],
-];
-const LEAD_AT = new Map(PLAY_LEAD.map(([bar, pos, m, len]) => [bar * 16 + pos, [m, len]]));
-
-const Music = {
-  out: null, echo: null, timer: null,
-  track: null,   // 지금 연주 중인 곡 ('title' / 'play' / null)
-  step: 0,       // 몇 번째 16분음표인지
-  nextTime: 0,   // 다음 음을 예약할 시각
-  level: 1,      // 게임 레벨 (빠르기·악기 수)
-  hurry: false,  // 남은 10초
-  duck: 1,       // 일시정지·이름 입력 중에는 작게
-
-  setup() {
-    const ctx = Sound.ctx;
-    if (!ctx || !Sound.master) return false;
-    if (this.out) return true;
-    this.out = ctx.createGain();
-    this.out.gain.value = 0;
-    this.out.connect(Sound.master); // 효과음과 같은 볼륨·음소거(M)를 따른다
-    // 메아리: 아르페지오와 멜로디가 동굴 속에서 울리는 느낌
-    const delay = ctx.createDelay(1);
-    delay.delayTime.value = 0.36;
-    const feedback = ctx.createGain();
-    feedback.gain.value = 0.3;
-    const soften = ctx.createBiquadFilter();
-    soften.type = 'lowpass';
-    soften.frequency.value = 2200;
-    delay.connect(soften); soften.connect(feedback); feedback.connect(delay); soften.connect(this.out);
-    this.echo = delay;
-    this.timer = setInterval(() => this.tick(), 25);
-    return true;
-  },
-  volume() { return clamp(settings.musicVolume, 0, 1) * this.duck; },
-  refreshVolume() {
-    if (!this.out || !this.track) return;
-    const now = Sound.ctx.currentTime;
-    this.out.gain.cancelScheduledValues(now);
-    this.out.gain.setTargetAtTime(this.volume(), now, 0.15);
-  },
-  // 곡 바꾸기 (같은 곡이면 그대로). name 이 null 이면 서서히 멈춘다
-  setTrack(name) {
-    if (this.track === name) return;
-    if (!this.setup()) return;
-    const now = Sound.ctx.currentTime, g = this.out.gain;
-    g.cancelScheduledValues(now);
-    g.setValueAtTime(g.value, now);
-    this.track = name;
-    if (!name) { g.linearRampToValueAtTime(0, now + 0.5); return; }
-    g.linearRampToValueAtTime(0, now + 0.12);
-    g.linearRampToValueAtTime(this.volume(), now + 1.0);
-    this.step = 0;
-    this.nextTime = now + 0.15;
-  },
-  bpm() {
-    if (this.track === 'title') return 100;
-    const bpm = Math.min(176, 150 + (this.level - 1) * 8); // 레벨마다 빨라짐
-    return this.hurry ? bpm * 1.08 : bpm;
-  },
-  tick() {
-    const ctx = Sound.ctx;
-    if (!ctx || !this.track || ctx.state !== 'running') return;
-    const s16 = 60 / this.bpm() / 4;
-    // 창이 뒤에 숨어 있다 돌아와 많이 밀렸으면 한꺼번에 몰아 치지 않고 지금부터 다시
-    if (this.nextTime < ctx.currentTime - 0.2) this.nextTime = ctx.currentTime + 0.05;
-    while (this.nextTime < ctx.currentTime + 0.15) {
-      if (this.track === 'title') this.titleStep(this.step, this.nextTime, s16);
-      else this.playStep(this.step, this.nextTime, s16);
-      this.nextTime += s16;
-      this.step++;
-    }
-  },
-
-  // ----- 악기 -----
-  tone(m, t, dur, { type = 'square', gain = 0.05, attack = 0.005, echo = false, cutoff = 0 } = {}) {
-    const ctx = Sound.ctx;
-    const o = ctx.createOscillator();
-    o.type = type;
-    o.frequency.setValueAtTime(mtof(m), t);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(gain, t + attack);
-    g.gain.setValueAtTime(gain, t + Math.max(attack, dur * 0.6));
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    o.connect(g);
-    // 음색을 부드럽게 하는 필터는 음마다 새로 만들지 않고 같은 필터를 함께 쓴다 (컴퓨터 부담 줄이기)
-    g.connect(cutoff ? this.bus('lowpass', cutoff) : this.out);
-    if (echo) g.connect(this.echo);
-    o.start(t);
-    o.stop(t + dur + 0.05);
-  },
-  // 함께 쓰는 필터: 종류·주파수가 같으면 하나만 만들어 계속 쓴다
-  buses: new Map(),
-  bus(type, freq, q = 1) {
-    const key = `${type}|${freq}|${q}`;
-    let f = this.buses.get(key);
-    if (!f) {
-      f = Sound.ctx.createBiquadFilter();
-      f.type = type; f.frequency.value = freq; f.Q.value = q;
-      f.connect(this.out);
-      this.buses.set(key, f);
-    }
-    return f;
-  },
-  kick(t, gain = 0.45) {
-    const ctx = Sound.ctx;
-    const o = ctx.createOscillator();
-    o.type = 'sine';
-    o.frequency.setValueAtTime(140, t);
-    o.frequency.exponentialRampToValueAtTime(42, t + 0.13);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(gain, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
-    o.connect(g); g.connect(this.out);
-    o.start(t); o.stop(t + 0.2);
-  },
-  noiseHit(t, { type = 'highpass', freq = 7000, dur = 0.04, gain = 0.05, q = 1 } = {}) {
-    const ctx = Sound.ctx;
-    const src = ctx.createBufferSource();
-    src.buffer = Sound.noiseBuf;
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(gain, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    src.connect(g); g.connect(this.bus(type, freq, q));
-    src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.02);
-  },
-  hat(t, gain, open = false) { this.noiseHit(t, { freq: 7500, dur: open ? 0.12 : 0.035, gain }); },
-  snare(t, gain = 0.2) {
-    this.noiseHit(t, { type: 'bandpass', freq: 1800, dur: 0.13, gain, q: 0.8 });
-    this.tone(50, t, 0.08, { type: 'triangle', gain: gain * 0.3 });
-  },
-  // 박수 소리: 노이즈를 아주 짧게 세 번 겹쳐 '짝!'
-  clap(t) {
-    [0, 0.012, 0.024].forEach((d) => this.noiseHit(t + d, { type: 'bandpass', freq: 1400, dur: 0.06, gain: 0.12, q: 1.2 }));
-  },
-  // 심벌 '촤—': 한 바퀴가 새로 시작될 때
-  crash(t) { this.noiseHit(t, { freq: 4500, dur: 0.9, gain: 0.07 }); },
-  // 멀리서 들리는 가스트 울음 (높은 소리가 떨리며 내려감)
-  ghastCry(t) {
-    const ctx = Sound.ctx;
-    const o = ctx.createOscillator();
-    o.type = 'sine';
-    o.frequency.setValueAtTime(980, t);
-    o.frequency.exponentialRampToValueAtTime(520, t + 1.1);
-    const lfo = ctx.createOscillator(), lfoGain = ctx.createGain();
-    lfo.frequency.value = 7; lfoGain.gain.value = 18;
-    lfo.connect(lfoGain); lfoGain.connect(o.frequency);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.025, t + 0.15);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.2);
-    o.connect(g); g.connect(this.out); g.connect(this.echo);
-    o.start(t); lfo.start(t); o.stop(t + 1.25); lfo.stop(t + 1.25);
-  },
-
-  // ----- 처음 화면 곡: 100 BPM, 4마디 반복 — 신비롭지만 발이 까딱거리는 그루브 -----
-  titleStep(step, t, s16) {
-    const bar = Math.floor(step / 16) % 4, pos = step % 16, chord = TITLE_CHORDS[bar];
-    const barLen = s16 * 16;
-    if (pos === 0) {
-      // 낮게 깔리는 화음
-      chord.forEach((m) => this.tone(m, t, barLen * 1.05, { type: 'sawtooth', gain: 0.016, attack: 0.6, cutoff: 900 }));
-    }
-    // 통통 튀는 베이스 (8분음표, 옥타브 오르내림)
-    if (pos % 2 === 0) this.tone(chord[0] - 12 + (pos % 4 === 2 ? 12 : 0), t, s16 * 1.4, { type: 'triangle', gain: 0.09 });
-    // 가벼운 비트: 킥 두 번, 엇박 하이햇, 박수
-    if (pos === 0 || pos === 10) this.kick(t, 0.3);
-    if (pos === 4 || pos === 12) this.clap(t);
-    if (pos % 4 === 2) this.hat(t, 0.035, true);
-    // 쉬지 않고 흐르는 아르페지오 (메아리) — 화음을 위아래로 오르내림
-    const arp = [0, 1, 2, 1][pos % 4] + (pos >= 8 ? 3 : 0);
-    const note = [...chord, ...chord.map((m) => m + 12)][arp];
-    this.tone(note + 12, t, s16 * 1.6, { type: 'triangle', gain: 0.035, echo: true });
-    // 8마디마다 한 번 가스트 울음
-    if (pos === 8 && Math.floor(step / 16) % 8 === 7) this.ghastCry(t);
-  },
-
-  // ----- 게임 곡: 150 BPM 에서 레벨마다 빨라짐, 4마디 반복 -----
-  playStep(step, t, s16) {
-    const bar = Math.floor(step / 16) % 4, pos = step % 16, loop = Math.floor(step / 64);
-    const lv = this.level, root = PLAY_ROOTS[bar], chord = PLAY_CHORDS[bar];
-    const buildUp = loop % 4 === 3; // 4바퀴째: 멜로디를 쉬고 고조시켰다가 다음 바퀴에 터뜨린다
-
-    // 새 바퀴 시작마다 심벌 '촤!'
-    if (step % 64 === 0 && step > 0) this.crash(t);
-
-    // 드럼: 매 박자 킥(쿵쿵쿵쿵) + 2·4박 박수/스네어 + 엇박 오픈 하이햇
-    if (pos % 4 === 0) this.kick(t, 0.5);
-    if (pos === 4 || pos === 12) { this.snare(t, 0.16); this.clap(t); }
-    if (pos % 4 === 2) this.hat(t, 0.05, true);
-    else if (lv >= 2 || this.hurry) this.hat(t, 0.02);      // Lv2 부터 16분 하이햇
-    if (lv >= 3 && pos === 15) this.snare(t, 0.1);          // Lv3: 마디 끝 장식
-    // 고조 구간 마지막 마디: 스네어 연타가 점점 커진다
-    if (buildUp && bar === 3) this.snare(t, 0.05 + pos * 0.012);
-
-    // 베이스: 16분음표로 뿌리음과 옥타브를 오가며 통통 튄다
-    this.tone(root + 12 + (pos % 2 === 1 ? 12 : 0), t, s16 * 0.9, { type: 'square', gain: 0.04, cutoff: 1600 });
-
-    // 엇박마다 화음을 짧게 끊어 친다 (들썩이는 느낌)
-    if (pos % 4 === 2) chord.forEach((m) => this.tone(m, t, s16 * 0.8, { type: 'square', gain: 0.012, cutoff: 3000 }));
-
-    // 멜로디: 2바퀴째는 한 옥타브 위, 4바퀴째(고조 구간)는 쉰다
-    const lead = LEAD_AT.get(bar * 16 + pos);
-    if (lead && !buildUp) {
-      const [m, len] = lead;
-      const up = loop % 4 === 1 ? 12 : 0;
-      this.tone(m + up, t, s16 * len * 0.92, { type: 'square', gain: 0.038, echo: true });
-      if (lv >= 3 || loop % 4 === 2) this.tone(m + up - 12, t, s16 * len * 0.9, { type: 'triangle', gain: 0.03 }); // 두 겹
-    }
-    // 고조 구간: 반짝이는 아르페지오가 위로 치고 올라간다
-    if (buildUp) {
-      const up = [0, 4, 7, 12][pos % 4] + Math.floor(pos / 4) * 2;
-      this.tone(chord[0] + up, t, s16 * 0.9, { type: 'triangle', gain: 0.035, echo: true });
-    }
-    // Lv4 악랄 모드: 경보음 같은 빠른 아르페지오
-    if (lv >= 4 && pos % 2 === 1) {
-      this.tone(chord[0] + 12 + [0, 3, 7, 12][(pos >> 1) % 4], t, s16 * 0.9, { type: 'square', gain: 0.014 });
-    }
-  },
-};
-
-// 화면·레벨·남은 시간에 맞춰 곡을 고른다 (매 프레임)
-function syncMusic() {
-  if (!Sound.ctx) return;
-  let want = null;
-  if (['title', 'ranking', 'gunsetup', 'aimtest'].includes(game.state)) want = 'title';
-  else if (game.state === 'play') want = 'play';
-  else if (game.state === 'result') want = game.resultTime > 3 ? 'title' : null; // 결과 팡파르가 끝난 뒤
-  // 카운트다운(3·2·1) 동안은 조용히
-  Music.level = game.state === 'play' ? game.level : 1;
-  Music.hurry = game.state === 'play' && game.timeLeft <= 10;
-  const duck = game.paused || nameOpen() || settingsOpen() ? 0.35 : 1;
-  if (duck !== Music.duck) { Music.duck = duck; Music.refreshVolume(); }
-  Music.setTrack(want);
-}
 
 // ---------- 배경 (네더) ----------
 const NETHERRACK = ['#6f2a2a', '#7d3232', '#5e2222', '#8a3a3a', '#532020', '#6a2626', '#773030'];
@@ -1969,7 +1716,6 @@ form.addEventListener('submit', (e) => {
   saveSettings();
   Sound.applyVolume();
   closeSettings();
-  Music.refreshVolume();
   // 화질을 바꿨으면 그리는 해상도를 다시 맞추고, 그 해상도로 글자 그림을 새로 만든다
   resize();
   textCache.clear();
@@ -2675,7 +2421,6 @@ function drawBanner() {
 // ---------- 매 프레임 ----------
 function update(dt) {
   Guns.poll(); // 게임패드로 연결된 총의 조준·방아쇠 읽기
-  syncMusic(); // 화면에 맞는 배경 음악
   updateEmbers(dt);
 
   if (game.state === 'title') {
@@ -2833,8 +2578,7 @@ loadImages()
     goTitle();
     requestAnimationFrame(frame);
     loadLocalAdminKey();
-    // 게임시작.bat 으로 열면 자동 재생이 허용돼 처음 화면부터 음악이 나온다.
-    // 보통 브라우저에서는 첫 클릭·키 입력 때 소리가 켜진다 (Sound.init 이 다시 불리며 재개).
+    // 효과음 준비. 보통 브라우저에서는 첫 클릭·키 입력 때 소리가 켜진다 (Sound.init 이 다시 불리며 재개).
     Sound.init();
   })
   .catch((err) => {
