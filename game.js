@@ -257,20 +257,21 @@ const Sound = {
 
 // ---------- 배경 음악 (직접 작곡한 8비트 음악) ----------
 // 음악 파일 없이 WebAudio 로 그때그때 연주한다. 저작권 걱정이 없고 인터넷이 없어도 나온다.
-//  · 'title' 처음 화면·랭킹: 느리고 으스스한 네더 분위기 (Dm – B♭ – E♭ – A)
-//  · 'play'  게임 중: 빠르고 긴박한 곡 (Dm – C – B♭ – A). 레벨이 오를수록 빨라지고 악기가 늘어난다
+//  · 'title' 처음 화면·랭킹: 신비롭지만 들썩이는 네더 분위기 (Dm – B♭ – E♭ – A, 100 BPM)
+//  · 'play'  게임 중: 신나는 8비트 전투곡 (Dm – B♭ – F – C, 150 BPM). 레벨이 오를수록 빨라지고 악기가 늘어난다
 // 16분음표 한 칸씩 0.15초 앞서 미리 예약해 두는 방식이라 화면이 버벅여도 박자가 흔들리지 않는다.
 const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12); // 음 번호(MIDI) → 주파수. 69 = 라(A4)
 
 const TITLE_CHORDS = [[50, 53, 57], [46, 50, 53], [51, 55, 58], [45, 49, 52]]; // Dm B♭ E♭ A
-const PLAY_ROOTS = [38, 36, 34, 33];                 // 마디마다 베이스 뿌리음: D C B♭ A
-const BASS_PATTERN = [0, 0, 12, 0, 0, 12, 0, 10];    // 8분음표 8개, 뿌리음에서 몇 음 위
-// 멜로디 [마디, 칸(0~15), 음, 길이(16분음표 몇 개)]
+// 게임 곡 화음 (마디마다): Dm B♭ F C — 단조지만 힘차게 올라가는 진행
+const PLAY_CHORDS = [[62, 65, 69], [58, 62, 65], [65, 69, 72], [60, 64, 67]];
+const PLAY_ROOTS = [38, 34, 41, 36];                 // 베이스 뿌리음: D B♭ F C
+// 멜로디 [마디, 칸(0~15), 음, 길이(16분음표 몇 개)] — 높이 치고 올라가는 후렴
 const PLAY_LEAD = [
-  [0, 0, 69, 3], [0, 3, 74, 3], [0, 6, 77, 2], [0, 8, 76, 2], [0, 10, 74, 2], [0, 12, 72, 2], [0, 14, 74, 2],
-  [1, 0, 67, 3], [1, 3, 72, 3], [1, 6, 76, 2], [1, 8, 74, 2], [1, 10, 72, 2], [1, 12, 70, 2], [1, 14, 72, 2],
-  [2, 0, 65, 3], [2, 3, 70, 3], [2, 6, 74, 2], [2, 8, 72, 2], [2, 10, 70, 2], [2, 12, 69, 2], [2, 14, 70, 2],
-  [3, 0, 76, 2], [3, 2, 73, 2], [3, 4, 69, 2], [3, 6, 73, 2], [3, 8, 76, 2], [3, 10, 79, 2], [3, 12, 77, 2], [3, 14, 76, 2],
+  [0, 0, 69, 2], [0, 2, 74, 2], [0, 4, 77, 2], [0, 6, 81, 2], [0, 8, 79, 1], [0, 9, 81, 1], [0, 10, 79, 2], [0, 12, 77, 2], [0, 14, 76, 2],
+  [1, 0, 77, 2], [1, 2, 74, 2], [1, 4, 70, 2], [1, 6, 74, 2], [1, 8, 77, 2], [1, 10, 79, 2], [1, 12, 77, 2], [1, 14, 74, 2],
+  [2, 0, 72, 2], [2, 2, 77, 2], [2, 4, 81, 2], [2, 6, 84, 2], [2, 8, 82, 1], [2, 9, 81, 1], [2, 10, 79, 2], [2, 12, 81, 2], [2, 14, 77, 2],
+  [3, 0, 76, 2], [3, 2, 79, 2], [3, 4, 84, 3], [3, 7, 82, 1], [3, 8, 81, 2], [3, 10, 79, 2], [3, 12, 76, 1], [3, 13, 77, 1], [3, 14, 79, 2],
 ];
 const LEAD_AT = new Map(PLAY_LEAD.map(([bar, pos, m, len]) => [bar * 16 + pos, [m, len]]));
 
@@ -325,9 +326,9 @@ const Music = {
     this.nextTime = now + 0.15;
   },
   bpm() {
-    if (this.track === 'title') return 78;
-    const bpm = Math.min(168, 132 + (this.level - 1) * 9); // 레벨마다 빨라짐
-    return this.hurry ? bpm * 1.1 : bpm;
+    if (this.track === 'title') return 100;
+    const bpm = Math.min(176, 150 + (this.level - 1) * 8); // 레벨마다 빨라짐
+    return this.hurry ? bpm * 1.08 : bpm;
   },
   tick() {
     const ctx = Sound.ctx;
@@ -392,11 +393,17 @@ const Music = {
     src.connect(f); f.connect(g); g.connect(this.out);
     src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.02);
   },
-  hat(t, gain) { this.noiseHit(t, { freq: 7500, dur: 0.035, gain }); },
-  snare(t) {
-    this.noiseHit(t, { type: 'bandpass', freq: 1800, dur: 0.13, gain: 0.2, q: 0.8 });
-    this.tone(50, t, 0.08, { type: 'triangle', gain: 0.06 });
+  hat(t, gain, open = false) { this.noiseHit(t, { freq: 7500, dur: open ? 0.12 : 0.035, gain }); },
+  snare(t, gain = 0.2) {
+    this.noiseHit(t, { type: 'bandpass', freq: 1800, dur: 0.13, gain, q: 0.8 });
+    this.tone(50, t, 0.08, { type: 'triangle', gain: gain * 0.3 });
   },
+  // 박수 소리: 노이즈를 아주 짧게 세 번 겹쳐 '짝!'
+  clap(t) {
+    [0, 0.012, 0.024].forEach((d) => this.noiseHit(t + d, { type: 'bandpass', freq: 1400, dur: 0.06, gain: 0.12, q: 1.2 }));
+  },
+  // 심벌 '촤—': 한 바퀴가 새로 시작될 때
+  crash(t) { this.noiseHit(t, { freq: 4500, dur: 0.9, gain: 0.07 }); },
   // 멀리서 들리는 가스트 울음 (높은 소리가 떨리며 내려감)
   ghastCry(t) {
     const ctx = Sound.ctx;
@@ -415,49 +422,68 @@ const Music = {
     o.start(t); lfo.start(t); o.stop(t + 1.25); lfo.stop(t + 1.25);
   },
 
-  // ----- 처음 화면 곡: 78 BPM, 4마디 반복 -----
+  // ----- 처음 화면 곡: 100 BPM, 4마디 반복 — 신비롭지만 발이 까딱거리는 그루브 -----
   titleStep(step, t, s16) {
     const bar = Math.floor(step / 16) % 4, pos = step % 16, chord = TITLE_CHORDS[bar];
     const barLen = s16 * 16;
     if (pos === 0) {
-      // 낮게 깔리는 화음 + 베이스
-      chord.forEach((m) => this.tone(m, t, barLen * 1.05, { type: 'sawtooth', gain: 0.022, attack: 0.9, cutoff: 800 }));
-      this.tone(chord[0] - 12, t, barLen, { type: 'triangle', gain: 0.08, attack: 0.3 });
+      // 낮게 깔리는 화음
+      chord.forEach((m) => this.tone(m, t, barLen * 1.05, { type: 'sawtooth', gain: 0.016, attack: 0.6, cutoff: 900 }));
     }
-    // 드문드문 울리는 아르페지오 (메아리)
-    const arp = { 0: 0, 3: 1, 6: 2, 10: 1, 13: 2 }[pos];
-    if (arp !== undefined) this.tone(chord[arp] + 24, t, s16 * 3, { type: 'triangle', gain: 0.045, echo: true });
+    // 통통 튀는 베이스 (8분음표, 옥타브 오르내림)
+    if (pos % 2 === 0) this.tone(chord[0] - 12 + (pos % 4 === 2 ? 12 : 0), t, s16 * 1.4, { type: 'triangle', gain: 0.09 });
+    // 가벼운 비트: 킥 두 번, 엇박 하이햇, 박수
+    if (pos === 0 || pos === 10) this.kick(t, 0.3);
+    if (pos === 4 || pos === 12) this.clap(t);
+    if (pos % 4 === 2) this.hat(t, 0.035, true);
+    // 쉬지 않고 흐르는 아르페지오 (메아리) — 화음을 위아래로 오르내림
+    const arp = [0, 1, 2, 1][pos % 4] + (pos >= 8 ? 3 : 0);
+    const note = [...chord, ...chord.map((m) => m + 12)][arp];
+    this.tone(note + 12, t, s16 * 1.6, { type: 'triangle', gain: 0.035, echo: true });
     // 8마디마다 한 번 가스트 울음
     if (pos === 8 && Math.floor(step / 16) % 8 === 7) this.ghastCry(t);
   },
 
-  // ----- 게임 곡: 132 BPM 에서 레벨마다 빨라짐, 4마디 반복 -----
+  // ----- 게임 곡: 150 BPM 에서 레벨마다 빨라짐, 4마디 반복 -----
   playStep(step, t, s16) {
     const bar = Math.floor(step / 16) % 4, pos = step % 16, loop = Math.floor(step / 64);
-    const lv = this.level, root = PLAY_ROOTS[bar];
-    // 베이스: 8분음표로 쿵쿵
-    if (pos % 2 === 0) this.tone(root + 12 + BASS_PATTERN[pos / 2], t, s16 * 1.8, { type: 'square', gain: 0.045, cutoff: 1400 });
-    // 드럼: Lv2 부터 킥이 엇박으로 하나 더, Lv4 는 더 촘촘히
-    if (pos === 0 || pos === 8 || (lv >= 2 && pos === 6) || (lv >= 4 && pos === 14)) this.kick(t);
-    if (pos === 4 || pos === 12) this.snare(t);
-    const busyHats = lv >= 3 || this.hurry;
-    if (busyHats || pos % 2 === 0) this.hat(t, pos % 4 === 2 ? 0.05 : 0.022);
-    // 멜로디: 4바퀴 중 2번째는 한 옥타브 위, 4번째는 쉬고 반주만
+    const lv = this.level, root = PLAY_ROOTS[bar], chord = PLAY_CHORDS[bar];
+    const buildUp = loop % 4 === 3; // 4바퀴째: 멜로디를 쉬고 고조시켰다가 다음 바퀴에 터뜨린다
+
+    // 새 바퀴 시작마다 심벌 '촤!'
+    if (step % 64 === 0 && step > 0) this.crash(t);
+
+    // 드럼: 매 박자 킥(쿵쿵쿵쿵) + 2·4박 박수/스네어 + 엇박 오픈 하이햇
+    if (pos % 4 === 0) this.kick(t, 0.5);
+    if (pos === 4 || pos === 12) { this.snare(t, 0.16); this.clap(t); }
+    if (pos % 4 === 2) this.hat(t, 0.05, true);
+    else if (lv >= 2 || this.hurry) this.hat(t, 0.02);      // Lv2 부터 16분 하이햇
+    if (lv >= 3 && pos === 15) this.snare(t, 0.1);          // Lv3: 마디 끝 장식
+    // 고조 구간 마지막 마디: 스네어 연타가 점점 커진다
+    if (buildUp && bar === 3) this.snare(t, 0.05 + pos * 0.012);
+
+    // 베이스: 16분음표로 뿌리음과 옥타브를 오가며 통통 튄다
+    this.tone(root + 12 + (pos % 2 === 1 ? 12 : 0), t, s16 * 0.9, { type: 'square', gain: 0.04, cutoff: 1600 });
+
+    // 엇박마다 화음을 짧게 끊어 친다 (들썩이는 느낌)
+    if (pos % 4 === 2) chord.forEach((m) => this.tone(m, t, s16 * 0.8, { type: 'square', gain: 0.012, cutoff: 3000 }));
+
+    // 멜로디: 2바퀴째는 한 옥타브 위, 4바퀴째(고조 구간)는 쉰다
     const lead = LEAD_AT.get(bar * 16 + pos);
-    if (lead && loop % 4 !== 3) {
+    if (lead && !buildUp) {
       const [m, len] = lead;
       const up = loop % 4 === 1 ? 12 : 0;
-      this.tone(m + up, t, s16 * len * 0.95, { type: 'square', gain: 0.04, echo: true });
-      if (lv >= 3) this.tone(m + up + 12, t, s16 * len * 0.9, { type: 'triangle', gain: 0.022 }); // Lv3: 두 겹
+      this.tone(m + up, t, s16 * len * 0.92, { type: 'square', gain: 0.038, echo: true });
+      if (lv >= 3 || loop % 4 === 2) this.tone(m + up - 12, t, s16 * len * 0.9, { type: 'triangle', gain: 0.03 }); // 두 겹
     }
-    // 멜로디가 쉬는 바퀴 또는 Lv2 부터: 반짝이는 반주 아르페지오
-    if ((loop % 4 === 3 || lv >= 2) && pos % 4 === 2) {
-      const tri = [0, 3, 7, 10][(pos >> 2) % 4];
-      this.tone(root + 36 + tri, t, s16 * 1.5, { type: 'triangle', gain: 0.03, echo: true });
+    // 고조 구간: 반짝이는 아르페지오가 위로 치고 올라간다
+    if (buildUp) {
+      const up = [0, 4, 7, 12][pos % 4] + Math.floor(pos / 4) * 2;
+      this.tone(chord[0] + up, t, s16 * 0.9, { type: 'triangle', gain: 0.035, echo: true });
     }
     // Lv4 악랄 모드: 경보음 같은 빠른 아르페지오
     if (lv >= 4 && pos % 2 === 1) {
-      this.tone(root + 48 + [0, 3, 7, 12][(pos >> 1) % 4], t, s16 * 0.9, { type: 'square', gain: 0.016 });
+      this.tone(chord[0] + 12 + [0, 3, 7, 12][(pos >> 1) % 4], t, s16 * 0.9, { type: 'square', gain: 0.014 });
     }
   },
 };
