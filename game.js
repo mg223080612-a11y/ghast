@@ -1775,7 +1775,7 @@ window.addEventListener('keydown', (e) => {
       else if (game.state === 'gunsetup') closeGunSetup();
       else if (game.state === 'play' && game.paused) resumeGame();
       break;
-    case 'Home':     // 처음 화면 버튼과 같음
+    case 'KeyC':     // 처음 화면 버튼과 같음 (게임 중이면 일시정지하고 한 번 더 묻는다)
       goHome();
       break;
     case 'Digit2':   // 처음 화면에서 2 = 2인 대결
@@ -1999,7 +1999,13 @@ function resumeGame() {
 // 처음 화면으로. 게임 중이면 잘못 눌러도 판이 날아가지 않게 일시정지하고 한 번 더 묻는다
 function goHome() {
   if (nameOpen()) closeNameEntry();
-  if (game.state === 'play') { game.paused = true; game.confirmHome = true; return; }
+  if (game.state === 'play') {
+    // 이미 '처음 화면으로 갈까요?' 를 묻는 중에 한 번 더 누르면 그대로 처음 화면 (C 두 번)
+    if (game.paused && game.confirmHome) { goTitle(); return; }
+    game.paused = true;
+    game.confirmHome = true;
+    return;
+  }
   if (game.state === 'gunsetup') { closeGunSetup(); return; }
   goTitle();
 }
