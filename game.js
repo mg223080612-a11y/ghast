@@ -1443,6 +1443,17 @@ window.addEventListener('pointermove', (e) => {
 //   조준 = 조이스틱 축(-1 ~ 1) → 화면 위치, 방아쇠 = 버튼 하나
 // 로 읽는다. 어느 총이 1P/2P 인지, 어느 버튼이 방아쇠인지는 '총 연결' 화면에서 방아쇠를 당겨 정한다.
 const GUN_SAVE_KEY = 'ghast-shooting-guns';
+// 게임 화면(창 안쪽)의 왼쪽 위가 모니터 화면에서 어디에 있는지 (전체화면이면 0, 0)
+function screenOffset() {
+  if (window.innerWidth >= screen.width && window.innerHeight >= screen.height) return { x: 0, y: 0 };
+  const border = Math.max(0, (window.outerWidth - window.innerWidth) / 2);
+  const left = (screen.left ?? screen.availLeft ?? 0), top = (screen.top ?? screen.availTop ?? 0);
+  return {
+    x: window.screenX - left + border,
+    y: window.screenY - top + Math.max(0, window.outerHeight - window.innerHeight - border),
+  };
+}
+
 const Guns = {
   pads: {},        // gamepad.index → { key, id, x, y, pressed[], min[], max[], lastActive }
   // 저장되는 지정 정보: 어떤 총(key)이 1P/2P 인지, 총마다 방아쇠 버튼 번호
@@ -1492,7 +1503,11 @@ const Guns = {
       let ax = gp.axes[ix] ?? 0, ay = gp.axes[iy] ?? 0;
       if (settings.gunInvertX) ax = -ax;
       if (settings.gunInvertY) ay = -ay;
-      const nx = ((clamp(ax, -1, 1) + 1) / 2) * W, ny = ((clamp(ay, -1, 1) + 1) / 2) * H;
+      // 총은 모니터(프로젝터) 화면 전체를 기준으로 조준한다 → 화면 좌표로 바꾼 뒤 게임 창 안 좌표로 옮긴다.
+      // 전체화면이면 그대로 같고, 창 모드(제목 표시줄·작업 표시줄이 보일 때)에도 실제로 겨눈 곳과 맞는다
+      const o = screenOffset();
+      const nx = clamp(((clamp(ax, -1, 1) + 1) / 2) * screen.width - o.x, 0, W);
+      const ny = clamp(((clamp(ay, -1, 1) + 1) / 2) * screen.height - o.y, 0, H);
       if (Math.hypot(nx - s.x, ny - s.y) > 2) s.lastActive = now;
       s.x = nx; s.y = ny;
       s.axes = [...gp.axes];
@@ -2702,7 +2717,9 @@ function lightenOneStep() {
   return true;
 }
 function checkAutoPerf(now) {
-  if (!settings.autoQuality || document.hidden) { autoPerf.lowSeconds = 0; return; }
+  // 게임 중이고 이 창을 보고 있을 때만 잰다 (다른 프로그램을 쓰느라 느려진 건 게임 렉이 아니라서 화질을 낮추지 않는다)
+  const playing = (game.state === 'play' || game.state === 'countdown') && !game.paused;
+  if (!settings.autoQuality || document.hidden || !playing || !document.hasFocus()) { autoPerf.lowSeconds = 0; return; }
   // 창을 바꿨다 돌아오는 등 1초 넘게 멈췄던 구간은 '렉'이 아니므로 세지 않는다
   if (fpsMeter.lastWorst > 1000) { autoPerf.lowSeconds = 0; return; }
   autoPerf.lowSeconds = fpsMeter.value < 40 ? autoPerf.lowSeconds + 1 : 0;
