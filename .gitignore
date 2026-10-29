@@ -3,3 +3,6 @@ data/
 # wrangler 임시 파일
 .wrangler/
 node_modules/
+
+# 컴퓨터용 프로그램 빌드 결과물
+release/

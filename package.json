@@ -1,0 +1,62 @@
+{
+  "name": "ghast-shooting",
+  "productName": "가스트 사격",
+  "version": "1.0.0",
+  "description": "가스트 사격 — 학교 행사용 라이트건 사격 게임",
+  "author": "GVCS",
+  "private": true,
+  "main": "desktop/main.js",
+  "scripts": {
+    "app": "electron .",
+    "build:exe": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "kr.gvcs.ghast-shooting",
+    "productName": "가스트 사격",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/main.js",
+      "index.html",
+      "style.css",
+      "game.js",
+      "assets/**",
+      "fonts/**",
+      "package.json"
+    ],
+    "win": {
+      "icon": "desktop/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "가스트 사격",
+      "runAfterFinish": true,
+      "artifactName": "ghast-shooting-${version}-setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "ghast-shooting-${version}-portable.${ext}"
+    }
+  }
+}

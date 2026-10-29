@@ -13,3 +13,7 @@ serve.cjs
 *.bat
 *.md
 poster
+package.json
+package-lock.json
+desktop
+release
