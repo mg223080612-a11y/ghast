@@ -1647,6 +1647,8 @@ window.addEventListener('keydown', (e) => {
 });
 
 function toggleFullscreen() {
+  // 컴퓨터용 프로그램(desktop/preload.js)에서는 프로그램 창 자체를 전체화면으로 끄고 켠다
+  if (window.ghastApp) { window.ghastApp.toggleFullscreen(); return; }
   if (!document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
   else document.exitFullscreen?.();
 }

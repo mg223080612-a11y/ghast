@@ -22,6 +22,7 @@
     },
     "files": [
       "desktop/main.js",
+      "desktop/preload.js",
       "index.html",
       "style.css",
       "game.js",
