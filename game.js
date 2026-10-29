@@ -1086,8 +1086,80 @@ function openGunSetup() {
   updateCornerButtons();
 }
 function closeGunSetup() {
+  if (Guns.calib) { Guns.calib = null; return; } // 보정 중이면 보정만 취소하고 총 연결 화면으로
   Guns.assigning = null;
   goTitle();
+}
+
+// ---------- 총마다 조준 보정 ----------
+// 총(수신기)마다 조금씩 위·아래로 어긋나는 걸 게임 안에서 바로잡는다.
+// 표적 5개를 차례로 쏘면, 총이 알려 준 위치 → 실제 표적 위치로 옮기는 식(배율 + 이동)을 가로·세로 따로 구해 총마다 저장한다.
+const CALIB_POINTS = [[0.5, 0.5], [0.15, 0.18], [0.85, 0.18], [0.85, 0.82], [0.15, 0.82]];
+function calibTargets() { return CALIB_POINTS.map(([x, y]) => ({ x: x * W, y: y * H })); }
+function startGunCalib(who) {
+  const key = who === 0 ? Guns.saved.p1 : Guns.saved.p2;
+  if (!key) { Guns.message = `먼저 ${who + 1}P 총을 지정하세요`; return; }
+  Guns.assigning = null;
+  Guns.calib = { who, key, raw: [] };
+}
+// 가장 잘 맞는 직선 (최소제곱): 실제 = a × 총 값 + b
+function fitLine(xs, ys) {
+  const n = xs.length, mx = xs.reduce((a, v) => a + v, 0) / n, my = ys.reduce((a, v) => a + v, 0) / n;
+  let sxy = 0, sxx = 0;
+  for (let i = 0; i < n; i++) { sxy += (xs[i] - mx) * (ys[i] - my); sxx += (xs[i] - mx) ** 2; }
+  const a = sxx > 1e-6 ? sxy / sxx : 1;
+  return { a, b: my - a * mx };
+}
+function recordCalibShot(s) {
+  const c = Guns.calib;
+  const o = screenOffset();
+  const t = calibTargets()[c.raw.length];
+  // 화면(모니터) 전체를 0~1 로 본 값으로 저장 → 프로젝터 해상도가 바뀌어도 그대로 쓸 수 있다
+  c.raw.push({ u: s.rawU, v: s.rawV, tu: (t.x + o.x) / screen.width, tv: (t.y + o.y) / screen.height });
+  Sound.hit();
+  if (c.raw.length < CALIB_POINTS.length) return;
+  const fx = fitLine(c.raw.map((p) => p.u), c.raw.map((p) => p.tu));
+  const fy = fitLine(c.raw.map((p) => p.v), c.raw.map((p) => p.tv));
+  const ok = (f) => f.a > 0.4 && f.a < 2.5 && Math.abs(f.b) < 0.6;
+  Guns.calib = null;
+  if (!ok(fx) || !ok(fy)) { Guns.message = '보정값이 너무 이상해요. 표적 한가운데를 차례로 다시 쏴 주세요'; return; }
+  Guns.saved.calib = { ...(Guns.saved.calib || {}), [c.key]: { ax: fx.a, bx: fx.b, ay: fy.a, by: fy.b } };
+  Guns.save();
+  Sound.bonus();
+  Guns.message = `${c.who + 1}P 조준 보정 완료! 총 테스트(T)로 확인해 보세요`;
+}
+function clearGunCalib(who) {
+  const key = who === 0 ? Guns.saved.p1 : Guns.saved.p2;
+  if (Guns.saved.calib && key) { delete Guns.saved.calib[key]; Guns.save(); }
+  Guns.calib = null;
+  Guns.message = `${who + 1}P 조준 보정을 지웠어요`;
+}
+function drawGunCalib() {
+  const c = Guns.calib;
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.fillRect(0, 0, W, H);
+  const cx = W / 2, color = PLAYER_COLORS[c.who];
+  const step = c.raw.length;
+  text(`${c.who + 1}P 조준 보정  (${step + 1}/${CALIB_POINTS.length})`, cx, H * 0.27, U * 6, color, 'center', { live: true });
+  text(`${c.who + 1}P 총으로 깜빡이는 표적의 한가운데를 정확히 겨누고 쏘세요`, cx, H * 0.27 + U * 7, U * 3.2, '#ffffff');
+  text('조준점이 표적과 어긋나 있어도 괜찮아요. 총으로 표적을 겨누세요', cx, H * 0.27 + U * 11.5, U * 2.6, '#ffd9b0');
+  const blink = 0.55 + 0.45 * Math.sin(performance.now() / 120);
+  calibTargets().forEach((t, i) => {
+    const r = U * 4.5;
+    if (i < step) { // 이미 쏜 표적
+      text('OK', t.x, t.y, U * 4, '#7dff7a');
+      return;
+    }
+    ctx.globalAlpha = i === step ? blink : 0.18;
+    for (const [rr, col] of [[r, '#ffffff'], [r * 0.66, '#ff3a2a'], [r * 0.33, '#ffffff']]) {
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(t.x, t.y, rr, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  });
+  const has = !!Guns.saved.calib?.[c.key];
+  button('취소', cx - U * 14, H * 0.66, U * 22, U * 7, () => { Guns.calib = null; });
+  button('보정 지우기', cx + U * 14, H * 0.66, U * 26, U * 7, () => clearGunCalib(c.who), has);
 }
 // 현장에서 조준이 거꾸로 움직이면 바로 고칠 수 있게 (설정에도 저장)
 function toggleGunSetting(key) {
@@ -1459,6 +1531,7 @@ const Guns = {
   // 저장되는 지정 정보: 어떤 총(key)이 1P/2P 인지, 총마다 방아쇠 버튼 번호
   saved: readJson(GUN_SAVE_KEY, { p1: null, p2: null, trigger: {} }),
   assigning: null, // 총 연결 화면에서 지금 지정 중인 자리 (0 = 1P, 1 = 2P)
+  calib: null,     // 조준 보정 중: { who, key, raw[] }
   message: '',
 
   save() { writeJson(GUN_SAVE_KEY, this.saved); },
@@ -1505,9 +1578,14 @@ const Guns = {
       if (settings.gunInvertY) ay = -ay;
       // 총은 모니터(프로젝터) 화면 전체를 기준으로 조준한다 → 화면 좌표로 바꾼 뒤 게임 창 안 좌표로 옮긴다.
       // 전체화면이면 그대로 같고, 창 모드(제목 표시줄·작업 표시줄이 보일 때)에도 실제로 겨눈 곳과 맞는다
+      // 모니터 전체를 0~1 로 본 위치. 총마다 저장된 조준 보정이 있으면 적용한다
+      s.rawU = (clamp(ax, -1, 1) + 1) / 2;
+      s.rawV = (clamp(ay, -1, 1) + 1) / 2;
+      const cal = this.saved.calib?.[key];
+      const u = cal ? cal.ax * s.rawU + cal.bx : s.rawU, v = cal ? cal.ay * s.rawV + cal.by : s.rawV;
       const o = screenOffset();
-      const nx = clamp(((clamp(ax, -1, 1) + 1) / 2) * screen.width - o.x, 0, W);
-      const ny = clamp(((clamp(ay, -1, 1) + 1) / 2) * screen.height - o.y, 0, H);
+      const nx = clamp(u * screen.width - o.x, 0, W);
+      const ny = clamp(v * screen.height - o.y, 0, H);
       if (Math.hypot(nx - s.x, ny - s.y) > 2) s.lastActive = now;
       s.x = nx; s.y = ny;
       s.axes = [...gp.axes];
@@ -1525,6 +1603,11 @@ const Guns = {
 
   onButton(s, i) {
     Sound.init();
+    // 조준 보정 중: 보정하는 총의 방아쇠만 받는다 (다른 총·다른 버튼은 무시)
+    if (this.calib) {
+      if (s.key === this.calib.key && i === this.triggerOf(s) && allowShot(`pad:${s.key}`, performance.now())) recordCalibShot(s);
+      return;
+    }
     // 총 연결 화면: 방아쇠를 당긴 총을 지금 자리(1P/2P)에, 그 버튼을 방아쇠로 기억
     if (this.assigning !== null) {
       const slot = this.assigning === 0 ? 'p1' : 'p2';
@@ -2022,6 +2105,7 @@ function drawTitle(time) {
   ctx.font = `bold ${Math.round(U * 2.6)}px ${FONT}`;
   const hintLeft = cx - ctx.measureText(hint).width / 2;
   drawTitleTicker(time, Math.min(cx - U * 50, hintLeft - U * 3));
+  text('© 2026 SYNC', W - U * 2, H - U * 2, U * 2.2, 'rgba(255,217,176,0.6)', 'right');
 }
 
 // 처음 화면 왼쪽 아래: 오늘 랭킹 TOP 10 이 아래에서 위로 천천히 흘러 올라간다
@@ -2129,6 +2213,7 @@ function drawSparkles(x, y, w, h, time, count = 6, seed = 1, alpha = 1) {
 const LEVEL_COLORS = ['#ffffff', '#ffe14a', '#ffb23a', '#ff7a3a', '#ff4a3a'];
 
 function drawGunSetup() {
+  if (Guns.calib) { drawGunCalib(); return; }
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
   ctx.fillRect(0, 0, W, H);
   const cx = W / 2;
@@ -2182,15 +2267,21 @@ function drawGunSetup() {
   // 조준 보정: 조준점이 거꾸로 움직이거나 안 움직이면 여기서 바로 고친다
   const axesLabel = { auto: '자동', '01': '0·1', '23': '2·3' }[settings.gunAxes] || '자동';
   const by1 = py + ph - U * 19;
-  button(`좌우 뒤집기 ${settings.gunInvertX ? 'ON' : 'OFF'}`, cx - U * 34, by1, U * 30, U * 7, () => toggleGunSetting('gunInvertX'), true, settings.gunInvertX);
-  button(`위아래 뒤집기 ${settings.gunInvertY ? 'ON' : 'OFF'}`, cx, by1, U * 30, U * 7, () => toggleGunSetting('gunInvertY'), true, settings.gunInvertY);
-  button(`조준 축: ${axesLabel}`, cx + U * 34, by1, U * 30, U * 7, () => toggleGunSetting('gunAxes'));
+  const calibLabel = (who) => {
+    const key = who === 0 ? Guns.saved.p1 : Guns.saved.p2;
+    return `${who + 1}P 조준 보정${key && Guns.saved.calib?.[key] ? ' (됨)' : ''}`;
+  };
+  button(`좌우 반전 ${settings.gunInvertX ? 'ON' : 'OFF'}`, cx - U * 50, by1, U * 23, U * 7, () => toggleGunSetting('gunInvertX'), true, settings.gunInvertX);
+  button(`상하 반전 ${settings.gunInvertY ? 'ON' : 'OFF'}`, cx - U * 25, by1, U * 23, U * 7, () => toggleGunSetting('gunInvertY'), true, settings.gunInvertY);
+  button(`조준 축: ${axesLabel}`, cx, by1, U * 23, U * 7, () => toggleGunSetting('gunAxes'));
+  button(calibLabel(0), cx + U * 25, by1, U * 23, U * 7, () => startGunCalib(0), !!Guns.saved.p1);
+  button(calibLabel(1), cx + U * 50, by1, U * 23, U * 7, () => startGunCalib(1), !!Guns.saved.p2);
 
   const by2 = py + ph - U * 8;
   button('1P 지정', cx - U * 45, by2, U * 20, U * 8, () => { Guns.assigning = 0; Guns.message = ''; }, true, Guns.assigning === 0);
   button('2P 지정', cx - U * 22, by2, U * 20, U * 8, () => { Guns.assigning = 1; Guns.message = ''; }, true, Guns.assigning === 1);
   button('초기화', cx + U * 1, by2, U * 20, U * 8, () => {
-    Guns.saved = { p1: null, p2: null, trigger: {} };
+    Guns.saved = { p1: null, p2: null, trigger: {}, calib: Guns.saved.calib }; // 조준 보정값은 남겨 둔다
     Guns.save();
     Guns.assigning = 0;
     Guns.message = '';

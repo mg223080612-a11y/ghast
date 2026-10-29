@@ -3,7 +3,7 @@
   "productName": "가스트 사격",
   "version": "1.0.0",
   "description": "가스트 사격 — 학교 행사용 라이트건 사격 게임",
-  "author": "GVCS",
+  "author": "SYNC",
   "private": true,
   "main": "desktop/main.js",
   "scripts": {
@@ -58,6 +58,7 @@
     },
     "portable": {
       "artifactName": "ghast-shooting-${version}-portable.${ext}"
-    }
+    },
+    "copyright": "Copyright © 2026 SYNC"
   }
 }
