@@ -1302,19 +1302,25 @@ function isDuplicateTap(x, y, now) {
 // 총(입력)마다 클릭 간격을 보고, 기계처럼 빠른 클릭은 아무 표시 없이 조용히 버린다.
 //  · 0.08초 안에 또 들어온 클릭 → 연사
 //  · 0.14초 안쪽 간격으로 세 번째가 들어오면 → 연사
-//  연사로 보이면 클릭이 0.3초 동안 멈출 때까지 계속 버린다. 사람이 빠르게 연타하는 정도(0.15초 이상)는 그대로 인정
-const RAPID_MIN_GAP = 80, RAPID_STREAK_GAP = 140, RAPID_QUIET = 300;
-const fireGate = new Map(); // 입력 장치(마우스·총마다) → { last, quick, blockedUntil }
+//  연사가 감지되면 그 총은 1.5초 동안 잠긴다. 잠긴 동안 또 기계처럼 빠른 클릭이 오면(연사를 계속 당김)
+//  잠금이 계속 늘어나 한 발도 들어가지 않는다. 연사를 끄고 보통 속도로 쏘면 잠금이 늘지 않아 곧 다시 쏠 수 있다.
+//  사람이 빠르게 연타하는 정도(0.15초 이상 간격)는 처음부터 연사로 보지 않는다.
+const RAPID_MIN_GAP = 80, RAPID_STREAK_GAP = 140, RAPID_LOCK = 1500;
+const fireGate = new Map(); // 입력 장치(마우스·총마다) → { last, quick, lockUntil }
 function allowShot(source, now) {
   let s = fireGate.get(source);
-  if (!s) { s = { last: -1e9, quick: 0, blockedUntil: 0 }; fireGate.set(source, s); }
+  if (!s) { s = { last: -1e9, quick: 0, lockUntil: 0 }; fireGate.set(source, s); }
   const gap = now - s.last;
   s.last = now;
-  if (now < s.blockedUntil) { s.blockedUntil = now + RAPID_QUIET; return false; }
-  if (gap < RAPID_MIN_GAP) { s.blockedUntil = now + RAPID_QUIET; s.quick = 0; return false; }
-  if (gap < RAPID_STREAK_GAP) {
+  const machineFast = gap < RAPID_STREAK_GAP;
+  if (now < s.lockUntil) {
+    if (machineFast) s.lockUntil = now + RAPID_LOCK; // 연사를 계속 쓰는 중 → 잠금 연장
+    return false;
+  }
+  if (gap < RAPID_MIN_GAP) { s.lockUntil = now + RAPID_LOCK; s.quick = 0; return false; }
+  if (machineFast) {
     s.quick++;
-    if (s.quick >= 2) { s.blockedUntil = now + RAPID_QUIET; s.quick = 0; return false; }
+    if (s.quick >= 2) { s.lockUntil = now + RAPID_LOCK; s.quick = 0; return false; }
   } else {
     s.quick = 0;
   }
