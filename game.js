@@ -648,7 +648,7 @@ class Ghast {
     this.state = 'in';
     this.t = 0;
     this.alpha = 0;
-    this.shots = Math.random() < 0.35 ? 2 : 1;
+    this.shots = Math.random() < 0.2 ? 2 : 1; // 화염구를 두 번 쏘는 가스트 (예전 35% → 20%)
     this.floatDur = rand(1.4, 3.0) * difficulty().floatMul;
     if (T.noShoot) this.floatDur = rand(2.2, 3.2); // 황금 가스트는 잠깐 머물다 도망
     this.chargeDur = difficulty().chargeTime;
