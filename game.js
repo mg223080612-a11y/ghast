@@ -31,6 +31,8 @@ const DEFAULTS = {
   ghastScale: 100,     // 가스트 크기 (%)
   quality: 'normal',   // 화질: 'normal' 보통(빠름) / 'light' 가볍게(저사양) / 'sharp' 선명하게(느릴 수 있음)
   showFps: false,      // 왼쪽 아래에 FPS(화면 갱신 속도) 표시
+  autoQuality: true,   // 버벅이면 자동으로 화질·효과를 한 단계씩 낮춤
+  fewEffects: false,   // 효과 줄이기: 터지는 조각 적게, 빛 번짐·불티 끄기
   volume: 0.8,         // 효과음 크기
   inputMode: 'gun',    // 'gun' = 라이트건(마우스로 인식) / 'touch' = 프로젝터 터치 센서
   aimMode: 'big',      // 조준점: 'big' 큰 조준점 / 'small' 작은 마우스 십자 / 'hidden' 게임 중 숨김
@@ -122,7 +124,6 @@ const IMG_SRC = {
   fireball: 'assets/fireball.png',
   tear: 'assets/ghast-tear.png',
   gunpowder: 'assets/gunpowder.png',
-  drop: 'assets/drop.png',
 };
 function loadImages() {
   return Promise.all(Object.entries(IMG_SRC).map(([key, src]) => new Promise((resolve, reject) => {
@@ -263,6 +264,15 @@ const Sound = {
     notes.forEach((f, i) => this.tone(f, 0.28, { gain: 0.2, delay: i * 0.14 }));
   },
 };
+
+// 소리 장치에서 오류가 나도(스피커 연결 끊김 등) 총 판정·게임은 계속되게, 효과음 함수마다 오류를 막아 둔다
+for (const key of Object.keys(Sound)) {
+  const fn = Sound[key];
+  if (typeof fn !== 'function') continue;
+  Sound[key] = function (...args) {
+    try { return fn.apply(this, args); } catch (err) { reportError(err); return undefined; }
+  };
+}
 
 // ---------- 배경 (네더) ----------
 const NETHERRACK = ['#6f2a2a', '#7d3232', '#5e2222', '#8a3a3a', '#532020', '#6a2626', '#773030'];
@@ -424,7 +434,7 @@ function drawBackground(time) {
   ctx.globalAlpha = 1;
 }
 function updateEmbers(dt) {
-  if (embers.length < 60 && Math.random() < dt * 20) {
+  if (embers.length < (settings.fewEffects ? 20 : 60) && Math.random() < dt * 20) {
     embers.push({
       x: rand(0, W), y: rand(groundY, H), vx: rand(-15, 15), vy: rand(-60, -25),
       size: rand(0.25, 0.6) * U, life: 0, max: rand(3, 7),
@@ -446,7 +456,7 @@ const parts = [];
 const MAX_PARTS = 350; // 효과가 한꺼번에 너무 많이 쌓여 버벅이지 않게
 function addPart(p) {
   // 글자 효과(점수·'팡!')는 꼭 보여야 하니 남기고, 작은 조각은 많으면 새로 만들지 않는다
-  if (parts.length >= MAX_PARTS && p.kind !== 'text') return;
+  if (parts.length >= (settings.fewEffects ? 120 : MAX_PARTS) && p.kind !== 'text') return;
   parts.push({
     x: 0, y: 0, vx: 0, vy: 0, g: 0, drag: 0, life: 1, age: 0,
     size: U, grow: 0, color: '#fff', kind: 'sq', rot: 0, vr: 0, ...p,
@@ -798,7 +808,7 @@ class Ghast {
 // 둥근 빛 번짐. 매 프레임 그라데이션을 새로 만들지 않고, 색마다 한 번 그린 그림을 늘려 쓴다
 const glowCache = new Map();
 function drawGlow(x, y, radius, rgb, alpha) {
-  if (alpha <= 0.01 || radius <= 0) return;
+  if (alpha <= 0.01 || radius <= 0 || settings.fewEffects) return;
   let img = glowCache.get(rgb);
   if (!img) {
     img = document.createElement('canvas');
@@ -1427,7 +1437,12 @@ const Guns = {
   },
 
   poll() {
-    const list = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
+    // 블루투스 키보드·마우스·헤드셋도 '게임패드'로 잡히는 경우가 있다 → 총이 아니므로 무시
+    // (안 그러면 엉뚱한 조준점이 생기거나, 키보드를 누를 때 헛방이 나갈 수 있다)
+    const notGun = /keyboard|mouse|touchpad|headset|headphone|audio|키보드|마우스/i;
+    const list = navigator.getGamepads
+      ? [...navigator.getGamepads()].filter((g) => g && g.connected !== false && !notGun.test(g.id))
+      : [];
     const now = performance.now();
     // 같은 이름의 총이 둘이면 번호를 붙여 구분한다 (DIP 스위치가 같게 맞춰진 경우 등)
     const sameId = (id) => list.filter((g) => g.id === id).length > 1;
@@ -1497,7 +1512,10 @@ const Guns = {
 };
 // 방아쇠를 놓치지 않고 바로 반응하도록, 화면 그리기(1초 60번)와 따로 1초 약 250번 총 상태를 읽는다.
 // 방아쇠를 당긴 순간의 조준 위치로 바로 맞았는지 판정하고, 효과는 다음 화면에 그려진다.
-setInterval(() => { if (W > 0) Guns.poll(); }, 4);
+setInterval(() => {
+  if (W <= 0) return;
+  try { Guns.poll(); } catch (err) { reportError(err); } // 총 읽기에서 오류가 나도 계속 읽는다
+}, 4);
 // 길게 누르기(오른쪽 클릭) 메뉴, 확대 제스처 막기
 window.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('gesturestart', (e) => e.preventDefault());
@@ -1532,6 +1550,16 @@ window.addEventListener('keydown', (e) => {
       else if (game.state === 'gunsetup') closeGunSetup();
       else if (game.state === 'play' && game.paused) resumeGame();
       break;
+    case 'KeyL': {   // 렉 걸릴 때 바로: 화질 보통 ↔ 가볍게 (+ 효과 줄이기) 바꾸기
+      const light = settings.quality === 'light' && settings.fewEffects;
+      settings.quality = light ? 'normal' : 'light';
+      settings.fewEffects = !light;
+      saveSettings();
+      resize();
+      clearTextCache();
+      showBanner(light ? '화질: 보통' : '화질: 가볍게 + 효과 줄이기', 'L 키로 다시 바꿀 수 있어요', '#9ff6ff', 1.6);
+      break;
+    }
     case 'KeyC':     // 처음 화면 버튼과 같음 (게임 중이면 일시정지하고 한 번 더 묻는다)
       goHome();
       break;
@@ -1728,7 +1756,7 @@ form.addEventListener('submit', (e) => {
   closeSettings();
   // 화질을 바꿨으면 그리는 해상도를 다시 맞추고, 그 해상도로 글자 그림을 새로 만든다
   resize();
-  textCache.clear();
+  clearTextCache();
 });
 document.getElementById('settings-reset').addEventListener('click', () => fillForm(DEFAULTS));
 document.getElementById('settings-close').addEventListener('click', closeSettings);
@@ -1783,6 +1811,13 @@ function fitTextSize(str, size, maxW) {
 // (점수·타이머처럼 바뀌는 글자도 같은 값이 반복되므로 대부분 저장된 그림으로 그려진다)
 const textCache = new Map();
 const TEXT_CACHE_MAX = 600;
+// 저장한 글자 그림이 차지하는 메모리 한도 (약 24MB). 넘으면 오래 안 쓴 것부터 지운다
+const TEXT_CACHE_MAX_PX = 6_000_000;
+let textCachePx = 0;
+function clearTextCache() {
+  textCache.clear();
+  textCachePx = 0;
+}
 function textSprite(str, size, color, shadow) {
   const key = `${size}|${color}|${shadow}|${str}`;
   let sp = textCache.get(key);
@@ -1815,18 +1850,37 @@ function textSprite(str, size, color, shadow) {
   g.strokeText(str, pad, cy);
   g.fillStyle = color;
   g.fillText(str, pad, cy);
-  sp = { canvas: g.canvas, w, h, pad, cy, tw };
+  sp = { canvas: g.canvas, w, h, pad, cy, tw, px: g.canvas.width * g.canvas.height };
   textCache.set(key, sp);
-  if (textCache.size > TEXT_CACHE_MAX) textCache.delete(textCache.keys().next().value);
+  textCachePx += sp.px;
+  // 개수 또는 메모리 한도를 넘으면 오래 안 쓴 것부터 지운다 (방금 만든 것은 남김)
+  while ((textCache.size > TEXT_CACHE_MAX || textCachePx > TEXT_CACHE_MAX_PX) && textCache.size > 1) {
+    const oldKey = textCache.keys().next().value;
+    textCachePx -= textCache.get(oldKey).px;
+    textCache.delete(oldKey);
+  }
   return sp;
 }
 // 글꼴(갈무리)이 늦게 내려받아지면 그 전에 저장한 글자 그림은 버리고 다시 그린다
-document.fonts?.addEventListener?.('loadingdone', () => textCache.clear());
-document.fonts?.ready?.then(() => textCache.clear());
+document.fonts?.addEventListener?.('loadingdone', () => clearTextCache());
+document.fonts?.ready?.then(() => clearTextCache());
 
 function text(str, x, y, size, color = '#fff', align = 'center', opts = {}) {
   str = String(str);
   if (!str) return;
+  // live: 매번 바뀌는 글자(측정값 등)는 저장하지 않고 바로 그린다
+  if (opts.live) {
+    ctx.font = `bold ${Math.round(size)}px ${FONT}`;
+    ctx.textAlign = align;
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = size * 0.18;
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.strokeText(str, x, y);
+    ctx.fillStyle = color;
+    ctx.fillText(str, x, y);
+    return;
+  }
   const sp = textSprite(str, Math.round(size), color, opts.shadow || '#2a0d06');
   // 글자 그림의 기준점(왼쪽 위)을 정렬에 맞춰 옮긴다
   const left = align === 'left' ? x - sp.pad : align === 'right' ? x - sp.tw - sp.pad : x - sp.tw / 2 - sp.pad;
@@ -2051,7 +2105,8 @@ function drawGunSetup() {
       const axes = (s.axes || []).slice(0, 4).map((v) => v.toFixed(2)).join('  ');
       const fresh = performance.now() - s.lastActive < 1500;
       text(`총 ${i + 1}  ·  ${role}`, px + U * 6, y, U * 3.8, color, 'left');
-      text(`방아쇠 = 버튼 ${Guns.triggerOf(s)}  ·  축 [${axes}]${fresh ? '  ● 움직임' : ''}`, px + U * 34, y, U * 2.6, '#ffd9b0', 'left');
+      // 축 숫자는 매 프레임 바뀌므로 글자 그림으로 저장하지 않고 바로 그린다 (저장 공간이 쓸데없이 차지 않게)
+      text(`방아쇠 = 버튼 ${Guns.triggerOf(s)}  ·  축 [${axes}]${fresh ? '  ● 움직임' : ''}`, px + U * 34, y, U * 2.6, '#ffd9b0', 'left', { live: true });
       text(s.id.slice(0, 48), px + U * 6, y + U * 4, U * 2.2, '#8a7a72', 'left');
       y += U * 9.5;
     });
@@ -2584,12 +2639,50 @@ function drawAim(x, y, glow = null, label = '') {
 let last = performance.now();
 // FPS(1초에 화면을 몇 번 그리는지) — 설정에서 켜면 왼쪽 아래에 표시. 60 근처면 부드럽고, 30 아래면 버벅임
 const fpsMeter = { frames: 0, since: performance.now(), value: 0, worst: 0 };
+// 오류가 나도 게임이 멈추지 않게: 콘솔에만 남기고 (같은 오류가 계속 나도 처음 몇 번만) 다음 프레임은 계속 그린다
+const errorLog = { count: 0 };
+function reportError(err) {
+  errorLog.count++;
+  if (errorLog.count <= 5) console.error('[가스트 사격] 오류가 났지만 게임은 계속합니다', err);
+}
+
+// 렉 자동 방지: 화면이 3초 넘게 40fps 아래로 버벅이면 한 단계씩 가볍게 바꾼다 (설정에서 끌 수 있음)
+//   선명하게 → 보통 → 가볍게 → 가볍게 + 효과 줄이기
+const autoPerf = { lowSeconds: 0, lastChange: 0 };
+function lightenOneStep() {
+  if (settings.quality === 'sharp') settings.quality = 'normal';
+  else if (settings.quality === 'normal') settings.quality = 'light';
+  else if (!settings.fewEffects) settings.fewEffects = true;
+  else return false; // 더 줄일 게 없음
+  saveSettings();
+  resize();
+  clearTextCache();
+  return true;
+}
+function checkAutoPerf(now) {
+  if (!settings.autoQuality || document.hidden) { autoPerf.lowSeconds = 0; return; }
+  // 창을 바꿨다 돌아오는 등 1초 넘게 멈췄던 구간은 '렉'이 아니므로 세지 않는다
+  if (fpsMeter.lastWorst > 1000) { autoPerf.lowSeconds = 0; return; }
+  autoPerf.lowSeconds = fpsMeter.value < 40 ? autoPerf.lowSeconds + 1 : 0;
+  if (autoPerf.lowSeconds >= 3 && now - autoPerf.lastChange > 10000) {
+    autoPerf.lowSeconds = 0;
+    autoPerf.lastChange = now;
+    if (lightenOneStep()) showBanner('렉 방지: 화면을 가볍게 바꿨어요', '⚙ 설정 → 화질에서 되돌릴 수 있어요', '#9ff6ff', 2.2);
+  }
+}
+
 function frame(now) {
+  // 다음 프레임을 먼저 예약 → 아래에서 오류가 나도 게임이 멈춰 버리지 않는다
+  requestAnimationFrame(frame);
   const gap = now - last;
   const dt = Math.min(0.05, gap / 1000);
   last = now;
-  update(dt);
-  draw(now / 1000);
+  try {
+    update(dt);
+    draw(now / 1000);
+  } catch (err) {
+    reportError(err);
+  }
   fpsMeter.frames++;
   fpsMeter.worst = Math.max(fpsMeter.worst, gap);
   if (now - fpsMeter.since >= 1000) {
@@ -2598,12 +2691,13 @@ function frame(now) {
     fpsMeter.frames = 0;
     fpsMeter.worst = 0;
     fpsMeter.since = now;
+    checkAutoPerf(now); // 1초마다 렉 여부 확인
   }
   if (settings.showFps) {
     const color = fpsMeter.value >= 50 ? '#7dff6a' : fpsMeter.value >= 30 ? '#ffe14a' : '#ff5a4a';
-    text(`${fpsMeter.value} fps · 최장 ${fpsMeter.lastWorst ?? 0}ms`, U * 2, H - U * 2, U * 2.4, color, 'left');
+    const q = { sharp: '선명', normal: '보통', light: '가볍게' }[settings.quality] || '보통';
+    text(`${fpsMeter.value} fps · 최장 ${fpsMeter.lastWorst ?? 0}ms · 화질 ${q}${settings.fewEffects ? ' · 효과 적게' : ''}`, U * 2, H - U * 2, U * 2.4, color, 'left', { live: true });
   }
-  requestAnimationFrame(frame);
 }
 
 // ---------- 시작 ----------

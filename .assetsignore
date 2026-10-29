@@ -12,3 +12,4 @@ schema.sql
 serve.cjs
 *.bat
 *.md
+poster
