@@ -1297,11 +1297,37 @@ function isDuplicateTap(x, y, now) {
   return dup;
 }
 
+// ---------- 연사 차단 ----------
+// 엑스거너의 연사(Rapid Fire)는 방아쇠 한 번에 클릭을 사람 손으로는 불가능한 속도로 여러 번 보낸다.
+// 총(입력)마다 클릭 간격을 보고, 기계처럼 빠른 클릭은 아무 표시 없이 조용히 버린다.
+//  · 0.08초 안에 또 들어온 클릭 → 연사
+//  · 0.14초 안쪽 간격으로 세 번째가 들어오면 → 연사
+//  연사로 보이면 클릭이 0.3초 동안 멈출 때까지 계속 버린다. 사람이 빠르게 연타하는 정도(0.15초 이상)는 그대로 인정
+const RAPID_MIN_GAP = 80, RAPID_STREAK_GAP = 140, RAPID_QUIET = 300;
+const fireGate = new Map(); // 입력 장치(마우스·총마다) → { last, quick, blockedUntil }
+function allowShot(source, now) {
+  let s = fireGate.get(source);
+  if (!s) { s = { last: -1e9, quick: 0, blockedUntil: 0 }; fireGate.set(source, s); }
+  const gap = now - s.last;
+  s.last = now;
+  if (now < s.blockedUntil) { s.blockedUntil = now + RAPID_QUIET; return false; }
+  if (gap < RAPID_MIN_GAP) { s.blockedUntil = now + RAPID_QUIET; s.quick = 0; return false; }
+  if (gap < RAPID_STREAK_GAP) {
+    s.quick++;
+    if (s.quick >= 2) { s.blockedUntil = now + RAPID_QUIET; s.quick = 0; return false; }
+  } else {
+    s.quick = 0;
+  }
+  return true;
+}
+
 let buttons = [];
 // who: 쏜 사람 (0 = 1P, 1 = 2P). 마우스·1인 기록전은 항상 1P
-function onTap(x, y, who = 0) {
+// source: 어느 입력 장치에서 왔는지 (연사 차단을 장치마다 따로 하려고)
+function onTap(x, y, who = 0, source = 'mouse') {
   const now = performance.now();
   if (isDuplicateTap(x, y, now)) return;
+  if (!allowShot(source, now)) return; // 연사: 조용히 무시 (점수·감점·소리·표시 없음)
   Sound.init();
 
   if (settings.showTouches) {
@@ -1392,7 +1418,7 @@ canvas.addEventListener('pointerdown', (e) => {
   // (조이스틱 모드에서도 방아쇠가 클릭을 같이 보내면 한 발이 두 번 들어가지 않게)
   if ((game.state === 'play' || game.state === 'countdown') && Guns.active()) return;
   aim.x = e.clientX; aim.y = e.clientY; aim.seen = true;
-  onTap(e.clientX, e.clientY, 0);
+  onTap(e.clientX, e.clientY, 0, e.pointerType === 'mouse' ? 'mouse' : `${e.pointerType}:${e.pointerId}`);
 });
 // 조준점 위치 (라이트건을 움직이면 마우스 커서가 따라 움직인다)
 const aim = { x: 0, y: 0, seen: false };
@@ -1497,7 +1523,7 @@ const Guns = {
       who = this.playerOf(s);
       if (who < 0) return; // 지정 안 된 총은 대결 중 무시
     }
-    onTap(s.x, s.y, who);
+    onTap(s.x, s.y, who, `pad:${s.key}`);
   },
 
   // 화면에 총 조준점 그리기 (최근에 쓴 총만). 지정된 총은 1P/2P 색과 이름표
@@ -1800,7 +1826,9 @@ document.getElementById('btn-home').addEventListener('click', (e) => {
 });
 
 // ---------- 글자·버튼 그리기 ----------
-const FONT = '"Galmuri11", "Galmuri9", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
+const FONT = '"Galmuri11", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
+// 캔버스 글자는 글꼴이 다 받아진 뒤에 그려야 픽셀 글꼴로 나온다 → 시작하자마자 불러 두고, 받아지면 글자 그림을 새로 만든다
+document.fonts?.load?.(`bold 16px "Galmuri11"`).then(() => clearTextCache()).catch(() => {});
 // 글자가 maxW 보다 넓으면 들어가도록 글자 크기를 줄여서 돌려준다
 function fitTextSize(str, size, maxW) {
   ctx.font = `bold ${Math.round(size)}px ${FONT}`;

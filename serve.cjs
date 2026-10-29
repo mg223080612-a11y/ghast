@@ -10,6 +10,7 @@ const types = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg',
   '.webp': 'image/webp', '.svg': 'image/svg+xml', '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
+  '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
 };
 // 게임에 필요 없는 파일·폴더는 내보내지 않는다
 const hidden = new Set(['data', '.git', '.wrangler', 'node_modules']);

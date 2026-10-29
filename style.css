@@ -1,5 +1,14 @@
+/* 한글 픽셀 폰트 갈무리 11 Bold (SIL Open Font License, fonts/LICENSE.txt)
+   굵기 하나만 넣고 모든 굵기에 쓴다 → 예전처럼 보통 굵기(505KB)까지 받지 않아 가볍다 */
+@font-face {
+  font-family: "Galmuri11";
+  src: url("fonts/Galmuri11-Bold.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 :root {
-  --font: "Galmuri11", "Galmuri9", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+  --font: "Galmuri11", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
   --panel: rgba(20, 6, 4, 0.92);
   --line: #8a3a2a;
   --text: #fff4e6;

@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>가스트 사격 포스터 — 2인 대결</title>
+<!-- 게임과 같은 한글 픽셀 글꼴 (갈무리 11 Bold, ../fonts) -->
+<style>
+  @font-face { font-family: "Galmuri11"; src: url("../fonts/Galmuri11-Bold.woff2") format("woff2"); font-weight: 100 900; }
+  /* A2 세로 (420 × 594 mm) — 화면 기준 1190 × 1684 px */
+  @page { size: 420mm 594mm; margin: 0; }
+  :root {
+    --yellow: #ffd84a;
+    --orange: #ff8a1c;
+    --red: #e0261c;
+    --p1: #5ae8ff;
+    --p2: #ff7ad9;
+    --pixel: "Galmuri11", "Galmuri9", "Malgun Gothic", sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1190px; height: 1684px; overflow: hidden; background: #140303; }
+  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; font-family: var(--pixel); }
+  .poster { position: relative; width: 1190px; height: 1684px; overflow: hidden; }
+  /* 인쇄(PDF): 1190px 포스터를 A2(420×594mm) 한 장에 꽉 차게 키운다. 420mm = 1587.4px → ×1.3339 */
+  @media print {
+    html, body { width: 420mm; height: 594mm; overflow: hidden; }
+    .poster { transform: scale(1.3339); transform-origin: 0 0; }
+  }
+  canvas, img { image-rendering: pixelated; }
+  #bg { position: absolute; inset: 0; width: 1190px; height: 1684px; }
+  .layer { position: absolute; }
+
+  /* 가스트 (빨간 눈 + 벌린 입) */
+  .ghast { position: absolute; filter: drop-shadow(0 18px 26px rgba(0,0,0,0.6)); }
+  .g1 { left: 70px;  top: 245px; width: 430px; transform: rotate(-9deg); }
+  .g2 { left: 690px; top: 120px; width: 400px; transform: rotate(8deg); }
+  .g3 { left: 470px; top: 520px; width: 210px; transform: rotate(-3deg); }
+
+  /* 화염구 + 빛 */
+  .fire { position: absolute; border-radius: 50%; }
+  .fire::before { content: ""; position: absolute; inset: -60%; border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,150,40,0.55) 0%, rgba(255,120,30,0.25) 40%, rgba(255,90,20,0) 70%); }
+  /* 원본 화염구 그림은 어두운 편이라 밝게 + 빛 번짐 */
+  .fire img { position: relative; width: 100%; display: block;
+    filter: brightness(1.9) saturate(1.6) contrast(1.15) drop-shadow(0 0 22px rgba(255,140,30,0.95)); }
+  .f1 { left: 380px; top: 600px; width: 150px; transform: rotate(18deg); }
+  .f2 { left: 1010px; top: 455px; width: 135px; transform: rotate(-12deg); }
+  .f3 { left: 40px;  top: 80px;  width: 110px; transform: rotate(40deg); }
+
+  /* 눈물 그림은 16칸 중 가운데에 작게 그려져 있어 크게 키운다 */
+  .tear { position: absolute; left: 150px; top: 560px; width: 190px; filter: drop-shadow(0 0 22px rgba(160,246,255,0.95)); }
+
+  /* 말풍선 */
+  .bubble { position: absolute; left: 420px; top: 40px; width: 300px; height: 250px;
+    background: #fff; border: 8px solid #111; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; }
+  .bubble::after { content: ""; position: absolute; right: 40px; bottom: -36px; width: 70px; height: 70px;
+    background: #fff; border-right: 8px solid #111; border-bottom: 8px solid #111;
+    clip-path: polygon(0 0, 100% 0, 100% 100%); transform: rotate(18deg); }
+  .bubble span { font-size: 54px; line-height: 1.3; color: var(--red); text-align: center; font-weight: 700; }
+
+  /* 공통 글자 테두리 (픽셀 느낌의 굵은 검은 테두리) */
+  .outline {
+    paint-order: stroke fill;
+    -webkit-text-stroke: 14px #0b0303;
+  }
+
+  /* 맨 위 문구 */
+  .kicker { position: absolute; left: 0; right: 0; top: 735px; text-align: center;
+    font-size: 66px; font-weight: 700; color: var(--yellow);
+    -webkit-text-stroke: 12px #0b0303; paint-order: stroke fill;
+    text-shadow: 0 0 26px rgba(255,140,30,0.85), 0 6px 0 #6a1404; letter-spacing: 2px; }
+
+  /* 큰 제목 */
+  .title { position: absolute; left: 0; right: 0; top: 825px; text-align: center;
+    font-size: 184px; font-weight: 700; color: #fff; letter-spacing: 6px;
+    -webkit-text-stroke: 20px #0b0303; paint-order: stroke fill;
+    text-shadow: 10px 12px 0 #8a1a0c, 0 0 40px rgba(255,80,30,0.55); }
+  .subtitle { position: absolute; left: 0; right: 0; top: 1045px; text-align: center;
+    font-size: 92px; font-weight: 700; color: var(--red); letter-spacing: 4px;
+    -webkit-text-stroke: 14px #0b0303; paint-order: stroke fill;
+    text-shadow: 6px 7px 0 #2a0503; }
+
+  /* 2인 대결 배지 — 기울어진 빨강 판 + 노란 테두리 */
+  .versus { position: absolute; left: 95px; top: 1232px; width: 1000px; height: 215px;
+    transform: rotate(-4deg); }
+  /* 배지 바탕(빨강 그라데이션 + 사선 줄무늬)은 PDF 에서 색이 바뀌지 않게 스크립트로 그림을 그려 채운다 */
+  .versus .slab { position: absolute; inset: 0; background: #d01f12;
+    border: 10px solid var(--yellow);
+    box-shadow: 0 0 0 8px #0b0303, 0 18px 40px rgba(0,0,0,0.6), 0 0 60px rgba(255,90,20,0.5); }
+  .versus .line1 { position: absolute; left: 0; right: 0; top: 26px; text-align: center;
+    font-size: 64px; font-weight: 700; color: #fff;
+    -webkit-text-stroke: 11px #0b0303; paint-order: stroke fill; }
+  .versus .line2 { position: absolute; left: 0; right: 0; top: 110px; text-align: center;
+    font-size: 86px; font-weight: 700; color: var(--yellow);
+    -webkit-text-stroke: 13px #0b0303; paint-order: stroke fill;
+    text-shadow: 0 0 22px rgba(255,216,74,0.8); }
+  /* 양옆 1P · 2P 조준점 */
+  .aim { position: absolute; top: 40px; width: 140px; height: 140px; }
+  .aim.p1 { left: -78px; }
+  .aim.p2 { right: -78px; }
+  .aim b { position: absolute; left: 0; right: 0; bottom: -46px; text-align: center; font-size: 40px;
+    -webkit-text-stroke: 9px #0b0303; paint-order: stroke fill; }
+  .aim.p1 b { color: var(--p1); }
+  .aim.p2 b { color: var(--p2); }
+  /* NEW 스티커 */
+  .new { position: absolute; right: -62px; top: -86px; width: 140px; height: 140px; transform: rotate(14deg);
+    display: flex; align-items: center; justify-content: center; }
+  .new::before { content: ""; position: absolute; inset: 0; background: var(--yellow);
+    clip-path: polygon(50% 0%, 61% 18%, 82% 10%, 82% 32%, 100% 38%, 88% 55%, 100% 72%, 79% 76%, 78% 98%, 59% 87%, 45% 100%, 37% 81%, 15% 88%, 18% 67%, 0% 58%, 14% 42%, 3% 24%, 25% 22%, 28% 2%, 44% 15%);
+    filter: drop-shadow(0 0 0 #0b0303); }
+  .new span { position: relative; font-size: 44px; font-weight: 700; color: var(--red); transform: rotate(-6deg); }
+
+  /* 장소 · 상품 */
+  .place { position: absolute; left: 50%; top: 1500px; transform: translateX(-50%);
+    padding: 16px 46px 20px; background: #c01810;
+    border: 6px solid #0b0303; box-shadow: 0 10px 24px rgba(0,0,0,0.6);
+    font-size: 66px; font-weight: 700; color: #fff; white-space: nowrap;
+    -webkit-text-stroke: 9px #0b0303; paint-order: stroke fill; }
+  .prize { position: absolute; left: 0; right: 0; top: 1606px; display: flex; align-items: center; justify-content: center; gap: 18px;
+    font-size: 44px; font-weight: 700; color: #fff;
+    -webkit-text-stroke: 9px #0b0303; paint-order: stroke fill; }
+  .prize img { flex: none; width: 110px; margin: -30px -20px -30px 0; filter: drop-shadow(0 0 12px rgba(160,246,255,0.9)); }
+  .prize small { font-size: 30px; color: #9ff6ff; }
+</style>
+</head>
+<body>
+<div class="poster">
+  <canvas id="bg" width="1190" height="1684"></canvas>
+
+  <!-- 화염구 -->
+  <div class="fire f3"><img src="../assets/fireball.png" alt=""></div>
+  <div class="fire f1"><img src="../assets/fireball.png" alt=""></div>
+  <div class="fire f2"><img src="../assets/fireball.png" alt=""></div>
+
+  <!-- 가스트 3마리 (그림은 아래 스크립트가 게임과 똑같이 빨간 눈·벌린 입으로 그림) -->
+  <canvas class="ghast g1" data-face="charge" width="440" height="554"></canvas>
+  <canvas class="ghast g2" data-face="charge" width="440" height="554" style="transform: rotate(8deg) scaleX(-1);"></canvas>
+  <canvas class="ghast g3" data-face="normal" width="440" height="554"></canvas>
+
+  <img class="tear" src="../assets/ghast-tear.png" alt="">
+
+  <div class="bubble"><span>날<br>쏴<br>봐</span></div>
+
+  <div class="kicker">🔥 네더에서 살아남아라! 🔥</div>
+  <div class="title">가스트 사격</div>
+  <div class="subtitle">Ghast Shooting</div>
+
+  <div class="versus">
+    <div class="slab"><canvas id="slab" width="980" height="195" style="display:block;width:100%;height:100%"></canvas></div>
+    <svg class="aim p1" viewBox="0 0 140 140"><g fill="none" stroke-linecap="square">
+      <g stroke="#0b0303" stroke-width="20"><circle cx="70" cy="70" r="38"/><path d="M70 6v34M70 100v34M6 70h34M100 70h34"/></g>
+      <g stroke="#5ae8ff" stroke-width="10"><circle cx="70" cy="70" r="38"/><path d="M70 6v34M70 100v34M6 70h34M100 70h34"/></g>
+      </g><rect x="62" y="62" width="16" height="16" fill="#ff3a2a" stroke="#0b0303" stroke-width="4"/></svg>
+    <svg class="aim p2" viewBox="0 0 140 140"><g fill="none" stroke-linecap="square">
+      <g stroke="#0b0303" stroke-width="20"><circle cx="70" cy="70" r="38"/><path d="M70 6v34M70 100v34M6 70h34M100 70h34"/></g>
+      <g stroke="#ff7ad9" stroke-width="10"><circle cx="70" cy="70" r="38"/><path d="M70 6v34M70 100v34M6 70h34M100 70h34"/></g>
+      </g><rect x="62" y="62" width="16" height="16" fill="#ff3a2a" stroke="#0b0303" stroke-width="4"/></svg>
+    <div class="line1">⚔️ 친구랑 1:1 맞짱!</div>
+    <div class="line2">2인 대결 모드 오픈!</div>
+    <div class="new"><span>NEW</span></div>
+  </div>
+  <div class="versus-labels"></div>
+
+  <div class="place">신암관 302호</div>
+  <div class="prize"><img src="../assets/ghast-tear.png" alt="">가스트의 눈물을 드려요! <small>(100점 이상)</small></div>
+</div>
+
+<script>
+// ---------- 네더 배경 (게임 배경과 같은 방식: 네더랙 블록 + 용암 폭포 + 발광석 + 불) ----------
+function seeded(seed) { return function () { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function makeNoise(r) { const p = Array.from({ length: 512 }, () => r()); return (x) => { const i = Math.floor(x), f = x - i; const a = p[((i % 512) + 512) % 512], b = p[(((i + 1) % 512) + 512) % 512]; const s = (1 - Math.cos(f * Math.PI)) / 2; return a + (b - a) * s; }; }
+function shade(hex, f) { const n = parseInt(hex.slice(1), 16); return `rgb(${Math.round(((n >> 16) & 255) * f)},${Math.round(((n >> 8) & 255) * f)},${Math.round((n & 255) * f)})`; }
+const NETHERRACK = ['#6f2a2a', '#7d3232', '#5e2222', '#8a3a3a', '#532020', '#6a2626', '#773030'];
+const GLOW = ['#f6d77e', '#e8b94e', '#fff1a8', '#c9963c'];
+const LAVA = ['#ff8a1c', '#ffb23a', '#e0601a', '#ffd25a', '#c94812', '#ff9e2c'];
+(function drawBg() {
+  const c = document.getElementById('bg'), g = c.getContext('2d');
+  const W = c.width, H = c.height, B = 26, cols = Math.ceil(W / B) + 1;
+  const r = seeded(302), n1 = makeNoise(r), n2 = makeNoise(r), n3 = makeNoise(r), n4 = makeNoise(r);
+  const sky = g.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#0e0202'); sky.addColorStop(0.45, '#2f0a06'); sky.addColorStop(1, '#140302');
+  g.fillStyle = sky; g.fillRect(0, 0, W, H);
+  const column = (cx, top, bottom, f) => { for (let y = Math.floor(top / B) * B; y < bottom; y += B) { g.fillStyle = shade(NETHERRACK[Math.floor(r() * NETHERRACK.length)], f * (0.85 + r() * 0.3)); g.fillRect(cx * B, y, B, B); } };
+  const haze = (a) => { g.fillStyle = `rgba(60, 8, 5, ${a})`; g.fillRect(0, 0, W, H); };
+  // 먼 언덕·기둥
+  for (let x = 0; x < cols; x++) column(x, H * 0.42 - n1(x * 0.07) * H * 0.14, H, 0.3);
+  haze(0.35);
+  [0.12, 0.47, 0.86].forEach((p) => { const c0 = Math.floor(p * cols); for (let x = c0; x < c0 + 3; x++) column(x, 0, H * 0.6, 0.33); });
+  for (let x = 0; x < cols; x++) column(x, H * 0.58 - n2(x * 0.09) * H * 0.1, H, 0.42);
+  haze(0.3);
+  // 천장 + 발광석
+  const ceil = [];
+  for (let x = 0; x < cols; x++) { const d = Math.floor(1 + Math.pow(n3(x * 0.14), 2) * 6) * B; ceil.push(d); column(x, 0, d, 0.45); }
+  for (let x = 2; x < cols - 4; x++) {
+    if (n4(x * 0.35) > 0.74 && r() < 0.6) {
+      const w = 2 + Math.floor(r() * 2);
+      for (let i = 0; i < w; i++) for (let j = 0; j < 1 + Math.floor(r() * 2); j++) { g.fillStyle = GLOW[Math.floor(r() * GLOW.length)]; g.fillRect((x + i) * B, ceil[x + i] + j * B, B, B); }
+      const gx = (x + w / 2) * B, gy = ceil[x] + B * 2, rg = g.createRadialGradient(gx, gy, 0, gx, gy, B * 9);
+      rg.addColorStop(0, 'rgba(255,210,120,0.22)'); rg.addColorStop(1, 'rgba(255,210,120,0)'); g.fillStyle = rg; g.fillRect(gx - B * 9, gy - B * 9, B * 18, B * 18);
+      x += w + 5;
+    }
+  }
+  // 용암 폭포
+  [0.07, 0.93].forEach((p) => {
+    const x0 = Math.floor(p * cols) * B, top = ceil[Math.floor(p * cols)] || B * 3, bottom = H * 0.86;
+    const glow = g.createLinearGradient(x0 - B * 7, 0, x0 + B * 9, 0);
+    glow.addColorStop(0, 'rgba(255,110,20,0)'); glow.addColorStop(0.5, 'rgba(255,110,20,0.25)'); glow.addColorStop(1, 'rgba(255,110,20,0)');
+    g.fillStyle = glow; g.fillRect(x0 - B * 7, top, B * 16, bottom - top);
+    for (let y = top; y < bottom; y += B) for (let i = 0; i < 2; i++) { g.fillStyle = LAVA[Math.floor(r() * LAVA.length)]; g.fillRect(x0 + i * B, y, B, B); }
+  });
+  // 바닥 + 용암 웅덩이 + 불
+  const ground = H * 0.86, poolA = Math.floor(cols * 0.32), poolB = poolA + Math.floor(cols * 0.18);
+  for (let x = 0; x < cols; x++) {
+    const top = ground + Math.floor(n2(x * 0.1 + 30) * 3) * B;
+    column(x, top, H, 0.72);
+    if (x >= poolA && x < poolB) for (let j = 0; j < 2; j++) { g.fillStyle = LAVA[Math.floor(r() * LAVA.length)]; g.fillRect(x * B, top + j * B, B, B); }
+    else if (r() < 0.06) {
+      for (let i = 0; i < 3; i++) { const h = B * (1.2 + r() * 1.6), fx = x * B - B * 0.5 + i * B * 0.66;
+        g.fillStyle = '#ff5a1a'; g.fillRect(fx, top - h, B * 0.66, h); g.fillStyle = '#ffb02e'; g.fillRect(fx, top - h * 0.66, B * 0.66, h * 0.66); g.fillStyle = '#fff3b0'; g.fillRect(fx, top - h * 0.3, B * 0.66, h * 0.3); }
+    }
+  }
+  const pg = g.createRadialGradient((poolA + poolB) / 2 * B, ground, 0, (poolA + poolB) / 2 * B, ground, W * 0.35);
+  pg.addColorStop(0, 'rgba(255,120,30,0.35)'); pg.addColorStop(1, 'rgba(255,120,30,0)'); g.fillStyle = pg; g.fillRect(0, 0, W, H);
+  // 글자가 잘 보이게 가운데 아래쪽을 어둡게 + 가장자리 비네트
+  const mid = g.createLinearGradient(0, H * 0.4, 0, H);
+  mid.addColorStop(0, 'rgba(0,0,0,0)'); mid.addColorStop(0.35, 'rgba(0,0,0,0.45)'); mid.addColorStop(1, 'rgba(0,0,0,0.25)');
+  g.fillStyle = mid; g.fillRect(0, 0, W, H);
+  const v = g.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.4, W / 2, H / 2, Math.max(W, H) * 0.75);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,0.65)'); g.fillStyle = v; g.fillRect(0, 0, W, H);
+  // 불티
+  for (let i = 0; i < 90; i++) { g.fillStyle = ['#ffb23a', '#ff6a1a', '#ffd25a'][i % 3]; g.globalAlpha = 0.4 + r() * 0.5; const s = 4 + r() * 7; g.fillRect(r() * W, H * 0.35 + r() * H * 0.6, s, s); }
+  g.globalAlpha = 1;
+})();
+
+// ---------- 2인 대결 배지 바탕: 빨강 그라데이션 + 사선 줄무늬 ----------
+(function drawSlab() {
+  const c = document.getElementById('slab'), g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, c.height);
+  grad.addColorStop(0, '#ff3a1c');
+  grad.addColorStop(1, '#b8120a');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = 'rgba(0,0,0,0.18)';
+  for (let x = -c.height; x < c.width + c.height; x += 62) {
+    g.beginPath();
+    g.moveTo(x, 0); g.lineTo(x + 31, 0); g.lineTo(x + 31 - c.height, c.height); g.lineTo(x - c.height, c.height);
+    g.closePath(); g.fill();
+  }
+})();
+
+// ---------- 가스트: 게임과 같은 그림에 빨간 눈 + 벌린 입 ----------
+function parallelogram(g, x1, y1, x2, y2, h, color) { g.fillStyle = color; g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.lineTo(x2, y2 + h); g.lineTo(x1, y1 + h); g.closePath(); g.fill(); }
+const ghastImg = new Image();
+ghastImg.onload = () => {
+  document.querySelectorAll('canvas.ghast').forEach((c) => {
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    g.drawImage(ghastImg, 0, 0);
+    if (c.dataset.face === 'charge') {
+      parallelogram(g, 34, 190, 72, 207, 16, '#262626');
+      parallelogram(g, 116, 231, 158, 249, 15, '#262626');
+      parallelogram(g, 45, 198, 61, 205, 8, '#ff2418');
+      parallelogram(g, 130, 239, 146, 246, 8, '#ff2418');
+      parallelogram(g, 72, 312, 118, 333, 34, '#1b1b1b');
+      parallelogram(g, 85, 326, 105, 335, 16, '#ff2418');
+    }
+  });
+  document.title = 'ready';
+};
+ghastImg.src = '../assets/ghast.png';
+</script>
+</body>
+</html>
