@@ -35,7 +35,7 @@ const DEFAULTS = {
   fewEffects: false,   // 효과 줄이기: 터지는 조각 적게, 빛 번짐·불티 끄기
   volume: 0.8,         // 효과음 크기
   inputMode: 'gun',    // 'gun' = 라이트건(마우스로 인식) / 'touch' = 프로젝터 터치 센서
-  aimMode: 'big',      // 조준점: 'big' 큰 조준점 / 'small' 작은 마우스 십자 / 'hidden' 게임 중 숨김
+  aimMode: 'hidden',   // 조준점(과녁): 'hidden' 게임 중 숨김(기본) / 'big' 큰 조준점 / 'small' 작은 마우스 십자
   aimSize: 100,        // 큰 조준점 크기 (%)
   debounceMs: 80,      // (터치 모드에서만) 센서가 한 번의 충격을 여러 번 보내는 것을 무시
   showTouches: true,   // 터치(탄착) 위치를 화면에 표시
@@ -46,7 +46,10 @@ let settings = loadSettings();
 
 function loadSettings() {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+    // 예전에 저장된 '큰 조준점' 설정도 한 번은 '게임 중 숨김'으로 바꾼다 (게임 중 과녁이 안 보이게)
+    if (!saved.aimHiddenOnce) { saved.aimMode = 'hidden'; saved.aimHiddenOnce = true; }
+    return { ...DEFAULTS, ...saved };
   } catch {
     return { ...DEFAULTS };
   }
@@ -1534,6 +1537,9 @@ const Guns = {
 
   // 화면에 총 조준점 그리기 (최근에 쓴 총만). 지정된 총은 1P/2P 색과 이름표
   draw(time) {
+    // 게임 중에는 '큰 조준점' 설정일 때만 총 조준점(과녁)을 그린다. 메뉴·총 테스트에서는 버튼을 고를 수 있게 항상 보인다
+    const inGame = (game.state === 'play' || game.state === 'countdown') && !game.paused;
+    if (inGame && settings.aimMode !== 'big') return;
     const now = performance.now();
     for (const s of this.list()) {
       if (now - s.lastActive > 10000) continue;
