@@ -35,7 +35,7 @@ const DEFAULTS = {
   fewEffects: false,   // 효과 줄이기: 터지는 조각 적게, 빛 번짐·불티 끄기
   volume: 0.8,         // 효과음 크기
   inputMode: 'gun',    // 'gun' = 라이트건(마우스로 인식) / 'touch' = 프로젝터 터치 센서
-  aimMode: 'hidden',   // 조준점(과녁): 'hidden' 게임 중 숨김(기본) / 'big' 큰 조준점 / 'small' 작은 마우스 십자
+  aimMode: 'big',      // 조준점(과녁): 'big' 큰 조준점(기본, 2인 대결은 1P/2P 색) / 'small' 작은 마우스 십자 / 'hidden' 게임 중 숨김
   aimSize: 100,        // 큰 조준점 크기 (%)
   debounceMs: 80,      // (터치 모드에서만) 센서가 한 번의 충격을 여러 번 보내는 것을 무시
   showTouches: true,   // 터치(탄착) 위치를 화면에 표시
@@ -47,8 +47,8 @@ let settings = loadSettings();
 function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
-    // 예전에 저장된 '큰 조준점' 설정도 한 번은 '게임 중 숨김'으로 바꾼다 (게임 중 과녁이 안 보이게)
-    if (!saved.aimHiddenOnce) { saved.aimMode = 'hidden'; saved.aimHiddenOnce = true; }
+    // 잠시 '게임 중 숨김'을 기본으로 했던 때 저장된 설정도 한 번은 다시 '큰 조준점'으로 (게임 중 1P/2P 과녁이 보이게)
+    if (!saved.aimShownOnce) { saved.aimMode = 'big'; saved.aimShownOnce = true; delete saved.aimHiddenOnce; }
     return { ...DEFAULTS, ...saved };
   } catch {
     return { ...DEFAULTS };
