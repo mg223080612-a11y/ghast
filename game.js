@@ -1619,6 +1619,10 @@ const Guns = {
       const nx = clamp(u * screen.width - o.x, 0, W);
       const ny = clamp(v * screen.height - o.y, 0, H);
       if (Math.hypot(nx - s.x, ny - s.y) > 2) s.lastActive = now;
+      // 총 상태 확인용: 1초에 위치가 몇 번 바뀌는지 (총이 화면·센서를 잘 보면 움직일 때 50 이상, 못 보면 한 자리 수)
+      const axKey = gp.axes[ix] + ',' + gp.axes[iy];
+      if (axKey !== s.axKey) { s.axKey = axKey; s.moves = (s.moves || 0) + 1; }
+      if (!s.rateAt || now - s.rateAt >= 1000) { s.rate = s.moves || 0; s.moves = 0; s.rateAt = now; }
       s.x = nx; s.y = ny;
       s.axes = [...gp.axes];
       gp.buttons.forEach((b, i) => {
@@ -2281,6 +2285,9 @@ function drawGunSetup() {
       text(`총 ${i + 1}  ·  ${role}`, px + U * 6, y, U * 3.8, color, 'left');
       // 축 숫자는 매 프레임 바뀌므로 글자 그림으로 저장하지 않고 바로 그린다 (저장 공간이 쓸데없이 차지 않게)
       text(`방아쇠 = 버튼 ${Guns.triggerOf(s)}  ·  축 [${axes}]${fresh ? '  ● 움직임' : ''}`, px + U * 34, y, U * 2.6, '#ffd9b0', 'left', { live: true });
+      // 움직이는 중에 위치 갱신이 적으면 총이 화면(센서)을 잘 못 보는 것: 배터리·렌즈·총 보정 확인
+      const rateColor = !fresh ? '#8a7a72' : s.rate >= 40 ? '#7dff7a' : s.rate >= 15 ? '#ffe14a' : '#ff8a7a';
+      text(`위치 갱신 ${s.rate ?? 0}/초${fresh && s.rate < 15 ? '  ← 느림: 배터리·렌즈·총 보정 확인' : ''}`, px + U * 66, y + U * 4, U * 2.4, rateColor, 'left', { live: true });
       text(s.id.slice(0, 48), px + U * 6, y + U * 4, U * 2.2, '#8a7a72', 'left');
       y += U * 9.5;
     });
