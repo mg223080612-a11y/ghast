@@ -9,3 +9,9 @@ CREATE TABLE IF NOT EXISTS scores (
 );
 CREATE INDEX IF NOT EXISTS idx_scores_rank ON scores (score DESC, created_at);
 CREATE INDEX IF NOT EXISTS idx_scores_time ON scores (created_at);
+
+-- 이미 쓴 게임 시작 표 (같은 표로 기록을 두 번 올리지 못하게)
+CREATE TABLE IF NOT EXISTS used_tokens (
+  nonce   TEXT PRIMARY KEY,
+  used_at INTEGER NOT NULL
+);

@@ -920,6 +920,7 @@ const game = {
 const RANK_API_ORIGIN = 'https://ghast-shooting.gcinhak.workers.dev'; // wrangler deploy 로 만든 주소
 const RANK_PENDING_KEY = 'ghast-shooting-pending';   // 아직 못 올린 기록
 const RANK_CACHE_KEY = 'ghast-shooting-rank-cache';  // 마지막으로 받아 온 랭킹 (오프라인일 때 보여줌)
+const PLAY_SPARE_KEY = 'ghast-shooting-play-spare';  // 인터넷이 끊길 때를 대비해 미리 받아 둔 게임 시작 표
 const todayStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
 const cleanName = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 12);
 const byRank = (a, b) => b.score - a.score || a.created_at - b.created_at;
@@ -961,6 +962,33 @@ const Ranking = {
   isRejected(err) { return err.status >= 400 && err.status < 500 && err.status !== 429; },
 
   pending() { return readJson(RANK_PENDING_KEY, []); },
+
+  // 게임 시작 표: 서버가 '이 시각에 게임을 시작했다'고 서명해 준 것. 기록을 올릴 때 함께 낸다 (가짜 기록 방지).
+  // 인터넷이 잠깐 끊겨도 기록을 올릴 수 있게 몇 장을 미리 받아 둔다 (예전에 받은 표일수록 시간 여유가 넉넉하다)
+  spares() { return readJson(PLAY_SPARE_KEY, []); },
+  async fetchToken(timeoutMs = 2500) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(rankApi('').replace('/api/scores', '/api/play'), { signal: ctrl.signal });
+      if (!res.ok) return null;
+      return (await res.json()).token || null;
+    } catch { return null; } finally { clearTimeout(timer); }
+  },
+  async topUpSpares() {
+    if (this.spares().length >= 3) return;
+    const t = await this.fetchToken();
+    if (t) writeJson(PLAY_SPARE_KEY, [...this.spares(), t].slice(-3));
+  },
+  // 새 표를 받고, 안 되면(오프라인) 미리 받아 둔 표를 하나 꺼낸다
+  async takeToken() {
+    const fresh = await this.fetchToken();
+    if (fresh) { this.topUpSpares(); return fresh; }
+    const list = this.spares();
+    const t = list.shift() || null;
+    writeJson(PLAY_SPARE_KEY, list);
+    return t;
+  },
 
   // 기록 저장 → { id, rankToday, rankAll, pending } 또는 { rejected: '이유' }
   async add(entry) {
@@ -1024,8 +1052,9 @@ const Ranking = {
     writeJson(RANK_PENDING_KEY, []);
   },
 };
-// 보관 중인 기록은 30초마다 다시 올려 본다
-setInterval(() => { if (Ranking.pending().length) Ranking.flush(); }, 30_000);
+// 보관 중인 기록은 30초마다 다시 올려 본다. 미리 받아 둔 게임 시작 표도 채워 둔다
+setInterval(() => { if (Ranking.pending().length) Ranking.flush(); Ranking.topUpSpares(); }, 30_000);
+Ranking.topUpSpares();
 
 function refreshTitleTop() {
   Ranking.top('today', 10).then((list) => { game.titleTop = list; }).catch(() => {});
@@ -1252,6 +1281,8 @@ function startGame(mode = game.mode, names = game.players.map((p) => p.name)) {
   game.bonusCount = 0;
   game.level = 1;
   game.rankInfo = null;
+  // 1인 기록전: 시작하자마자 게임 시작 표를 받아 둔다 (기록을 올릴 때 필요)
+  game.playToken = mode === 'solo' ? Ranking.takeToken().catch(() => null) : null;
   banner = null;
   fireballs = [];
   ghasts.forEach((g) => g.hittable() && g.leave(true));
@@ -1274,7 +1305,8 @@ function endGame() {
   if (game.mode !== 'solo') return;
   const me = game.players[0];
   game.rankInfo = { status: 'saving' };
-  Ranking.add({ name: me.name || '이름없음', score: me.score, kills: me.stats.kills })
+  Promise.resolve(game.playToken)
+    .then((token) => Ranking.add({ name: me.name || '이름없음', score: me.score, kills: me.stats.kills, token }))
     .then((r) => {
       if (r.rejected) { game.rankInfo = { status: 'rejected', reason: r.rejected }; return; }
       game.rankInfo = { status: 'saved', ...r };

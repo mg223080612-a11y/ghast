@@ -1,0 +1,6 @@
+# Cloudflare 정적 파일 보안 헤더 (웹 버전)
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()

@@ -202,4 +202,9 @@
 
 - 게임 수정 후 온라인 반영: `npx wrangler deploy`
 - 관리자 키 바꾸기: `npx wrangler secret put ADMIN_KEY` 후 `data/admin-key.txt` 도 같은 값으로
+- **가짜 기록 막기 (게임 시작 표)**: 게임을 시작할 때 서버가 시작 시각에 서명한 표를 주고, 기록을 올릴 때 그 표를 확인합니다
+  (서명이 맞는지 · 한 번만 쓰는지 · 걸린 시간에 비해 점수가 말이 되는지). 서명 키를 한 번 넣어야 켜집니다:
+  `npx wrangler secret put PLAY_SECRET` → 아무 긴 글자(32자 이상)를 붙여 넣기. 넣기 전에는 예전처럼 검사 없이 저장됩니다.
+  인터넷이 끊긴 채로 한 판을 해도, 그 전에 미리 받아 둔 표(최대 3장)로 나중에 올라갑니다.
+- 로컬 테스트: `.dev.vars` 에 `PLAY_SECRET=...` 를 적고 `npx wrangler dev --local` (`.dev.vars` 는 git·배포에서 빠짐)
 - 점수 상한(가짜 점수 차단): 지금은 없음. 필요하면 `wrangler.toml` 에 `[vars] MAX_SCORE = "1000"` 을 적고 배포

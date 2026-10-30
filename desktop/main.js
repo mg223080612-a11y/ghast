@@ -4,7 +4,7 @@
 //  - 주소가 늘 같아서 설정·대기 중인 랭킹(localStorage)이 껐다 켜도 남는다
 //  - 전체화면 끄기/켜기: F (또는 오른쪽 위 ⛶ 전체화면 버튼, F11)
 //  - 종료: Alt+F4
-const { app, BrowserWindow, protocol, net, shell, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, protocol, net, shell, Menu, ipcMain, session } = require('electron');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
@@ -44,9 +44,10 @@ function createWindow() {
   win.webContents.on('before-input-event', (e, input) => {
     if (input.type === 'keyDown' && input.key === 'F11') { e.preventDefault(); toggleFullScreen(); }
   });
-  // 게임 밖 링크는 프로그램 안이 아니라 보통 브라우저로
-  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
-  win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith('app://')) { e.preventDefault(); shell.openExternal(url); } });
+  // 게임 밖 링크는 프로그램 안이 아니라 보통 브라우저로 (http·https 주소만. 파일·다른 프로그램 실행 주소는 열지 않는다)
+  const openOutside = (url) => { if (/^https?:\/\//i.test(url)) shell.openExternal(url); };
+  win.webContents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: 'deny' }; });
+  win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith('app://')) { e.preventDefault(); openOutside(url); } });
 }
 
 // 전체화면을 풀면 화면 크기에 맞춘 최대화 창으로 (작은 창으로 돌아가지 않게)
@@ -57,10 +58,13 @@ function toggleFullScreen() {
   if (!next) win.maximize();
 }
 // 게임의 F 키·⛶ 전체화면 버튼 → preload.js → 여기
-ipcMain.on('toggle-fullscreen', toggleFullScreen);
+ipcMain.on('toggle-fullscreen', (e) => { if (win && e.sender === win.webContents) toggleFullScreen(); });
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
+  // 게임은 카메라·마이크·위치·알림 같은 권한이 필요 없다 → 전부 거절 (게임패드·소리는 권한 없이 동작)
+  session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => callback(permission === 'fullscreen'));
+  session.defaultSession.setPermissionCheckHandler((wc, permission) => permission === 'fullscreen');
   // app://ghast/… → 프로그램 안 게임 파일. 게임 폴더 밖은 열지 않는다
   protocol.handle('app', (req) => {
     const rel = decodeURIComponent(new URL(req.url).pathname).replace(/^\/+/, '') || 'index.html';

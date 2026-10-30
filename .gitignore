@@ -6,3 +6,6 @@ node_modules/
 
 # 컴퓨터용 프로그램 빌드 결과물
 release/
+
+# 로컬 테스트용 시크릿
+.dev.vars

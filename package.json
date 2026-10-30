@@ -11,7 +11,7 @@
     "build:exe": "electron-builder --win"
   },
   "devDependencies": {
-    "electron": "^38.0.0",
+    "electron": "44.10.0",
     "electron-builder": "^26.0.0"
   },
   "build": {
