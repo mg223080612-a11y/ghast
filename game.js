@@ -2787,6 +2787,13 @@ function draw(time) {
   if (mouseAim) drawAim(aim.x, aim.y);
   // 게임패드로 연결된 총의 조준점 (메뉴에서도 보여야 총으로 버튼을 고를 수 있다)
   Guns.draw(time);
+  // 다른 창(메신저·탐색기 등)이 앞에 오면 브라우저가 총(게임패드) 입력을 멈춘다 → 바로 알 수 있게 크게 알린다
+  if (Guns.list().length && !document.hasFocus()) {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0, H / 2 - U * 9, W, U * 18);
+    text('게임 창을 한 번 클릭하세요', W / 2, H / 2 - U * 2.5, U * 6, '#ffe14a');
+    text('다른 창이 앞에 있어서 총이 멈춰 있어요', W / 2, H / 2 + U * 4.5, U * 3, '#ffffff');
+  }
 }
 
 // 큰 조준점 (프로젝터 화면에서도 잘 보이게). 크기는 설정의 '조준점 크기'
