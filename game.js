@@ -35,7 +35,7 @@ const DEFAULTS = {
   fewEffects: false,   // 효과 줄이기: 터지는 조각 적게, 빛 번짐·불티 끄기
   volume: 0.8,         // 효과음 크기
   inputMode: 'gun',    // 'gun' = 라이트건(마우스로 인식) / 'touch' = 프로젝터 터치 센서
-  aimMode: 'hidden',   // 조준점(과녁): 'hidden' 게임 중 숨김(기본) / 'big' 큰 조준점(2인 대결은 1P/2P 색) / 'small' 작은 마우스 십자 / 'hidden' 게임 중 숨김
+  aimMode: 'big',      // 조준점(과녁): 'big' 큰 조준점(기본, 2인 대결은 1P/2P 색) / 'hidden' 게임 중 숨김 / 'small' 작은 마우스 십자 / 'hidden' 게임 중 숨김
   aimSize: 100,        // 큰 조준점 크기 (%)
   debounceMs: 80,      // (터치 모드에서만) 센서가 한 번의 충격을 여러 번 보내는 것을 무시
   showTouches: true,   // 터치(탄착) 위치를 화면에 표시
@@ -47,8 +47,10 @@ let settings = loadSettings();
 function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
-    // 기본이 '큰 조준점'이던 때 저장된 설정도 한 번은 '게임 중 숨김'으로 (게임 중 과녁이 안 보이게)
-    if (!saved.aimHiddenAgain) { saved.aimMode = 'hidden'; saved.aimHiddenAgain = true; delete saved.aimShownOnce; delete saved.aimHiddenOnce; }
+    // 잠시 '게임 중 숨김'이 기본이던 때 저장된 설정도 한 번은 다시 '큰 조준점'으로 (게임 중 과녁이 보이게)
+    if (!saved.aimShownAgain) { saved.aimMode = 'big'; saved.aimShownAgain = true; delete saved.aimHiddenAgain; delete saved.aimShownOnce; delete saved.aimHiddenOnce; }
+    // 컴퓨터용 프로그램은 받은 버전(조준점 있음/없음)대로 켜진다. 게임 중 설정에서 바꾸는 건 그 판에만
+    if (window.ghastApp?.aimMode) saved.aimMode = window.ghastApp.aimMode;
     return { ...DEFAULTS, ...saved };
   } catch {
     return { ...DEFAULTS };
@@ -922,6 +924,10 @@ const RANK_PENDING_KEY = 'ghast-shooting-pending';   // 아직 못 올린 기록
 const RANK_CACHE_KEY = 'ghast-shooting-rank-cache';  // 마지막으로 받아 온 랭킹 (오프라인일 때 보여줌)
 const PLAY_SPARE_KEY = 'ghast-shooting-play-spare';  // 인터넷이 끊길 때를 대비해 미리 받아 둔 게임 시작 표
 const todayStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
+// 오늘에서 day 일 떨어진 날의 0시 (0 오늘, -1 어제 …). 서머타임이 없어도 날짜 계산은 Date 에 맡긴다
+const dayStart = (day) => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + day); return d.getTime(); };
+const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
+const dayLabel = (day) => { const d = new Date(dayStart(day)); return `${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEKDAYS[d.getDay()]})`; };
 const cleanName = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 12);
 const byRank = (a, b) => b.score - a.score || a.created_at - b.created_at;
 const readJson = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
@@ -1025,18 +1031,23 @@ const Ranking = {
     this.flushing = false;
   },
 
-  // scope: 'today' | 'all' — 아직 못 올린 기록도 함께 보여준다
-  async top(scope, limit = 10) {
-    const since = scope === 'today' ? todayStart() : 0;
+  // scope: 'today' 날짜별(day: 0 오늘, -1 어제 …) | 'all' 전체 — 아직 못 올린 기록도 함께 보여준다.
+  // 기록은 지우지 않고 모두 남아 있어서, 지난 날짜의 랭킹도 언제든 다시 볼 수 있다
+  async top(scope, limit = 10, day = 0) {
+    const daily = scope === 'today';
+    const since = daily ? dayStart(day) : 0;
+    const until = daily ? dayStart(day + 1) : Number.MAX_SAFE_INTEGER;
+    const inRange = (r) => r.created_at >= since && r.created_at < until;
+    const cacheKey = `${RANK_CACHE_KEY}-${scope}${daily && day ? day : ''}`;
     await this.flush();
     let list;
     try {
-      list = await this.request('GET', `?since=${since}&limit=${limit}`);
-      writeJson(`${RANK_CACHE_KEY}-${scope}`, list);
+      list = await this.request('GET', `?since=${since}${daily ? `&until=${until}` : ''}&limit=${limit}`);
+      writeJson(cacheKey, list);
     } catch {
-      list = readJson(`${RANK_CACHE_KEY}-${scope}`, []).filter((r) => r.created_at >= since);
+      list = readJson(cacheKey, []).filter(inRange);
     }
-    const waiting = this.pending().filter((r) => r.created_at >= since).map((r) => ({ ...r, pending: true }));
+    const waiting = this.pending().filter(inRange).map((r) => ({ ...r, pending: true }));
     return [...list, ...waiting].sort(byRank).slice(0, limit);
   },
 
@@ -1067,10 +1078,13 @@ setInterval(() => { if (game.state === 'title') refreshTitleTop(); }, 30_000);
 const RANK_TODAY_LIMIT = 10;
 const RANK_ALL_LIMIT = 100;
 const rankLimit = (scope) => (scope === 'today' ? RANK_TODAY_LIMIT : RANK_ALL_LIMIT);
-const rankView = { scope: 'today', list: null, req: 0, page: 0, perPage: 10 };
+// 날짜별은 1년 전까지 하루씩 넘겨 본다
+const RANK_DAYS_BACK = 365;
+const rankView = { scope: 'today', day: 0, list: null, req: 0, page: 0, perPage: 10 };
 function openRanking() {
   game.rankFrom = game.state === 'result' ? 'result' : 'title';
   game.state = 'ranking';
+  rankView.day = 0; // 열 때는 항상 오늘부터
   setRankScope(rankView.scope);
   updateCornerButtons();
 }
@@ -1079,7 +1093,7 @@ function setRankScope(scope) {
   rankView.list = null;
   rankView.page = 0;
   const req = ++rankView.req;
-  Ranking.top(scope, rankLimit(scope))
+  Ranking.top(scope, rankLimit(scope), rankView.day)
     .then((list) => {
       if (req !== rankView.req) return;
       rankView.list = list;
@@ -1088,6 +1102,17 @@ function setRankScope(scope) {
       if (mine >= 0) rankView.page = Math.floor(mine / rankView.perPage);
     })
     .catch(() => { if (req === rankView.req) rankView.list = []; });
+}
+// 날짜별 랭킹: 전날 / 다음 날 (오늘보다 뒤로는 가지 않는다)
+function turnRankDay(delta) {
+  const day = clamp(rankView.day + delta, -RANK_DAYS_BACK, 0);
+  if (day === rankView.day) return;
+  rankView.day = day;
+  setRankScope('today');
+}
+function setRankTab(scope) {
+  if (scope === 'today') rankView.day = 0;
+  setRankScope(scope);
 }
 function rankPages() { return Math.max(1, Math.ceil((rankView.list?.length || 0) / rankView.perPage)); }
 function turnRankPage(delta) { rankView.page = clamp(rankView.page + delta, 0, rankPages() - 1); }
@@ -1852,6 +1877,31 @@ const nameHint = document.getElementById('name-hint');
 const nameTitle = document.getElementById('name-title');
 const nameOpen = () => !nameEl.hidden;
 let nameMode = 'solo';
+// 랜덤 닉네임: 형용사 + 동물 (예: 용감한 판다). 이름 칸을 열 때마다, 🎲 버튼을 누를 때마다 새로 뽑는다
+const NAME_ADJECTIVES = [
+  '용감한', '날쌘', '졸린', '배고픈', '수줍은', '씩씩한', '엉뚱한', '느긋한', '화난', '신난',
+  '귀여운', '똑똑한', '부지런한', '까칠한', '명랑한', '조용한', '튼튼한', '반짝이는', '수상한', '행복한',
+  '빠른', '느린', '용맹한', '당당한', '든든한', '말랑한', '쿨한', '깜찍한', '날렵한', '무서운',
+];
+const NAME_ANIMALS = [
+  '판다', '호랑이', '토끼', '고양이', '강아지', '여우', '펭귄', '다람쥐', '부엉이', '수달',
+  '코알라', '하마', '기린', '사자', '늑대', '곰', '오리', '거북이', '고슴도치', '햄스터',
+  '돌고래', '치타', '알파카', '너구리', '참새', '두더지', '사슴', '물개', '악어', '고래',
+];
+const pickOne = (list) => list[Math.floor(Math.random() * list.length)];
+// avoid: 이미 쓴 이름과 겹치지 않게 (2인 대결 두 칸, 🎲 다시 뽑기)
+function randomNickname(...avoid) {
+  for (let i = 0; i < 20; i++) {
+    const name = cleanName(`${pickOne(NAME_ADJECTIVES)} ${pickOne(NAME_ANIMALS)}`);
+    if (!avoid.includes(name)) return name;
+  }
+  return cleanName(`${pickOne(NAME_ADJECTIVES)} ${pickOne(NAME_ANIMALS)}`);
+}
+function fillRandomNames() {
+  const first = randomNickname(nameInput.value);
+  nameInput.value = first;
+  if (nameMode === 'versus') nameInput2.value = randomNickname(first, nameInput2.value);
+}
 // mode: 'solo' 1인 기록전(닉네임 필수, 랭킹 저장) / 'versus' 2인 대결(이름 두 개, 비우면 1P·2P)
 function openNameEntry(mode = 'solo') {
   Sound.init();
@@ -1870,16 +1920,18 @@ function openNameEntry(mode = 'solo') {
   const versus = mode === 'versus';
   nameForm.classList.toggle('versus', versus);
   nameTitle.textContent = versus ? '2인 대결 — 이름을 입력하세요' : '1인 기록전 — 닉네임을 입력하세요';
-  nameInput.placeholder = versus ? '1P 이름' : '예: 가스트헌터';
+  nameInput.placeholder = versus ? '1P 이름' : '예: 용감한 판다';
   nameInput.value = '';
   nameInput2.value = '';
   nameInput2.hidden = !versus;
+  fillRandomNames();
   nameHint.textContent = versus
-    ? '비워 두면 1P · 2P 로 표시돼요 (대결은 랭킹에 저장되지 않아요)'
-    : '랭킹에 이 이름으로 기록돼요 (최대 12자)';
+    ? '랜덤 이름이에요. 🎲 로 다시 뽑거나 직접 고쳐도 돼요 (대결은 랭킹에 저장되지 않아요)'
+    : '랜덤 이름으로 랭킹에 기록돼요. 🎲 로 다시 뽑거나 직접 고쳐도 돼요 (최대 12자)';
   nameHint.classList.remove('error');
   nameEl.hidden = false;
-  setTimeout(() => nameInput.focus(), 0);
+  // 글자를 치면 랜덤 이름이 바로 지워지고 새로 써지도록 전체 선택
+  setTimeout(() => { nameInput.focus(); nameInput.select(); }, 0);
 }
 function closeNameEntry() { nameEl.hidden = true; }
 // 2인 대결: 1P 칸에서 Enter 를 누르면 바로 시작하지 않고 2P 칸으로 넘어간다
@@ -1897,17 +1949,15 @@ nameForm.addEventListener('submit', (e) => {
     startGame('versus', [name || '1P', cleanName(nameInput2.value) || '2P']);
     return;
   }
-  if (!name) {
-    nameHint.textContent = '닉네임을 입력해 주세요!';
-    nameHint.classList.add('error');
-    nameInput.select();
-    nameInput.focus();
-    return;
-  }
   closeNameEntry();
-  startGame('solo', [name]);
+  // 다 지우고 시작하면 랜덤 이름으로
+  startGame('solo', [name || randomNickname()]);
 });
 document.getElementById('name-cancel').addEventListener('click', closeNameEntry);
+document.getElementById('name-random').addEventListener('click', () => {
+  fillRandomNames();
+  nameHint.classList.remove('error');
+});
 // 결과 화면 → 다음 사람/새 대결 (이름 새로 입력)
 function nextPlayer() { openNameEntry(game.mode); }
 function closeSettings() { settingsEl.hidden = true; }
@@ -2393,9 +2443,10 @@ function drawRanking(time) {
   rankView.page = today ? 0 : clamp(rankView.page, 0, pages - 1);
   const start = rankView.page * per;
 
-  text(today ? '오늘의 TOP 10' : '전체 랭킹', cx, py + U * 7, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
-  button('오늘', cx - U * 13, py + U * 17, U * 22, U * 7, () => setRankScope('today'), true, rankView.scope === 'today');
-  button('전체', cx + U * 13, py + U * 17, U * 22, U * 7, () => setRankScope('all'), true, rankView.scope === 'all');
+  const dayTitle = rankView.day === 0 ? `오늘의 TOP 10 · ${dayLabel(0)}` : `${dayLabel(rankView.day)} TOP 10`;
+  text(today ? dayTitle : '전체 랭킹', cx, py + U * 7, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
+  button('날짜별', cx - U * 13, py + U * 17, U * 22, U * 7, () => setRankTab('today'), true, rankView.scope === 'today');
+  button('전체', cx + U * 13, py + U * 17, U * 22, U * 7, () => setRankTab('all'), true, rankView.scope === 'all');
 
   const top = py + U * 31, bottom = py + ph - U * 17;
   const rowH = Math.min(U * 6.4, (bottom - top) / 10);
@@ -2442,7 +2493,8 @@ function drawRanking(time) {
   if (!list) {
     text('불러오는 중…', cx, top + rowH * 3, U * 4, '#ffffff');
   } else if (!list.length) {
-    text(rankView.scope === 'today' ? '오늘은 아직 기록이 없어요' : '아직 기록이 없어요', cx, top + rowH * 3, U * 4, '#ffffff');
+    const empty = !today ? '아직 기록이 없어요' : rankView.day === 0 ? '오늘은 아직 기록이 없어요' : '이날은 기록이 없어요';
+    text(empty, cx, top + rowH * 3, U * 4, '#ffffff');
   } else {
     for (let c = 0; c < cols; c++) {
       const from = start + c * 10;
@@ -2451,10 +2503,12 @@ function drawRanking(time) {
     }
   }
 
-  // 아래: (전체일 때만) 이전 · 다음 과 지금 보고 있는 순위 범위
+  // 아래: 날짜별은 전날 · 다음 날, 전체는 이전 · 다음 쪽과 지금 보고 있는 순위 범위
   const by = py + ph - U * 7;
   if (today) {
-    button('돌아가기', cx, by, U * 36, U * 8, closeRanking);
+    button('◀ 전날', cx - U * 34, by, U * 24, U * 8, () => turnRankDay(-1), rankView.day > -RANK_DAYS_BACK);
+    button('돌아가기', cx, by, U * 30, U * 8, closeRanking);
+    button('다음 날 ▶', cx + U * 34, by, U * 24, U * 8, () => turnRankDay(1), rankView.day < 0);
   } else {
     button('◀ 이전', cx - U * 34, by, U * 24, U * 8, () => turnRankPage(-1), rankView.page > 0);
     button('돌아가기', cx, by, U * 30, U * 8, closeRanking);
@@ -2463,7 +2517,7 @@ function drawRanking(time) {
   if (list?.length) {
     const end = Math.min(list.length, start + per);
     const info = today
-      ? '오늘 올라온 기록 중 상위 10명  ·  전체 랭킹은 [전체] 에서'
+      ? `${rankView.day === 0 ? '오늘' : '이날'} 올라온 기록 중 상위 10명  ·  지난 날짜는 [◀ 전날] 로`
       : `${start + 1}~${end}위  ·  ${rankView.page + 1}/${pages}쪽  ·  총 ${list.length}명${list.length >= RANK_ALL_LIMIT ? ` (상위 ${RANK_ALL_LIMIT}명까지 표시)` : ''}`;
     text(info, cx, by - U * 7, U * 2.8, '#c9a89a');
   }

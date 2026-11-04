@@ -58,8 +58,8 @@
         </label>
         <label>조준점
           <select name="aimMode">
-            <option value="hidden">게임 중 숨김 (과녁 없음, 기본)</option>
-            <option value="big">큰 조준점 (과녁 보이기)</option>
+            <option value="big">큰 조준점 (과녁 보이기, 기본)</option>
+            <option value="hidden">게임 중 숨김 (과녁 없음)</option>
             <option value="small">작은 마우스 십자</option>
           </select>
         </label>
@@ -92,12 +92,13 @@
   <div id="name-entry" class="overlay" hidden>
     <form id="name-form" autocomplete="off">
       <h2 id="name-title">닉네임을 입력하세요</h2>
-      <input name="nickname" maxlength="12" placeholder="예: 가스트헌터" spellcheck="false">
+      <input name="nickname" maxlength="12" placeholder="예: 용감한 판다" spellcheck="false">
       <!-- 2인 대결일 때만 보이는 2P 이름 칸 -->
       <input name="nickname2" maxlength="12" placeholder="2P 이름" spellcheck="false" hidden>
       <p class="hint" id="name-hint">랭킹에 이 이름으로 기록돼요 (최대 12자)</p>
       <div class="actions">
         <button type="button" id="name-cancel">취소</button>
+        <button type="button" id="name-random">🎲 다른 이름</button>
         <button type="submit" class="primary">시작!</button>
       </div>
     </form>

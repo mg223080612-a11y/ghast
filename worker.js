@@ -92,11 +92,13 @@ async function handle(request, env, url) {
   }
 
   if (url.pathname === '/api/scores' && request.method === 'GET') {
+    // since ~ until(안 넣으면 끝까지) 사이에 올라온 기록. 날짜별 랭킹은 그날 0시 ~ 다음 날 0시
     const since = toInt(url.searchParams.get('since'), 0, Number.MAX_SAFE_INTEGER, 0);
+    const until = toInt(url.searchParams.get('until'), 1, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
     const limit = toInt(url.searchParams.get('limit'), 1, 200, 10);
     const { results } = await db
-      .prepare('SELECT id, name, score, kills, created_at FROM scores WHERE created_at >= ? ORDER BY score DESC, created_at ASC LIMIT ?')
-      .bind(since, limit)
+      .prepare('SELECT id, name, score, kills, created_at FROM scores WHERE created_at >= ? AND created_at < ? ORDER BY score DESC, created_at ASC LIMIT ?')
+      .bind(since, until, limit)
       .all();
     return json(200, results);
   }
