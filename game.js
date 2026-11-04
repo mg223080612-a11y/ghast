@@ -1330,6 +1330,9 @@ function endGame() {
   if (game.mode !== 'solo') return;
   const me = game.players[0];
   game.rankInfo = { status: 'saving' };
+  // 1인 기록전은 끝나자마자 오늘 랭킹을 보여 준다 (저장이 끝나면 내 기록이 들어간 순위로 다시 불러온다)
+  rankView.scope = 'today';
+  openRanking();
   Promise.resolve(game.playToken)
     .then((token) => Ranking.add({ name: me.name || '이름없음', score: me.score, kills: me.stats.kills, token }))
     .then((r) => {
@@ -1337,7 +1340,8 @@ function endGame() {
       game.rankInfo = { status: 'saved', ...r };
       game.lastEntryId = r.id;
     })
-    .catch((err) => { console.error(err); game.rankInfo = { status: 'error' }; });
+    .catch((err) => { console.error(err); game.rankInfo = { status: 'error' }; })
+    .finally(() => { if (game.state === 'ranking' && game.rankFrom === 'result') setRankScope(rankView.scope); });
 }
 
 // 2인 대결에서 각 플레이어를 구분하는 색 (조준점·점수판·점수 팝업)
@@ -1467,6 +1471,16 @@ function onTap(x, y, who = 0, source = 'mouse') {
   if (isDuplicateTap(x, y, now)) return;
   if (!allowShot(source, now)) return; // 연사: 조용히 무시 (점수·감점·소리·표시 없음)
   Sound.init();
+
+  // 이름 입력 창이 떠 있으면 게임 화면 대신 창 안의 버튼(시작! · 🎲 · 취소)을 누른다.
+  // 조이스틱 모드 총은 마우스 클릭이 아니라서 직접 그 자리의 버튼을 찾아 누른다. 창 밖을 쏘면 아무 일도 없다
+  if (nameOpen()) {
+    const el = document.elementFromPoint(x, y);
+    const btn = el?.closest('#name-form button');
+    if (btn) btn.click();
+    else if (el?.closest('#name-form input')) el.closest('input').focus();
+    return;
+  }
 
   if (settings.showTouches) {
     addPart({ kind: 'ring', x, y, size: U * 1.5, grow: U * 18, life: 0.3, color: 'rgba(255,255,255,0.9)' });
@@ -1696,10 +1710,14 @@ const Guns = {
 
   // 화면에 총 조준점 그리기 (최근에 쓴 총만). 지정된 총은 1P/2P 색과 이름표
   draw(time) {
+    const now = performance.now();
+    // 이름 입력 창은 캔버스보다 위에 떠서 조준점이 가려진다 → 창 위에 따로 띄운 조준점(#gun-cursor)을 옮긴다
+    const recent = nameOpen() && this.list().filter((s) => now - s.lastActive <= 10000).sort((a, b) => b.lastActive - a.lastActive)[0];
+    gunCursor.hidden = !recent;
+    if (recent) gunCursor.style.transform = `translate(${recent.x}px, ${recent.y}px)`;
     // 게임 중에는 '큰 조준점' 설정일 때만 총 조준점(과녁)을 그린다. 메뉴·총 테스트에서는 버튼을 고를 수 있게 항상 보인다
     const inGame = (game.state === 'play' || game.state === 'countdown') && !game.paused;
     if (inGame && settings.aimMode !== 'big') return;
-    const now = performance.now();
     for (const s of this.list()) {
       if (now - s.lastActive > 10000) continue;
       const who = this.playerOf(s);
@@ -1742,6 +1760,7 @@ window.addEventListener('keydown', (e) => {
       e.preventDefault();
       if (game.state === 'title') openNameEntry('solo');
       else if (game.state === 'result' && game.resultTime > RESULT_LOCK) nextPlayer();
+      else if (game.state === 'ranking' && game.rankFrom === 'result') { if (game.resultTime > RESULT_LOCK) nextPlayer(); }
       else if (game.state === 'ranking') closeRanking();
       else if (game.state === 'aimtest') goTitle();
       else if (game.state === 'gunsetup') closeGunSetup();
@@ -1876,6 +1895,7 @@ const nameInput2 = nameForm.elements.nickname2;
 const nameHint = document.getElementById('name-hint');
 const nameTitle = document.getElementById('name-title');
 const nameOpen = () => !nameEl.hidden;
+const gunCursor = document.getElementById('gun-cursor');
 let nameMode = 'solo';
 // 랜덤 닉네임: 형용사 + 동물 (예: 용감한 판다). 이름 칸을 열 때마다, 🎲 버튼을 누를 때마다 새로 뽑는다
 const NAME_ADJECTIVES = [
@@ -2448,7 +2468,9 @@ function drawRanking(time) {
   button('날짜별', cx - U * 13, py + U * 17, U * 22, U * 7, () => setRankTab('today'), true, rankView.scope === 'today');
   button('전체', cx + U * 13, py + U * 17, U * 22, U * 7, () => setRankTab('all'), true, rankView.scope === 'all');
 
-  const top = py + U * 31, bottom = py + ph - U * 17;
+  // 게임이 끝나 바로 뜬 랭킹은 아래에 내 기록 두 줄이 더 들어가서 표를 조금 줄인다
+  const afterGame = game.rankFrom === 'result' && game.mode === 'solo';
+  const top = py + U * 31, bottom = py + ph - U * (afterGame ? 21 : 17);
   const rowH = Math.min(U * 6.4, (bottom - top) / 10);
   const colW = (pw - U * 6) / cols;
   const size = Math.min(U * 3.8, rowH * 0.62);
@@ -2505,6 +2527,25 @@ function drawRanking(time) {
 
   // 아래: 날짜별은 전날 · 다음 날, 전체는 이전 · 다음 쪽과 지금 보고 있는 순위 범위
   const by = py + ph - U * 7;
+  if (afterGame) {
+    // 방금 끝난 판: 내 점수·순위·보상을 보여 주고, 다음 사람이 바로 시작할 수 있게
+    const me = game.players[0];
+    const ri = game.rankInfo;
+    const win = me.score >= settings.rewardScore;
+    let mine = `${me.name || '이름없음'} 님 ${me.score}점`;
+    if (ri?.status === 'saving') mine += '  ·  랭킹 저장 중…';
+    else if (ri?.status === 'saved' && !ri.pending) mine += `  ·  오늘 ${ri.rankToday}위 · 전체 ${ri.rankAll}위`;
+    else if (ri?.status === 'saved') mine += '  ·  이 PC에 보관 (연결되면 올라가요)';
+    else if (ri?.status === 'rejected' || ri?.status === 'error') mine += '  ·  랭킹 저장 실패';
+    text(mine, cx, by - U * 11, U * 4, '#ffe14a');
+    text(win ? '가스트의 눈물 획득! 진행요원에게 받아가세요' : `${settings.rewardScore}점 이상이면 가스트의 눈물을 받을 수 있어요`,
+      cx, by - U * 6.2, U * 3, win ? '#9ff6ff' : '#c9a89a');
+    const ready = game.resultTime > RESULT_LOCK; // 계속 쏘던 총알이 실수로 버튼을 누르지 않게 잠깐 잠금
+    button('다음 사람', cx - U * 33, by, U * 29, U * 8, nextPlayer, ready, true);
+    button('다시 하기', cx, by, U * 29, U * 8, () => startGame(), ready);
+    button('결과 보기', cx + U * 33, by, U * 29, U * 8, closeRanking, ready);
+    return;
+  }
   if (today) {
     button('◀ 전날', cx - U * 34, by, U * 24, U * 8, () => turnRankDay(-1), rankView.day > -RANK_DAYS_BACK);
     button('돌아가기', cx, by, U * 30, U * 8, closeRanking);
@@ -2776,7 +2817,8 @@ function update(dt) {
     fireballs = fireballs.filter((f) => !f.dead);
     if (game.timeLeft <= 0) endGame();
   }
-  if (game.state === 'result') game.resultTime += dt;
+  // 결과 화면, 그리고 게임이 끝나 바로 뜬 랭킹 화면에서도 잠금 시간을 센다
+  if (game.state === 'result' || (game.state === 'ranking' && game.rankFrom === 'result')) game.resultTime += dt;
 
   updateParts(dt);
   shake = Math.max(0, shake - dt * U * 8);
