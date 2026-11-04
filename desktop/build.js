@@ -7,9 +7,13 @@
 const { build } = require('electron-builder');
 const base = require('../package.json').build;
 
+// macName: 맥 앱 이름 (영어만). 앱 이름에 한글이 있으면 맥 앱이 켜지자마자 죽는다 (Electron 44, macOS 26 에서 확인):
+//   electron-builder 는 Helper 앱 파일 이름의 한글을 NFD(자모를 풀어 쓴 형태)로 만드는데,
+//   Electron 은 Helper 를 Info.plist 의 앱 이름(NFC 한글)으로 찾아서 둘이 어긋난다.
+//   게임 안 이름(메뉴의 '…종료' 등)은 extraMetadata 의 한글 이름이 그대로 쓰인다.
 const VARIANTS = {
-  aim:   { aimMode: 'big',    label: '조준점 있음', id: 'aim' },
-  noaim: { aimMode: 'hidden', label: '조준점 없음', id: 'noaim' },
+  aim:   { aimMode: 'big',    label: '조준점 있음', id: 'aim',   macName: 'Ghast Shooting (Aim)' },
+  noaim: { aimMode: 'hidden', label: '조준점 없음', id: 'noaim', macName: 'Ghast Shooting (No Aim)' },
 };
 
 (async () => {
@@ -24,7 +28,7 @@ const VARIANTS = {
       config: {
         ...base,
         appId: `${base.appId}.${v.id}`,
-        productName: name,
+        productName: mac ? v.macName : name,
         publish: null, // 만든 파일을 어디에도 자동으로 올리지 않는다 (맥은 workflow 가 Releases 에 올림)
         // 프로그램 안 package.json 에 적혀서 main.js 가 읽는다
         extraMetadata: { productName: name, ghastAim: v.aimMode },

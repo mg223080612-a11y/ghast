@@ -1586,11 +1586,16 @@ window.addEventListener('pointermove', (e) => {
 //   조준 = 조이스틱 축(-1 ~ 1) → 화면 위치, 방아쇠 = 버튼 하나
 // 로 읽는다. 어느 총이 1P/2P 인지, 어느 버튼이 방아쇠인지는 '총 연결' 화면에서 방아쇠를 당겨 정한다.
 const GUN_SAVE_KEY = 'ghast-shooting-guns';
+// 맥은 메뉴 막대(화면 맨 위)·Dock 이 availTop/availLeft 에 들어가 있다 (윈도우는 작업 표시줄이 보통 아래라 0)
+// → 맥에서 그 값을 화면의 시작점으로 보면 메뉴 막대(Dock) 크기만큼 조준이 어긋난다.
+//   맥은 화면 왼쪽 위를 0, 0 으로 본다 (프로젝터는 '미러링'으로 쓰므로 화면이 하나)
+const IS_MAC = /Mac/i.test(navigator.userAgentData?.platform || navigator.platform || '');
 // 게임 화면(창 안쪽)의 왼쪽 위가 모니터 화면에서 어디에 있는지 (전체화면이면 0, 0)
 function screenOffset() {
   if (window.innerWidth >= screen.width && window.innerHeight >= screen.height) return { x: 0, y: 0 };
   const border = Math.max(0, (window.outerWidth - window.innerWidth) / 2);
-  const left = (screen.left ?? screen.availLeft ?? 0), top = (screen.top ?? screen.availTop ?? 0);
+  const left = screen.left ?? (IS_MAC ? 0 : screen.availLeft ?? 0);
+  const top = screen.top ?? (IS_MAC ? 0 : screen.availTop ?? 0);
   return {
     x: window.screenX - left + border,
     y: window.screenY - top + Math.max(0, window.outerHeight - window.innerHeight - border),
@@ -1736,6 +1741,9 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 
 window.addEventListener('keydown', (e) => {
+  // 맥의 Cmd 조합(Cmd+Q 종료, Cmd+H 숨기기, Cmd+C 복사, Cmd+R 새로 고침 등)은 게임 단축키로 쓰지 않는다
+  // (안 그러면 Cmd+R 이 랭킹을, Cmd+C 가 처음 화면을 연다)
+  if (e.metaKey) return;
   // 설정 창·닉네임 입력 중에는 게임 단축키를 쓰지 않는다 (글자 입력과 겹치지 않게)
   if (settingsOpen()) {
     if (e.key === 'Escape') closeSettings();

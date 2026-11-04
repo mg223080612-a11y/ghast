@@ -1,2 +1,4 @@
 # 배치 파일은 Windows 줄바꿈(CRLF)이어야 goto/라벨이 제대로 동작함
 *.bat text eol=crlf
+# 맥 실행기(.command)는 맥 줄바꿈(LF)이어야 bash 가 읽을 수 있음
+*.command text eol=lf
