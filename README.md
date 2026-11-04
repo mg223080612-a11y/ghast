@@ -204,6 +204,15 @@
 - 관리자 키는 프로그램에 들어 있지 않습니다. 기록을 지우려면 설정(S)의 관리자 키 칸에 직접 넣으세요.
 - 프로그램 다시 만들기: `npm install` → `npm run build:exe` (두 버전 모두. 하나만: `npm run build:exe -- aim` 또는 `-- noaim`). 게임 파일을 고친 뒤에는 꼭 다시 만들어야 반영됩니다. 빌드 없이 확인만: `npm run app`
 
+### 맥에서 쓰기
+
+- **가장 쉬운 방법**: 맥의 크롬에서 https://ghast-shooting.gcinhak.workers.dev 를 열고 **F** 로 전체화면. 총(조이스틱 모드)도 그대로 됩니다.
+- **맥용 앱**: GitHub 저장소 → **Releases → `mac-latest`** 에서 zip 을 받아 풀고, 앱을 응용 프로그램 폴더로 옮깁니다.
+  - 애플 실리콘(M1~M4) 맥은 `-mac-arm64.zip`, 인텔 맥은 `-mac-x64.zip`. `aim` = 조준점 있음, `noaim` = 조준점 없음.
+  - 처음 열 때 "확인되지 않은 개발자" 경고가 뜨면 앱을 **오른쪽 클릭 → 열기 → 열기**. 안 되면 시스템 설정 → 개인정보 보호 및 보안 → 맨 아래 **그래도 열기**.
+  - 종료는 **Cmd+Q**, 전체화면 전환은 **F**.
+- 맥 앱은 맥에서만 만들 수 있어서, 게임 파일을 main 에 올리면 GitHub 의 맥 컴퓨터가 자동으로 만듭니다 (`.github/workflows/mac.yml`, 맥에서 직접: `npm run build:mac`).
+
 ## 개발자용
 
 - 게임 수정 후 온라인 반영: `npx wrangler deploy`

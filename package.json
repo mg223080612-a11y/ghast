@@ -8,7 +8,8 @@
   "main": "desktop/main.js",
   "scripts": {
     "app": "electron .",
-    "build:exe": "node desktop/build.js"
+    "build:exe": "node desktop/build.js",
+    "build:mac": "node desktop/build.js mac"
   },
   "devDependencies": {
     "electron": "44.10.0",

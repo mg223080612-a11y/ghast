@@ -67,7 +67,10 @@ function toggleFullScreen() {
 ipcMain.on('toggle-fullscreen', (e) => { if (win && e.sender === win.webContents) toggleFullScreen(); });
 
 app.whenReady().then(() => {
-  Menu.setApplicationMenu(null);
+  // 메뉴 막대는 숨긴다. 맥은 메뉴가 없으면 Cmd+Q(종료)·복사/붙여넣기가 안 돼서 기본 메뉴만 남긴다
+  Menu.setApplicationMenu(process.platform === 'darwin'
+    ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }])
+    : null);
   // 게임은 카메라·마이크·위치·알림 같은 권한이 필요 없다 → 전부 거절 (게임패드·소리는 권한 없이 동작)
   session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => callback(permission === 'fullscreen'));
   session.defaultSession.setPermissionCheckHandler((wc, permission) => permission === 'fullscreen');

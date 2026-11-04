@@ -1,0 +1,55 @@
+# 맥용 앱 만들기
+# 맥 앱은 맥에서만 만들 수 있어서 (윈도우에서는 electron-builder 가 막는다) GitHub 의 맥 컴퓨터에서 만든다.
+# 게임 파일을 main 에 올리면 자동으로 만들어지고, GitHub 의 Releases → 'mac-latest' 에 zip 이 올라간다.
+# 직접 다시 만들려면: GitHub → Actions → 맥용 앱 만들기 → Run workflow
+name: 맥용 앱 만들기
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - game.js
+      - index.html
+      - style.css
+      - assets/**
+      - fonts/**
+      - desktop/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/mac.yml
+
+permissions:
+  contents: write   # Releases 에 파일을 올리기 위해
+
+concurrency:
+  group: mac-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:mac
+      - name: Releases 'mac-latest' 에 올리기
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mac-latest
+          name: 맥용 가스트 사격 (최신)
+          prerelease: true
+          make_latest: false
+          body: |
+            맥용 가스트 사격 — main 에 올라간 최신 게임으로 자동으로 만든 파일입니다.
+            - 애플 실리콘(M1·M2·M3·M4) 맥: `-mac-arm64.zip`
+            - 인텔 맥: `-mac-x64.zip`
+            - `aim` = 조준점 있음, `noaim` = 조준점 없음
+            처음 열 때 "확인되지 않은 개발자" 경고가 뜨면: 앱을 오른쪽 클릭 → 열기 → 열기.
+            그래도 안 열리면 시스템 설정 → 개인정보 보호 및 보안 → 맨 아래 '그래도 열기'.
+          files: release/*-mac-*.zip
+          fail_on_unmatched_files: true
