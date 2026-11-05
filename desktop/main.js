@@ -19,15 +19,13 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
 ]);
 
-// 조준점 있는/없는 버전(desktop/build.js)은 이름이 달라도 설정·총 보정을 같은 폴더에 저장해 같이 쓴다
+// 설정·총 보정은 앱 이름과 상관없이 늘 이 폴더에 저장한다 (예전 '조준점 있음/없음' 두 버전도 이 폴더를 써서 그대로 이어진다)
 app.setPath('userData', path.join(app.getPath('appData'), '가스트 사격'));
 
 // 같은 프로그램을 두 번 켜면 새 창 대신 이미 켜진 창을 앞으로
 if (!app.requestSingleInstanceLock()) app.quit();
 
 const root = path.join(__dirname, '..');
-// 이 exe 의 조준점 버전: 'big' 있음 / 'hidden' 없음 (build.js 가 package.json 에 적어 둔다. 없으면 게임 설정대로)
-const aimMode = require('../package.json').ghastAim || null;
 let win = null;
 
 function createWindow() {
@@ -44,7 +42,6 @@ function createWindow() {
       contextIsolation: true,
       sandbox: true,
       preload: path.join(__dirname, 'preload.js'),
-      additionalArguments: aimMode ? [`--ghast-aim=${aimMode}`] : [],
     },
   });
   if (isMac) setFull(true);

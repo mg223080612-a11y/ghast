@@ -35,7 +35,7 @@ const DEFAULTS = {
   fewEffects: false,   // 효과 줄이기: 터지는 조각 적게, 빛 번짐·불티 끄기
   volume: 0.8,         // 효과음 크기
   inputMode: 'gun',    // 'gun' = 라이트건(마우스로 인식) / 'touch' = 프로젝터 터치 센서
-  aimMode: 'big',      // 조준점(과녁): 'big' 큰 조준점(기본, 2인 대결은 1P/2P 색) / 'hidden' 게임 중 숨김 / 'small' 작은 마우스 십자 / 'hidden' 게임 중 숨김
+  aimMode: 'big',      // 조준점(과녁): 'big' 큰 조준점(기본, 2인 대결은 1P/2P 색) / 'hidden' 게임 중 숨김 / 'small' 작은 마우스 십자
   aimSize: 100,        // 큰 조준점 크기 (%)
   debounceMs: 80,      // (터치 모드에서만) 센서가 한 번의 충격을 여러 번 보내는 것을 무시
   showTouches: true,   // 터치(탄착) 위치를 화면에 표시
@@ -49,8 +49,7 @@ function loadSettings() {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
     // 잠시 '게임 중 숨김'이 기본이던 때 저장된 설정도 한 번은 다시 '큰 조준점'으로 (게임 중 과녁이 보이게)
     if (!saved.aimShownAgain) { saved.aimMode = 'big'; saved.aimShownAgain = true; delete saved.aimHiddenAgain; delete saved.aimShownOnce; delete saved.aimHiddenOnce; }
-    // 컴퓨터용 프로그램은 받은 버전(조준점 있음/없음)대로 켜진다. 게임 중 설정에서 바꾸는 건 그 판에만
-    if (window.ghastApp?.aimMode) saved.aimMode = window.ghastApp.aimMode;
+    // 조준점은 처음 화면·이름 입력 창·설정에서 고르고, 고른 값이 저장된다 (toggleAim)
     return { ...DEFAULTS, ...saved };
   } catch {
     return { ...DEFAULTS };
@@ -1467,6 +1466,9 @@ let buttons = [];
 // who: 쏜 사람 (0 = 1P, 1 = 2P). 마우스·1인 기록전은 항상 1P
 // source: 어느 입력 장치에서 왔는지 (연사 차단을 장치마다 따로 하려고)
 function onTap(x, y, who = 0, source = 'mouse') {
+  // 설정 창이 열려 있으면 총알이 창 뒤의 화면(처음 화면 버튼 등)을 누르지 않게 한다.
+  // 마우스는 창이 막아 주지만, 조이스틱 모드 총은 창과 상관없이 여기로 들어온다
+  if (settingsOpen()) return;
   const now = performance.now();
   if (isDuplicateTap(x, y, now)) return;
   if (!allowShot(source, now)) return; // 연사: 조용히 무시 (점수·감점·소리·표시 없음)
@@ -1791,6 +1793,9 @@ window.addEventListener('keydown', (e) => {
     case 'Numpad2':
       if (game.state === 'title') { e.preventDefault(); openNameEntry('versus'); }
       break;
+    case 'KeyV':     // 조준점 켜기/끄기 (처음 화면에서만. 엑스거너 총의 키 버튼과 겹치지 않는 글자)
+      if (game.state === 'title') toggleAim();
+      break;
     case 'KeyG':     // 총 연결 (2인 대결용 1P/2P 지정)
       if (game.state === 'title') openGunSetup();
       else if (game.state === 'gunsetup') closeGunSetup();
@@ -1905,6 +1910,34 @@ const nameTitle = document.getElementById('name-title');
 const nameOpen = () => !nameEl.hidden;
 const gunCursor = document.getElementById('gun-cursor');
 let nameMode = 'solo';
+
+// ---------- 조준점 켜기/끄기 ----------
+// 처음 화면 [조준점] 버튼 · V 키 · 이름 입력 창 🎯 버튼이 모두 이 값 하나(settings.aimMode)를 바꾸고, 고른 값은 저장된다.
+// 게임 중에는 바꿀 수 없다 (처음 화면·이름 입력 창·설정에서만). '작은 십자'는 설정 창에서만 고른다
+const AIM_LABELS = { big: '조준점 켬', small: '조준점 작게', hidden: '조준점 끔' };
+const aimOn = () => settings.aimMode !== 'hidden';
+const aimLabel = () => AIM_LABELS[settings.aimMode] || AIM_LABELS.big;
+// 처음 화면 조준점 버튼의 가운데 ('랭킹' 오른쪽. 화면 폭은 늘 160U 이상이라 안 넘친다)
+const titleAimButtonPos = () => ({ x: W / 2 + U * 62.5, y: H * 0.84 });
+const nameAimButton = document.getElementById('name-aim');
+function updateNameAimButton() {
+  nameAimButton.textContent = `🎯 ${aimLabel()}`;
+  nameAimButton.classList.toggle('on', aimOn());
+}
+// 바뀐 상태는 버튼 글자·색(초록 켬 / 회색 끔)으로 바로 보인다. 큰 안내 글자는 처음 화면 제목·이름 입력 창 뒤에 겹쳐
+// 지저분해서 띄우지 않고, 처음 화면에서는 버튼 바로 위에 작은 글자만 잠깐 띄운다 (빗나간 총알에 바뀌어도 알아채게)
+function toggleAim() {
+  settings = { ...settings, aimMode: aimOn() ? 'hidden' : 'big' };
+  saveSettings();
+  updateNameAimButton();
+  Sound.tick();
+  if (game.state === 'title' && !nameOpen()) {
+    const p = titleAimButtonPos();
+    addPart({ kind: 'text', text: aimOn() ? '조준점 켜짐' : '조준점 꺼짐', x: p.x, y: p.y - U * 9, vy: -U * 3, size: U * 3.4, life: 1.4, color: aimOn() ? '#9fe870' : '#d8d8d8', shadow: '#1a1a1a' });
+  }
+}
+// 이름 입력 창: 시작 직전에 확인하고 바꾼다 (총으로 쏴도 눌린다). 누른 뒤에도 Enter 로 바로 시작하도록 이름 칸으로 돌아간다
+nameAimButton.addEventListener('click', () => { toggleAim(); nameInput.focus(); });
 // 랜덤 닉네임: 형용사 + 동물 (예: 용감한 판다). 이름 칸을 열 때마다, 🎲 버튼을 누를 때마다 새로 뽑는다
 const NAME_ADJECTIVES = [
   '용감한', '날쌘', '졸린', '배고픈', '수줍은', '씩씩한', '엉뚱한', '느긋한', '화난', '신난',
@@ -1957,6 +1990,7 @@ function openNameEntry(mode = 'solo') {
     ? '랜덤 이름이에요. 🎲 로 다시 뽑거나 직접 고쳐도 돼요 (대결은 랭킹에 저장되지 않아요)'
     : '랜덤 이름으로 랭킹에 기록돼요. 🎲 로 다시 뽑거나 직접 고쳐도 돼요 (최대 12자)';
   nameHint.classList.remove('error');
+  updateNameAimButton();
   nameEl.hidden = false;
   // 글자를 치면 랜덤 이름이 바로 지워지고 새로 써지도록 전체 선택
   setTimeout(() => { nameInput.focus(); nameInput.select(); }, 0);
@@ -2213,7 +2247,10 @@ function drawTitle(time) {
   button('1인 기록전', cx - U * 30, H * 0.84, U * 36, U * 12, () => openNameEntry('solo'), true, true);
   button('2인 대결', cx + U * 8, H * 0.84, U * 32, U * 12, () => openNameEntry('versus'), true, true);
   button('랭킹', cx + U * 38, H * 0.84, U * 20, U * 12, openRanking);
-  const hint = 'Space 1인 · 2 대결 · R 랭킹 · G 총 연결 · S 설정';
+  // 조준점 켜기/끄기: 켜져 있으면 초록, 꺼져 있으면 회색. 큰 버튼들과 구분되게 조금 작게
+  const aimPos = titleAimButtonPos();
+  button(aimLabel(), aimPos.x, aimPos.y, U * 25, U * 10, toggleAim, true, aimOn());
+  const hint = 'Space 1인 · 2 대결 · R 랭킹 · V 조준점 · G 총 연결 · S 설정';
   text(hint, cx, H * 0.84 + U * 10, U * 2.6, '#c9a89a');
   // 오늘 랭킹은 버튼·안내 글자와 겹치지 않게 그 왼쪽까지만
   ctx.font = `bold ${Math.round(U * 2.6)}px ${FONT}`;

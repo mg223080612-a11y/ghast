@@ -83,7 +83,7 @@
         <button type="button" id="rank-clear">랭킹 전체 삭제</button>
       </div>
       <p class="keys">
-        단축키 — <b>Space</b> 시작 · <b>R</b> 랭킹 · <b>P</b> 일시정지 · <b>Q</b> 처음 화면 · <b>F</b> 전체화면 · <b>M</b> 소리 끄기 · <b>S</b> 설정
+        단축키 — <b>Space</b> 시작 · <b>R</b> 랭킹 · <b>V</b> 조준점 켜기/끄기 (처음 화면) · <b>P</b> 일시정지 · <b>Q</b> 처음 화면 · <b>F</b> 전체화면 · <b>M</b> 소리 끄기 · <b>S</b> 설정
       </p>
     </form>
   </div>
@@ -96,6 +96,8 @@
       <!-- 2인 대결일 때만 보이는 2P 이름 칸 -->
       <input name="nickname2" maxlength="12" placeholder="2P 이름" spellcheck="false" hidden>
       <p class="hint" id="name-hint">랭킹에 이 이름으로 기록돼요 (최대 12자)</p>
+      <!-- 조준점 켜기/끄기 (시작! 과 다른 줄에 두어 총으로 잘못 맞히지 않게). 글자는 game.js 가 채운다 -->
+      <div class="aim-row"><button type="button" id="name-aim">🎯 조준점 켬</button></div>
       <div class="actions">
         <button type="button" id="name-cancel">취소</button>
         <button type="button" id="name-random">🎲 다른 이름</button>

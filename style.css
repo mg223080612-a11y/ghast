@@ -160,6 +160,10 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
 #name-form .hint.error { color: #ff8a7a; opacity: 1; }
 #name-form .actions { display: flex; justify-content: center; gap: 12px; margin-top: 24px; }
 #name-form button { font-size: 22px; padding: 12px 28px; white-space: nowrap; }
+/* 조준점 켜기/끄기: 켜져 있으면 초록(시작! 버튼과 같은 색), 꺼져 있으면 기본 회색 */
+#name-form .aim-row { display: flex; justify-content: center; margin-top: 16px; }
+#name-form #name-aim { font-size: 18px; padding: 8px 20px; }
+#name-form #name-aim.on { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset -2px -2px 0 #24461a; }
 
 /* 이름 입력 창 위의 총 조준점 (클릭은 통과) */
 #gun-cursor {
