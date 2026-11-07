@@ -5,6 +5,8 @@
 #   삭제용 관리자 키 설정: npx wrangler secret put ADMIN_KEY
 name = "ghast-shooting"
 main = "worker.js"
+# 로그인한 Cloudflare 계정이 여러 개라 배포할 계정(gvcsmg_Sync)을 정해 둔다 (없으면 deploy 가 계정을 못 골라 멈춤)
+account_id = "26d103b4b1d8be53b4a1ec8a3d340e25"
 compatibility_date = "2026-09-01"
 
 # 게임 파일. 올리지 않을 파일은 .assetsignore 에 적어 둠
