@@ -21,3 +21,4 @@ release
 migrations
 limits.json
 docs
+.github
