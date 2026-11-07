@@ -18,3 +18,5 @@ package-lock.json
 desktop
 release
 .dev.vars
+migrations
+limits.json

@@ -1,11 +1,14 @@
 // =============================================================
 // 가스트 사격 랭킹 API — Cloudflare Worker + D1
 //
-//   GET    /api/scores?since=<ms>&limit=10   기록 목록 (점수 높은 순)
-//   GET    /api/play                          게임 시작 표(token) 받기 → { token }
-//   POST   /api/scores                        기록 저장 (표 필요) → { id, rankToday, rankAll }
-//   DELETE /api/scores/<id>                   기록 하나 삭제   (X-Admin-Key 필요)
-//   DELETE /api/scores                        전체 삭제        (X-Admin-Key 필요)
+//   GET    /api/scores?game=&since=<ms>&limit=10   기록 목록 (점수 높은 순)
+//   GET    /api/play?game=                          게임 시작 표(token) 받기 → { token }
+//   POST   /api/scores   { game, ... }              기록 저장 (표 필요) → { id, rankToday, rankAll }
+//   DELETE /api/scores/<id>                         기록 하나 삭제            (X-Admin-Key 필요)
+//   DELETE /api/scores?game=                        그 게임 기록 전체 삭제    (X-Admin-Key 필요)
+//
+// game: 'ghast'(가스트 사격, 기본값) | 'clay'(접시 사격). 게임마다 랭킹·점수 상한·삭제가 따로다.
+// game 을 안 보내면 모두 'ghast' 로 처리하므로 기존 가스트 웹 게임은 고치지 않아도 그대로 동작한다.
 //
 // 게임 파일(index.html 등)은 같은 Worker 의 정적 자산으로 함께 배포됩니다.
 // 삭제용 관리자 키는 코드에 두지 않고 Cloudflare 시크릿으로 넣습니다:
@@ -36,6 +39,8 @@ const json = (status, body) => new Response(JSON.stringify(body), {
 // 닉네임 정리: 앞뒤 공백·제어문자 제거, 최대 12자
 const cleanName = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 12);
 const toInt = (v, min, max, fallback = min) => {
+  // 값이 없으면(null·빈 문자열) 기본값. Number(null) 은 0 이라 예전에는 limit·until 을 안 보내면 1 이 되었다.
+  if (v == null || v === '') return fallback;
   const n = Math.round(Number(v));
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
 };
@@ -53,27 +58,37 @@ function isAdmin(request, env) {
 // ---------- 게임 시작 표 (서명된 시작 시각) ----------
 const PLAY_MAX_AGE = 7 * 86_400_000;  // 인터넷이 끊긴 PC 에 보관한 기록도 일주일 안이면 받는다
 const PLAY_MIN_MS = 8_000;            // 시작하자마자 올리는 기록은 받지 않음 (가장 짧은 판도 10초 이상)
-const MAX_POINTS_PER_SEC = 40;        // 아무리 잘해도 1초에 40점은 못 넘는다 (실제 최고 수준의 몇 배로 넉넉히)
-const MAX_KILLS_PER_SEC = 12;
+// 게임별 점수 상한 (limits.json — 접시 사격 리포 docs/limits.json 과 같은 내용으로 둔다)
+//   score ≤ baseAllow + sec × pointsPerSec,  kills ≤ baseKills + sec × killsPerSec,  sec ≤ maxPlaySec(있으면)
+import LIMITS from './limits.json';
+const GAMES = Object.keys(LIMITS);
+const DEFAULT_GAME = 'ghast';
+// game 값 정리: 없으면 'ghast', 허용 목록에 없으면 null
+const gameOf = (v) => {
+  const g = v == null || v === '' ? DEFAULT_GAME : String(v);
+  return GAMES.includes(g) ? g : null;
+};
 const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 async function hmac(secret, text) {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   return b64url(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text)));
 }
-async function makePlayToken(env) {
+// 표 모양: 가스트(예전 형식) 시각.nonce.서명 / 그 밖의 게임 시각.nonce.game.서명 (game 도 서명에 포함)
+async function makePlayToken(env, game) {
   const nonce = b64url(crypto.getRandomValues(new Uint8Array(12)));
-  const body = `${Date.now()}.${nonce}`;
+  const body = game === DEFAULT_GAME ? `${Date.now()}.${nonce}` : `${Date.now()}.${nonce}.${game}`;
   return `${body}.${await hmac(env.PLAY_SECRET, body)}`;
 }
-// 맞는 표면 { t: 시작 시각, nonce }, 아니면 null
+// 맞는 표면 { t: 시작 시각, nonce, game }, 아니면 null. 예전 형식(game 없음)은 'ghast'.
 async function readPlayToken(env, token) {
-  const m = /^(\d{13})\.([A-Za-z0-9_-]{16})\.([A-Za-z0-9_-]{43})$/.exec(String(token || ''));
+  const m = /^(\d{13})\.([A-Za-z0-9_-]{16})(?:\.([a-z]{1,16}))?\.([A-Za-z0-9_-]{43})$/.exec(String(token || ''));
   if (!m) return null;
-  const sig = await hmac(env.PLAY_SECRET, `${m[1]}.${m[2]}`);
-  if (sig.length !== m[3].length) return null;
+  const body = m[3] ? `${m[1]}.${m[2]}.${m[3]}` : `${m[1]}.${m[2]}`;
+  const sig = await hmac(env.PLAY_SECRET, body);
+  if (sig.length !== m[4].length) return null;
   let diff = 0;
-  for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ m[3].charCodeAt(i);
-  return diff === 0 ? { t: Number(m[1]), nonce: m[2] } : null;
+  for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ m[4].charCodeAt(i);
+  return diff === 0 ? { t: Number(m[1]), nonce: m[2], game: m[3] || DEFAULT_GAME } : null;
 }
 async function limited(env, key) {
   if (!env.SAVE_LIMITER) return false;
@@ -87,8 +102,10 @@ async function handle(request, env, url) {
 
   if (url.pathname === '/api/play' && request.method === 'GET') {
     if (!env.PLAY_SECRET) return json(503, { error: '서버에 PLAY_SECRET 이 설정되지 않았습니다' });
+    const game = gameOf(url.searchParams.get('game'));
+    if (!game) return json(400, { error: '모르는 게임입니다' });
     if (await limited(env, `play:${ip}`)) return json(429, { error: '너무 자주 요청하고 있어요' });
-    return json(200, { token: await makePlayToken(env) });
+    return json(200, { token: await makePlayToken(env, game) });
   }
 
   if (url.pathname === '/api/scores' && request.method === 'GET') {
@@ -96,9 +113,11 @@ async function handle(request, env, url) {
     const since = toInt(url.searchParams.get('since'), 0, Number.MAX_SAFE_INTEGER, 0);
     const until = toInt(url.searchParams.get('until'), 1, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
     const limit = toInt(url.searchParams.get('limit'), 1, 200, 10);
+    const game = gameOf(url.searchParams.get('game'));
+    if (!game) return json(400, { error: '모르는 게임입니다' });
     const { results } = await db
-      .prepare('SELECT id, name, score, kills, created_at FROM scores WHERE created_at >= ? AND created_at < ? ORDER BY score DESC, created_at ASC LIMIT ?')
-      .bind(since, until, limit)
+      .prepare('SELECT id, name, score, kills, created_at FROM scores WHERE game = ? AND created_at >= ? AND created_at < ? ORDER BY score DESC, created_at ASC LIMIT ?')
+      .bind(game, since, until, limit)
       .all();
     return json(200, results);
   }
@@ -112,6 +131,9 @@ async function handle(request, env, url) {
     try { body = await request.json(); } catch { return json(400, { error: 'JSON 형식이 아닙니다' }); }
     const name = cleanName(body.name);
     if (!name) return json(400, { error: '닉네임이 비어 있습니다' });
+    const game = gameOf(body.game);
+    if (!game) return json(400, { error: '모르는 게임입니다' });
+    const lim = LIMITS[game];
 
     // 점수 상한: wrangler.toml 에 MAX_SCORE 를 적으면 그보다 높은 점수는 받지 않는다 (가짜 기록 방지).
     // 지금은 상한 없이 운영 — 값이 없으면 검사하지 않는다.
@@ -134,10 +156,11 @@ async function handle(request, env, url) {
     if (env.PLAY_SECRET) {
       const play = await readPlayToken(env, body.token);
       if (!play) return json(403, { error: '게임에서 나온 기록이 아니에요' });
+      if (play.game !== game) return json(403, { error: '다른 게임의 표예요' });
       const playedMs = Math.min(createdAt, now) - play.t;
       if (playedMs < PLAY_MIN_MS || play.t < now - PLAY_MAX_AGE) return json(403, { error: '게임 시간이 맞지 않아요' });
-      const sec = playedMs / 1000;
-      if (score > 100 + sec * MAX_POINTS_PER_SEC || kills > 20 + sec * MAX_KILLS_PER_SEC) {
+      const sec = lim.maxPlaySec ? Math.min(playedMs / 1000, lim.maxPlaySec) : playedMs / 1000;
+      if (score > lim.baseAllow + sec * lim.pointsPerSec || kills > lim.baseKills + sec * lim.killsPerSec) {
         return json(403, { error: '게임 시간에 비해 점수가 너무 높아요' });
       }
       const used = await db.prepare('INSERT OR IGNORE INTO used_tokens (nonce, used_at) VALUES (?, ?)').bind(play.nonce, now).run();
@@ -145,12 +168,12 @@ async function handle(request, env, url) {
     }
 
     const { meta } = await db
-      .prepare('INSERT INTO scores (name, score, kills, created_at) VALUES (?, ?, ?, ?)')
-      .bind(name, score, kills, createdAt)
+      .prepare('INSERT INTO scores (name, score, kills, created_at, game) VALUES (?, ?, ?, ?, ?)')
+      .bind(name, score, kills, createdAt, game)
       .run();
-    // 나보다 점수가 높은 기록 수 + 1 = 내 순위
-    const rankStmt = db.prepare('SELECT COUNT(*) AS n FROM scores WHERE created_at >= ? AND score > ?');
-    const [today, all] = await db.batch([rankStmt.bind(since, score), rankStmt.bind(0, score)]);
+    // 같은 게임에서 나보다 점수가 높은 기록 수 + 1 = 내 순위
+    const rankStmt = db.prepare('SELECT COUNT(*) AS n FROM scores WHERE game = ? AND created_at >= ? AND score > ?');
+    const [today, all] = await db.batch([rankStmt.bind(game, since, score), rankStmt.bind(game, 0, score)]);
     return json(200, {
       id: meta.last_row_id,
       rankToday: today.results[0].n + 1,
@@ -166,7 +189,10 @@ async function handle(request, env, url) {
       return json(200, { ok: true });
     }
     if (url.pathname === '/api/scores') {
-      await db.prepare('DELETE FROM scores').run();
+      // 전체 삭제는 그 게임 기록만 (game 없으면 'ghast' — 예전 가스트 관리자 동작 그대로)
+      const game = gameOf(url.searchParams.get('game'));
+      if (!game) return json(400, { error: '모르는 게임입니다' });
+      await db.prepare('DELETE FROM scores WHERE game = ?').bind(game).run();
       // 일주일 넘은 '쓴 표' 기록도 함께 정리 (그보다 오래된 표는 어차피 받지 않는다)
       await db.prepare('DELETE FROM used_tokens WHERE used_at < ?').bind(Date.now() - PLAY_MAX_AGE).run();
       return json(200, { ok: true });
