@@ -7,6 +7,10 @@
  * 모두 브라우저에서 'pointerdown' 으로 들어오므로 이것 하나로 처리합니다.
  * ============================================================= */
 
+// 컴퓨터용 프로그램(exe·맥 앱)의 버전. package.json 의 version 을 앱(desktop/main.js → preload.js)이 넘겨준다.
+// 웹(브라우저)에는 없어서 빈 글자 → 처음 화면에 버전을 그리지 않는다
+const APP_VERSION = (window.ghastApp && typeof window.ghastApp.version === 'string') ? window.ghastApp.version : '';
+
 // ---------- 설정 (설정 창에서 바꿀 수 있음, 브라우저에 저장됨) ----------
 const DEFAULTS = {
   gameSeconds: 40,     // 제한 시간 40초
@@ -2257,6 +2261,8 @@ function drawTitle(time) {
   const hintLeft = cx - ctx.measureText(hint).width / 2;
   drawTitleTicker(time, Math.min(cx - U * 50, hintLeft - U * 3));
   text('© 2026 SYNC', W - U * 2, H - U * 2, U * 2.2, 'rgba(255,217,176,0.6)', 'right');
+  // 앱 버전: 팀원이 자기 앱이 최신인지 처음 화면에서 바로 확인한다 (웹에서는 안 그림)
+  if (APP_VERSION) text(`v${APP_VERSION}`, W - U * 2, H - U * 5.2, U * 2.8, '#ffcf5a', 'right');
 }
 
 // 처음 화면 왼쪽 아래: 오늘 랭킹 TOP 10 이 아래에서 위로 천천히 흘러 올라간다

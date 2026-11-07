@@ -73,6 +73,8 @@ function toggleFullScreen() {
 }
 // 게임의 F 키·⛶ 전체화면 버튼 → preload.js → 여기
 ipcMain.on('toggle-fullscreen', (e) => { if (win && e.sender === win.webContents) toggleFullScreen(); });
+// 앱 버전 (package.json 의 version) → preload.js → 게임 처음 화면 구석의 'v2.0.0'
+ipcMain.on('app-version', (e) => { e.returnValue = app.getVersion(); });
 
 app.whenReady().then(() => {
   // 메뉴 막대는 숨긴다. 맥은 메뉴가 없으면 Cmd+Q(종료)·복사/붙여넣기가 안 돼서 기본 메뉴만 남긴다
