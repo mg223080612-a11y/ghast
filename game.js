@@ -1084,6 +1084,11 @@ const rankLimit = (scope) => (scope === 'today' ? RANK_TODAY_LIMIT : RANK_ALL_LI
 // 날짜별은 1년 전까지 하루씩 넘겨 본다
 const RANK_DAYS_BACK = 365;
 const rankView = { scope: 'today', day: 0, list: null, req: 0, page: 0, perPage: 10 };
+// 게임이 끝난 뒤 랭킹: 1~5위 + ⋮ + 내 순위와 그 위아래 2명씩 (내 순위가 가까우면 1위부터 이어서)
+const RANK_FOCUS = { top: 5, around: 2 };
+const RANK_FOCUS_ROWS = RANK_FOCUS.top + 1 + RANK_FOCUS.around * 2 + 1; // 표에 들어가는 줄 수 (⋮ 포함)
+const RANK_FOCUS_FETCH = 200;                                          // 서버가 한 번에 주는 최대 수
+const rankAfterGame = () => game.rankFrom === 'result' && game.mode === 'solo';
 function openRanking() {
   game.rankFrom = game.state === 'result' ? 'result' : 'title';
   game.state = 'ranking';
@@ -1096,7 +1101,7 @@ function setRankScope(scope) {
   rankView.list = null;
   rankView.page = 0;
   const req = ++rankView.req;
-  Ranking.top(scope, rankLimit(scope), rankView.day)
+  Ranking.top(scope, rankAfterGame() ? RANK_FOCUS_FETCH : rankLimit(scope), rankView.day)
     .then((list) => {
       if (req !== rankView.req) return;
       rankView.list = list;
@@ -1329,9 +1334,16 @@ function endGame() {
   Sound.end(win || game.mode === 'versus');
   updateCornerButtons();
 
-  // 랭킹은 1인 기록전만 저장한다 (2인 대결은 승패만)
+  // 랭킹은 1인 기록전만 저장한다 (2인 대결은 승패만). 먼저 랭킹에 남길 이름을 총으로 쏴서 받는다
   if (game.mode !== 'solo') return;
+  openInitials();
+}
+
+// 이름 입력을 마치면 기록을 저장하고 오늘 랭킹을 보여 준다
+function saveSoloRecord() {
   const me = game.players[0];
+  game.state = 'result';   // 랭킹을 닫으면 결과 화면으로 (openRanking 이 이 값을 본다)
+  game.resultTime = 0;     // 이름을 쏘던 총알이 랭킹 화면 버튼을 누르지 않게 잠금을 다시 센다
   game.rankInfo = { status: 'saving' };
   // 1인 기록전은 끝나자마자 오늘 랭킹을 보여 준다 (저장이 끝나면 내 기록이 들어간 순위로 다시 불러온다)
   rankView.scope = 'today';
@@ -1500,11 +1512,11 @@ function onTap(x, y, who = 0, source = 'mouse') {
     recordAimShot(x, y);
     return;
   }
-  if (game.state === 'title' || game.state === 'result' || game.state === 'ranking' || game.state === 'gunsetup') {
+  if (['title', 'result', 'ranking', 'gunsetup', 'initials'].includes(game.state)) {
     for (const b of buttons) {
       if (b.enabled && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { b.action(); return; }
     }
-    if (game.state === 'ranking' || game.state === 'gunsetup') return;
+    if (game.state === 'ranking' || game.state === 'gunsetup' || game.state === 'initials') return;
     // 처음 화면의 가스트는 연습용으로 맞힐 수 있다 (점수 없음)
     const g = [...ghasts].sort((a, b) => b.z - a.z).find((o) => o.hittable() && o.hitTest(x, y));
     if (g) { g.kill(); Sound.hit(); }
@@ -1922,7 +1934,6 @@ const AIM_LABELS = { big: '조준점 켬', small: '조준점 작게', hidden: '�
 const aimOn = () => settings.aimMode !== 'hidden';
 const aimLabel = () => AIM_LABELS[settings.aimMode] || AIM_LABELS.big;
 // 처음 화면 조준점 버튼의 가운데 ('랭킹' 오른쪽. 화면 폭은 늘 160U 이상이라 안 넘친다)
-const titleAimButtonPos = () => ({ x: W / 2 + U * 62.5, y: H * 0.84 });
 const nameAimButton = document.getElementById('name-aim');
 function updateNameAimButton() {
   nameAimButton.textContent = `🎯 ${aimLabel()}`;
@@ -1937,7 +1948,8 @@ function toggleAim() {
   Sound.tick();
   if (game.state === 'title' && !nameOpen()) {
     const p = titleAimButtonPos();
-    addPart({ kind: 'text', text: aimOn() ? '조준점 켜짐' : '조준점 꺼짐', x: p.x, y: p.y - U * 9, vy: -U * 3, size: U * 3.4, life: 1.4, color: aimOn() ? '#9fe870' : '#d8d8d8', shadow: '#1a1a1a' });
+    // 버튼 바로 아래(설명판에 가리지 않는 자리)에 잠깐 띄운다
+    addPart({ kind: 'text', text: aimOn() ? '조준점 켜짐' : '조준점 꺼짐', x: p.x, y: p.y + U * 8.5, vy: -U * 0.8, size: U * 3.4, life: 1.4, color: aimOn() ? '#9fe870' : '#d8d8d8', shadow: '#1a1a1a' });
   }
 }
 // 이름 입력 창: 시작 직전에 확인하고 바꾼다 (총으로 쏴도 눌린다). 누른 뒤에도 Enter 로 바로 시작하도록 이름 칸으로 돌아간다
@@ -2026,6 +2038,8 @@ document.getElementById('name-random').addEventListener('click', () => {
 });
 // 결과 화면 → 다음 사람/새 대결 (이름 새로 입력)
 function nextPlayer() { openNameEntry(game.mode); }
+// 1인 기록전 '다시 하기': 새 랜덤 닉네임(방금 이름과 다르게)을 배정해 바로 다시 시작
+function retrySolo() { startGame('solo', [randomNickname(game.players[0]?.name)]); }
 function closeSettings() { settingsEl.hidden = true; }
 form.addEventListener('submit', (e) => {
   e.preventDefault();
@@ -2071,8 +2085,108 @@ function resumeGame() {
   game.confirmHome = false;
 }
 // 처음 화면으로. 게임 중이면 잘못 눌러도 판이 날아가지 않게 일시정지하고 한 번 더 묻는다
+// ---------- 게임 직후 이름 쏘기 (A-Z·0-9) ----------
+const INITIALS = {
+  max: 6,        // 최대 글자 수
+  idle: 5,       // 마지막으로 쏜 뒤 이 시간(초)이 지나면 자동 등록
+  lock: 2,       // 판이 뜬 뒤 잠깐 잠금 (게임 끝까지 쏘던 총알이 글자로 들어가지 않게)
+  rows: ['ABCDEFGHIJ', 'KLMNOPQRST', 'UVWXYZ', '0123456789'],
+};
+function openInitials() {
+  game.state = 'initials';
+  game.initials = { text: '', t: 0, idle: INITIALS.idle, lastTick: INITIALS.idle };
+  banner = null; // 끝나기 직전에 뜬 '레벨 UP!' 같은 안내가 판 위에 겹치지 않게
+  updateCornerButtons();
+}
+const initialsReady = () => game.initials.t >= INITIALS.lock;
+function typeInitial(ch) {
+  const ini = game.initials;
+  ini.idle = INITIALS.idle;
+  ini.lastTick = INITIALS.idle;
+  if (ini.text.length >= INITIALS.max) return;
+  game.initials = { ...ini, text: ini.text + ch };
+  Sound.hit();
+}
+function eraseInitial() {
+  const ini = game.initials;
+  game.initials = { ...ini, text: ini.text.slice(0, -1), idle: INITIALS.idle, lastTick: INITIALS.idle };
+  Sound.tick();
+}
+// skip: 입력한 글자를 버리고 원래(게임할 때) 닉네임으로
+function finishInitials(skip = false) {
+  if (game.state !== 'initials') return;
+  const typed = cleanName(game.initials.text);
+  if (!skip && typed) game.players[0] = { ...game.players[0], name: typed };
+  saveSoloRecord();
+}
+function updateInitials(dt) {
+  const ini = game.initials;
+  ini.t += dt;
+  if (!initialsReady()) return;
+  ini.idle -= dt;
+  // 마지막 3초는 똑딱 소리로 알려 준다
+  if (ini.idle <= 3 && Math.ceil(ini.idle) < ini.lastTick) { ini.lastTick = Math.ceil(ini.idle); Sound.tick(); }
+  if (ini.idle <= 0) finishInitials();
+}
+function drawInitials(time) {
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, 0, W, H);
+  const ini = game.initials, me = game.players[0], ready = initialsReady();
+  const cx = W / 2, pw = Math.min(W - U * 6, U * 132), ph = Math.min(H - U * 4, U * 96);
+  const py = (H - ph) / 2;
+  panel(cx - pw / 2, py, pw, ph, 0.9);
+  text('랭킹에 남길 이름을 쏘세요!', cx, py + U * 7, U * 6.5, '#ffcf5a', 'center', { shadow: '#a3200c' });
+  text(`${me.score}점  ·  알파벳·숫자 최대 ${INITIALS.max}글자`, cx, py + U * 14, U * 3.2, '#ffd9b0');
+
+  // 입력 칸: 다음에 들어갈 칸은 밑줄이 깜빡인다
+  const sw = U * 9.5, sg = U * 1.6, sy = py + U * 23;
+  const sx0 = cx - (INITIALS.max * sw + (INITIALS.max - 1) * sg) / 2;
+  for (let i = 0; i < INITIALS.max; i++) {
+    const x = sx0 + i * (sw + sg);
+    ctx.fillStyle = 'rgba(255, 220, 190, 0.08)';
+    ctx.fillRect(x, sy - U * 5, sw, U * 10);
+    const ch = ini.text[i];
+    if (ch) text(ch, x + sw / 2, sy, U * 7, '#ffffff');
+    const next = i === ini.text.length && Math.sin(time * 8) > 0;
+    ctx.fillStyle = next ? '#ffe14a' : 'rgba(255, 170, 120, 0.5)';
+    ctx.fillRect(x, sy + U * 5, sw, U * 0.6);
+  }
+
+  // 남은 시간 막대
+  const by = py + U * 33, bw = U * 70;
+  if (ready) {
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.fillRect(cx - bw / 2, by - U * 0.8, bw, U * 1.6);
+    ctx.fillStyle = ini.idle <= 2 ? '#ff8a7a' : '#ffe14a';
+    ctx.fillRect(cx - bw / 2, by - U * 0.8, bw * clamp(ini.idle / INITIALS.idle, 0, 1), U * 1.6);
+    text(`${Math.ceil(Math.max(0, ini.idle))}초 동안 안 쏘면 자동 등록`, cx, by + U * 3.6, U * 2.6, '#c9a89a');
+  } else {
+    text('잠깐! 곧 쏠 수 있어요', cx, by + U * 1.5, U * 3.2, '#c9a89a');
+  }
+
+  // 글자판: A-J / K-T / U-Z + 지우기 / 0-9
+  const kw = U * 10.6, kh = U * 9, kg = U * 1.6;
+  const gx0 = cx - (10 * kw + 9 * kg) / 2, gy0 = py + U * 45;
+  INITIALS.rows.forEach((row, r) => {
+    const y = gy0 + r * (kh + kg);
+    [...row].forEach((ch, c) => button(ch, gx0 + c * (kw + kg) + kw / 2, y, kw, kh, () => typeInitial(ch), ready));
+    if (r === 2) {
+      const x = gx0 + 6 * (kw + kg), w = 4 * kw + 3 * kg;
+      button('← 지우기', x + w / 2, y, w, kh, eraseInitial, ready && ini.text.length > 0);
+    }
+  });
+
+  // 아래: 건너뛰기(원래 닉네임) · 등록
+  const fy = py + ph - U * 9;
+  button('건너뛰기', cx - U * 30, fy, U * 40, U * 9.5, () => finishInitials(true), ready);
+  button('등록', cx + U * 30, fy, U * 40, U * 9.5, () => finishInitials(), ready, true);
+  text(`건너뛰면 '${me.name || '이름없음'}' 으로 남아요`, cx - U * 30, fy + U * 7.2, U * 2.4, '#c9a89a');
+}
+
 function goHome() {
   if (nameOpen()) closeNameEntry();
+  // 이름 쏘는 중에 처음 화면으로 가면 원래 닉네임으로 기록은 남긴다
+  if (game.state === 'initials') finishInitials(true);
   if (game.state === 'play') {
     // 이미 '처음 화면으로 갈까요?' 를 묻는 중에 한 번 더 누르면 그대로 처음 화면 (C 두 번)
     if (game.paused && game.confirmHome) { goTitle(); return; }
@@ -2223,98 +2337,127 @@ function formatTime(s) {
 }
 
 // ---------- 화면별 그리기 ----------
+// ---------- 처음 화면 배치 (U 단위) ----------
+// 버튼 줄: [랭킹] [1인 기록전] [2인 대결] [조준점] — 가운데를 기준으로 좌우 대칭
+const TITLE_BTN = { bigW: 34, smallW: 26, h: 11, gap: 4 };
+const titleButtonRowY = () => H * 0.84;
+const titleButtonX = (slot) => {          // slot: -2(왼쪽 작은) -1 1(가운데 큰 둘) 2(오른쪽 작은)
+  const { bigW, smallW, gap } = TITLE_BTN;
+  const big = gap / 2 + bigW / 2;
+  const small = gap / 2 + bigW + gap + smallW / 2;
+  return W / 2 + U * Math.sign(slot) * (Math.abs(slot) === 1 ? big : small);
+};
+const titleAimButtonPos = () => ({ x: titleButtonX(2), y: titleButtonRowY() });
+
+// 설명 카드에 보여 줄 것: 가스트 5종(크기 차이도 그대로) + 화염구
+const TITLE_CARDS = [
+  { type: 'normal' }, { type: 'small' }, { type: 'big' }, { type: 'angry' }, { type: 'gold' }, { fireball: true },
+];
+const CARD_IMG_H = 9;                     // 기본 가스트 그림 높이 (U)
+// 종류별 크기 차이는 보이되, 아기 가스트도 알아볼 만큼만 줄인다
+const cardScale = (size) => 0.55 + 0.45 * size;
+
+function drawTitleCards(cx, top, width) {
+  const n = TITLE_CARDS.length;
+  const cw = width / n;
+  const base = top + U * 12.5;            // 그림 바닥선 (크기가 달라도 바닥을 맞춘다)
+  ctx.imageSmoothingEnabled = false;
+  TITLE_CARDS.forEach((c, i) => {
+    const x = cx - width / 2 + cw * (i + 0.5);
+    // 카드 칸
+    ctx.fillStyle = 'rgba(255, 220, 190, 0.05)';
+    ctx.fillRect(x - cw / 2 + U * 0.8, top, cw - U * 1.6, U * 20);
+    ctx.strokeStyle = 'rgba(255, 170, 120, 0.22)';
+    ctx.lineWidth = Math.max(1, U * 0.2);
+    ctx.strokeRect(x - cw / 2 + U * 0.8, top, cw - U * 1.6, U * 20);
+    let name, pts, color;
+    if (c.fireball) {
+      const s = U * 7.5;
+      ctx.drawImage(IMG.fireball, x - s / 2, base - s, s, s);
+      name = '화염구 반사'; pts = `+${settings.deflectPoints}`; color = '#ffb347';
+    } else {
+      const T = GHAST_TYPES[c.type];
+      const h = U * CARD_IMG_H * cardScale(T.size), w = h * GHAST_W / GHAST_H;
+      ctx.drawImage(GV[T.img].normal, x - w / 2, base - h, w, h);
+      name = T.name; pts = `+${T.points()}`; color = c.type === 'gold' ? '#ffd84a' : '#9fe870';
+    }
+    text(name, x, base + U * 2.8, U * 2.5, '#ffd9b0');
+    text(`${pts}점`, x, base + U * 6.2, U * 3.4, color);
+  });
+}
+
 function drawTitle(time) {
   const cx = W / 2;
   const bobY = Math.sin(time * 2) * U * 0.8;
-  text('가스트 사격', cx, H * 0.17 + bobY, U * 15, '#ffffff', 'center', { shadow: '#a3200c' });
-  text('GHAST SHOOTING', cx, H * 0.17 + U * 11, U * 4.5, '#ffcf5a');
+  text('가스트 사격', cx, H * 0.14 + bobY, U * 13, '#ffffff', 'center', { shadow: '#a3200c' });
+  text('GHAST SHOOTING', cx, H * 0.14 + U * 9.8, U * 4, '#ffcf5a');
 
-  const pw = Math.min(W - U * 8, U * 112), ph = U * 45;
-  const py = H * 0.32;
-  panel(cx - pw / 2, py, pw, ph, 0.68);
-  const lines = [
-    ['네더의 가스트가 화염구를 쏘기 전에 맞혀라!', '#ffffff', 5],
-    [`가스트 종류마다 +${Math.max(1, settings.killPoints - 1)}~${settings.killPoints * 5}점  ·  화염구 맞히기 +${settings.deflectPoints}점`, '#ffd9b0', 3.4],
-    [`배경을 맞히면 -${settings.missPenalty}점  ·  가스트를 놓치면 -${settings.escapePenalty}점  ·  화염구에 맞으면 -${settings.hitPenalty}점`, '#ff9a8a', 3.3],
-    [`제한 시간 ${timeLabel(settings.gameSeconds)}   ·   ${bonusSteps()}점마다 +${settings.bonusSeconds}초 & 레벨 UP!`, '#ffe14a', 3.4],
-    [`${settings.rewardScore}점 이상이면 '가스트의 눈물'을 드려요`, '#9ff6ff', 4],
-    ['※ 화면만 쏘세요! 사람을 향해 쏘면 안 돼요', '#ff8a7a', 3.2],
-  ];
-  lines.forEach(([str, color, size], i) => text(str, cx, py + U * (6 + i * 6.6), U * size, color));
-  // 가스트의 눈물 아이콘
-  ctx.imageSmoothingEnabled = false;
-  const ts = U * 6, ty = py + U * (6 + 4 * 6.6);
-  ctx.drawImage(IMG.tear, cx - pw / 2 + U * 3, ty - ts / 2, ts, ts);
-  ctx.drawImage(IMG.tear, cx + pw / 2 - U * 3 - ts, ty - ts / 2, ts, ts);
+  // 설명 패널: 목표 → 가스트·화염구 카드(점수) → 감점 → 시간·보너스 → 상품 → 안전
+  const pw = Math.min(W - U * 8, U * 118), ph = U * 49;
+  const py = H * 0.275;
+  panel(cx - pw / 2, py, pw, ph, 0.86);
+  text('네더의 가스트가 화염구를 쏘기 전에 맞혀라!', cx, py + U * 5, U * 4.4, '#ffffff');
+  drawTitleCards(cx, py + U * 8.5, pw - U * 6);
+  ctx.fillStyle = 'rgba(255, 170, 120, 0.25)';
+  ctx.fillRect(cx - pw / 2 + U * 4, py + U * 30.5, pw - U * 8, Math.max(1, U * 0.25));
+  text(`배경을 맞히면 -${settings.missPenalty}점  ·  가스트를 놓치면 -${settings.escapePenalty}점  ·  화염구에 맞으면 -${settings.hitPenalty}점`, cx, py + U * 33.6, U * 3.1, '#ff9a8a');
+  text(`제한 시간 ${timeLabel(settings.gameSeconds)}  ·  ${bonusSteps()}점마다 +${settings.bonusSeconds}초 & 레벨 UP!`, cx, py + U * 38.2, U * 3.2, '#ffe14a');
+  // 상품 줄: 글자 바로 양옆에 가스트의 눈물
+  const reward = `${settings.rewardScore}점 이상이면 '가스트의 눈물'을 드려요`;
+  const rs = U * 3.6, ry = py + U * 42.9;
+  text(reward, cx, ry, rs, '#9ff6ff');
+  ctx.font = `bold ${Math.round(rs)}px ${FONT}`;
+  const rw = ctx.measureText(reward).width, ts = U * 4.2;
+  ctx.drawImage(IMG.tear, cx - rw / 2 - U * 2 - ts, ry - ts / 2, ts, ts);
+  ctx.drawImage(IMG.tear, cx + rw / 2 + U * 2, ry - ts / 2, ts, ts);
+  text('※ 화면만 쏘세요! 사람을 향해 쏘면 안 돼요', cx, py + U * 46.8, U * 2.7, '#ff8a7a');
 
-  // 1인 기록전(랭킹 저장) · 2인 대결(랭킹 없음) · 랭킹
-  button('1인 기록전', cx - U * 30, H * 0.84, U * 36, U * 12, () => openNameEntry('solo'), true, true);
-  button('2인 대결', cx + U * 8, H * 0.84, U * 32, U * 12, () => openNameEntry('versus'), true, true);
-  button('랭킹', cx + U * 38, H * 0.84, U * 20, U * 12, openRanking);
-  // 조준점 켜기/끄기: 켜져 있으면 초록, 꺼져 있으면 회색. 큰 버튼들과 구분되게 조금 작게
-  const aimPos = titleAimButtonPos();
-  button(aimLabel(), aimPos.x, aimPos.y, U * 25, U * 10, toggleAim, true, aimOn());
-  const hint = 'Space 1인 · 2 대결 · R 랭킹 · V 조준점 · G 총 연결 · S 설정';
-  text(hint, cx, H * 0.84 + U * 10, U * 2.6, '#c9a89a');
-  // 오늘 랭킹은 버튼·안내 글자와 겹치지 않게 그 왼쪽까지만
-  ctx.font = `bold ${Math.round(U * 2.6)}px ${FONT}`;
-  const hintLeft = cx - ctx.measureText(hint).width / 2;
-  drawTitleTicker(time, Math.min(cx - U * 50, hintLeft - U * 3));
-  text('© 2026 SYNC', W - U * 2, H - U * 2, U * 2.2, 'rgba(255,217,176,0.6)', 'right');
-  // 앱 버전: 팀원이 자기 앱이 최신인지 처음 화면에서 바로 확인한다 (웹에서는 안 그림)
-  if (APP_VERSION) text(`v${APP_VERSION}`, W - U * 2, H - U * 5.2, U * 2.8, '#ffcf5a', 'right');
+  // 버튼 줄 (좌우 대칭, 높이 같음): 랭킹 · 1인 기록전 · 2인 대결 · 조준점
+  const by = titleButtonRowY(), { bigW, smallW, h } = TITLE_BTN;
+  button('랭킹', titleButtonX(-2), by, U * smallW, U * h, openRanking);
+  button('1인 기록전', titleButtonX(-1), by, U * bigW, U * h, () => openNameEntry('solo'), true, true);
+  button('2인 대결', titleButtonX(1), by, U * bigW, U * h, () => openNameEntry('versus'), true, true);
+  button(aimLabel(), titleButtonX(2), by, U * smallW, U * h, toggleAim, true, aimOn());
+  text('Space 1인 · 2 대결 · R 랭킹 · V 조준점 · G 총 연결 · S 설정', cx, by + U * 9, U * 2.5, '#c9a89a');
+
+  drawTitleBottomBar(time);
 }
 
-// 처음 화면 왼쪽 아래: 오늘 랭킹 TOP 10 이 아래에서 위로 천천히 흘러 올라간다
-function drawTitleTicker(time, right) {
+// 1·2·3위 색 (금·은·동). 처음 화면 랭킹 띠·랭킹 화면에서 쓴다
+const MEDAL = ['#ffd84a', '#d8d8e0', '#e09a5a'];
+
+// 맨 아래 띠: 왼쪽 '오늘의 TOP 10' 이 옆으로 흐르고, 오른쪽에 버전·저작권
+function drawTitleBottomBar(time) {
+  const bh = U * 4.6, y = H - bh, mid = y + bh / 2;
+  ctx.fillStyle = 'rgba(10, 2, 2, 0.6)';
+  ctx.fillRect(0, y, W, bh);
+  const right = `${APP_VERSION ? `v${APP_VERSION}  ·  ` : ''}© 2026 SYNC`;
+  text(right, W - U * 2, mid, U * 2.4, 'rgba(255,217,176,0.75)', 'right');
   const list = game.titleTop;
   if (!list.length) return;
-  const x = U * 4;
-  const maxW = Math.max(U * 22, right - x);
-  const rowH = U * 4.6;
-  const visible = 4;                       // 한 번에 보이는 줄 수
-  const boxBottom = H - U * 2.5;
-  const boxTop = boxBottom - rowH * visible;
-
-  const head = `오늘의 랭킹 TOP ${list.length}`;
-  text(head, x, boxTop - U * 3.5, fitTextSize(head, U * 3.4, maxW), '#ffe14a', 'left');
-
-  // 줄 수가 보이는 칸보다 적으면 멈춰 있고, 많으면 끝없이 위로 흐른다 (한 바퀴 뒤 빈 줄 하나 두고 반복)
-  const scrolling = list.length > visible;
-  const loopH = (list.length + 1) * rowH;
-  const offset = scrolling ? (time * rowH / 1.6) % loopH : 0;
-
+  ctx.font = `bold ${Math.round(U * 2.4)}px ${FONT}`;
+  const rightW = ctx.measureText(right).width;
+  const label = `오늘의 랭킹 TOP ${list.length}`;
+  text(label, U * 2, mid, U * 2.8, '#ffe14a', 'left');
+  ctx.font = `bold ${Math.round(U * 2.8)}px ${FONT}`;
+  const x0 = U * 2 + ctx.measureText(label).width + U * 3;
+  const x1 = W - U * 2 - rightW - U * 4;
+  const items = list.map((r, i) => ({ str: `${i + 1}위 ${r.name} ${r.score}점`, color: MEDAL[i] || '#ffffff' }));
+  const gapW = U * 6;
+  const widths = items.map((it) => ctx.measureText(it.str).width);
+  const loopW = widths.reduce((a, b) => a + b + gapW, 0);
+  const offset = (time * U * 8) % loopW;  // 1초에 8U 만큼 왼쪽으로 흐름
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(x - U, boxTop, maxW + U * 2, boxBottom - boxTop);
-  ctx.clip();
-  const copies = scrolling ? 2 : 1;
-  for (let c = 0; c < copies; c++) {
-    list.forEach((r, i) => {
-      const y = boxTop + rowH * (i + 0.5) + c * loopH - offset;
-      if (y < boxTop - rowH || y > boxBottom + rowH) return;
-      // 위·아래 가장자리에서는 흐릿하게 사라지고 나타난다
-      const edge = Math.min(y - boxTop, boxBottom - y);
-      const fade = scrolling ? clamp(edge / (rowH * 0.9), 0, 1) : 1;
-      ctx.globalAlpha = fade;
-      const str = `${i + 1}위  ${r.name}  ${r.score}점`;
-      const crownW = U * 4.2;
-      // 1등은 줄 끝에 왕관을 달 자리를 남겨 둔다
-      const size = fitTextSize(str, U * 3.2, i === 0 ? maxW - crownW - U * 1.5 : maxW);
-      text(str, x, y, size, MEDAL[i] || '#ffffff', 'left');
-      if (i === 0) {
-        ctx.font = `bold ${Math.round(size)}px ${FONT}`;
-        const tw = ctx.measureText(str).width;
-        drawSparkles(x - U, y - rowH * 0.5, tw + crownW + U * 3, rowH, time, 5, 7, fade);
-        drawCrown(x + tw + U * 1.2 + crownW / 2, y - U * 0.3, crownW, time, fade);
-        ctx.globalAlpha = fade;
-      }
+  ctx.beginPath(); ctx.rect(x0, y, x1 - x0, bh); ctx.clip();
+  for (let c = 0; c < 3; c++) {
+    let x = x0 - offset + c * loopW;
+    items.forEach((it, i) => {
+      if (x < x1 && x + widths[i] > x0) text(it.str, x, mid, U * 2.8, it.color, 'left');
+      x += widths[i] + gapW;
     });
   }
-  ctx.globalAlpha = 1;
   ctx.restore();
 }
-const MEDAL = ['#ffd84a', '#d8d8e0', '#e09a5a'];
 
 // ---------- 1등 꾸미기: 왕관 + 반짝이 ----------
 // 픽셀 왕관 (X 금, R 빨간 보석, B 파란 보석)
@@ -2495,13 +2638,50 @@ function drawAimTest() {
   if (aim.seen) drawAim(aim.x, aim.y);
 }
 
+// 표에 그릴 줄: { r, rank, mine } 또는 { gap: true } (⋮)
+// 내 기록이 목록(서버가 준 200명) 밖이면 저장 때 받은 순위로 내 줄만 따로 붙인다
+function rankFocusEntries(list) {
+  const { top, around } = RANK_FOCUS;
+  const row = (r, i) => ({ r, rank: i + 1, mine: r.id === game.lastEntryId });
+  const mine = list.findIndex((r) => r.id === game.lastEntryId);
+  if (mine >= 0 && mine < RANK_FOCUS_ROWS - around) return list.slice(0, RANK_FOCUS_ROWS).map(row);
+  if (mine >= 0) {
+    const from = mine - around;
+    return [...list.slice(0, top).map(row), { gap: true }, ...list.slice(from, mine + around + 1).map((r, i) => row(r, from + i))];
+  }
+  const ri = game.rankInfo, me = game.players[0];
+  const rank = rankView.scope === 'today' ? ri?.rankToday : ri?.rankAll;
+  if (ri?.status !== 'saved' || ri.pending || !rank || rankView.day !== 0) return null;
+  const self = { r: { name: me.name || '이름없음', score: me.score, kills: me.stats.kills }, rank, mine: true };
+  return [...list.slice(0, top).map(row), { gap: true }, self];
+}
+
+// 랭킹 표에서 방금 한 내 기록 줄: 금색 띠, 천천히 깜빡이는 테두리, 왼쪽 화살표
+function drawMyRankRow(x, y, w, h, time) {
+  const pulse = 0.55 + 0.45 * Math.sin(time * 5);
+  ctx.fillStyle = 'rgba(255, 210, 60, 0.28)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = `rgba(255, 225, 74, ${pulse})`;
+  ctx.lineWidth = Math.max(2, U * 0.45);
+  ctx.strokeRect(x, y, w, h);
+  text('▶', x - U * 2.2, y + h / 2, h * 0.55, '#ffe14a');
+}
+// 이름 바로 뒤의 '나' 배지 (금색 바탕에 검은 글자)
+function drawMeBadge(x, cy, size) {
+  const bw = size * 1.9, bh = size * 1.25;
+  ctx.fillStyle = '#ffd84a';
+  ctx.fillRect(x, cy - bh / 2, bw, bh);
+  text('나', x + bw / 2, cy, size * 0.85, '#2a1600');
+}
+
 function drawRanking(time) {
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
   ctx.fillRect(0, 0, W, H);
   const cx = W / 2;
   // '오늘' 은 TOP 10 한 줄, '전체' 는 넓은 화면(프로젝터)에서 두 줄로 한 번에 20명
   const today = rankView.scope === 'today';
-  const cols = !today && W - U * 8 >= U * 140 ? 2 : 1;
+  const focus = rankAfterGame() && rankView.list ? rankFocusEntries(rankView.list) : null;
+  const cols = !focus && !today && W - U * 8 >= U * 140 ? 2 : 1;
   const pw = Math.min(W - U * 8, cols === 2 ? U * 150 : U * 100);
   const ph = Math.min(H - U * 4, U * 100);
   const px = cx - pw / 2, py = (H - ph) / 2;
@@ -2514,7 +2694,8 @@ function drawRanking(time) {
   rankView.page = today ? 0 : clamp(rankView.page, 0, pages - 1);
   const start = rankView.page * per;
 
-  const dayTitle = rankView.day === 0 ? `오늘의 TOP 10 · ${dayLabel(0)}` : `${dayLabel(rankView.day)} TOP 10`;
+  const dayTitle = focus ? `오늘의 랭킹 · ${dayLabel(0)}`
+    : rankView.day === 0 ? `오늘의 TOP 10 · ${dayLabel(0)}` : `${dayLabel(rankView.day)} TOP 10`;
   text(today ? dayTitle : '전체 랭킹', cx, py + U * 7, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
   button('날짜별', cx - U * 13, py + U * 17, U * 22, U * 7, () => setRankTab('today'), true, rankView.scope === 'today');
   button('전체', cx + U * 13, py + U * 17, U * 22, U * 7, () => setRankTab('all'), true, rankView.scope === 'all');
@@ -2522,7 +2703,7 @@ function drawRanking(time) {
   // 게임이 끝나 바로 뜬 랭킹은 아래에 내 기록 두 줄이 더 들어가서 표를 조금 줄인다
   const afterGame = game.rankFrom === 'result' && game.mode === 'solo';
   const top = py + U * 31, bottom = py + ph - U * (afterGame ? 21 : 17);
-  const rowH = Math.min(U * 6.4, (bottom - top) / 10);
+  const rowH = Math.min(U * 6.4, (bottom - top) / (focus ? Math.max(10, focus.length) : 10));
   const colW = (pw - U * 6) / cols;
   const size = Math.min(U * 3.8, rowH * 0.62);
   // 긴 닉네임은 옆 칸을 침범하지 않게 글자를 줄인다
@@ -2532,8 +2713,8 @@ function drawRanking(time) {
     return w > maxW ? s * (maxW / w) : s;
   };
 
-  // 칸 하나(10명)를 그린다
-  const drawColumn = (c, rows, firstRank) => {
+  // 칸 하나를 그린다. entries: { r, rank, mine } 또는 { gap: true }
+  const drawColumn = (c, entries) => {
     const left = px + U * 3 + c * colW;
     const colRank = left + U * 5, colName = left + U * 12, colKills = left + colW - U * 21, colScore = left + colW - U * 3;
     const headY = py + U * 26;
@@ -2541,14 +2722,12 @@ function drawRanking(time) {
     text('닉네임', colName, headY, U * 2.8, '#c9a89a', 'left');
     text('처치', colKills, headY, U * 2.8, '#c9a89a');
     text('점수', colScore, headY, U * 2.8, '#c9a89a', 'right');
-    rows.forEach((r, i) => {
-      const rank = firstRank + i;
+    entries.forEach((e, i) => {
       const y = top + rowH * (i + 0.5);
-      if (r.id === game.lastEntryId) {
-        ctx.fillStyle = 'rgba(255, 225, 74, 0.2)';
-        ctx.fillRect(left, y - rowH / 2, colW - U * 1, rowH);
-      }
-      const color = MEDAL[rank - 1] || '#ffffff';
+      if (e.gap) { text('⋮', colRank, y, size, '#c9a89a'); return; }
+      const { r, rank, mine } = e;
+      if (mine) drawMyRankRow(left, y - rowH / 2, colW - U * 1, rowH, time);
+      const color = mine && rank > MEDAL.length ? '#ffe14a' : MEDAL[rank - 1] || '#ffffff';
       // 1등: 금빛 줄 + 반짝이 (글자보다 먼저 그려 뒤에 깔리게)
       if (rank === 1) {
         ctx.fillStyle = 'rgba(255, 216, 74, 0.12)';
@@ -2556,8 +2735,14 @@ function drawRanking(time) {
         drawSparkles(left, y - rowH * 0.8, colW - U * 1, rowH * 1.3, time, 10, 3);
       }
       text(`${rank}`, colRank, y, size, color);
-      if (rank === 1) drawCrown(colRank, y - size * 0.95, U * 4.6, time); // 순위 '1' 위에 왕관을 씌운다
-      text(r.name, colName, y, fit(r.name, size, colKills - colName - U * 5), color, 'left');
+      // 순위 '1' 위에 왕관을 씌운다 (게임 직후 랭킹에서는 빼서 내 줄에 눈이 가게)
+      if (rank === 1 && !rankAfterGame()) drawCrown(colRank, y - size * 0.95, U * 4.6, time);
+      const nameSize = fit(r.name, size, colKills - colName - U * (mine ? 11 : 5));
+      text(r.name, colName, y, nameSize, color, 'left');
+      if (mine) {
+        ctx.font = `bold ${Math.round(nameSize)}px ${FONT}`;
+        drawMeBadge(colName + ctx.measureText(r.name).width + U * 1.5, y, size);
+      }
       text(String(r.kills ?? 0), colKills, y, size * 0.85, '#ffd9b0');
       text(`${r.score}점${r.pending ? ' *' : ''}`, colScore, y, size, color, 'right');
     });
@@ -2568,11 +2753,13 @@ function drawRanking(time) {
   } else if (!list.length) {
     const empty = !today ? '아직 기록이 없어요' : rankView.day === 0 ? '오늘은 아직 기록이 없어요' : '이날은 기록이 없어요';
     text(empty, cx, top + rowH * 3, U * 4, '#ffffff');
+  } else if (focus) {
+    drawColumn(0, focus);
   } else {
     for (let c = 0; c < cols; c++) {
       const from = start + c * 10;
-      const rows = list.slice(from, from + 10);
-      if (rows.length) drawColumn(c, rows, from + 1);
+      const rows = list.slice(from, from + 10).map((r, i) => ({ r, rank: from + i + 1, mine: r.id === game.lastEntryId }));
+      if (rows.length) drawColumn(c, rows);
     }
   }
 
@@ -2593,7 +2780,7 @@ function drawRanking(time) {
       cx, by - U * 6.2, U * 3, win ? '#9ff6ff' : '#c9a89a');
     const ready = game.resultTime > RESULT_LOCK; // 계속 쏘던 총알이 실수로 버튼을 누르지 않게 잠깐 잠금
     button('다음 사람', cx - U * 33, by, U * 29, U * 8, nextPlayer, ready, true);
-    button('다시 하기', cx, by, U * 29, U * 8, () => startGame(), ready);
+    button('다시 하기', cx, by, U * 29, U * 8, retrySolo, ready);
     button('결과 보기', cx + U * 33, by, U * 29, U * 8, closeRanking, ready);
     return;
   }
@@ -2799,7 +2986,7 @@ function drawResult(time) {
   const ready = game.resultTime > RESULT_LOCK; // 계속 쏘던 총알이 실수로 버튼을 누르지 않게 잠깐 잠금
   const by = py + ph - U * 8;
   button('다음 사람', cx - U * 33, by, U * 29, U * 9, nextPlayer, ready, true);
-  button('다시 하기', cx, by, U * 29, U * 9, () => startGame(), ready);
+  button('다시 하기', cx, by, U * 29, U * 9, retrySolo, ready);
   button('랭킹', cx + U * 33, by, U * 29, U * 9, openRanking, ready);
 }
 
@@ -2868,6 +3055,7 @@ function update(dt) {
     fireballs = fireballs.filter((f) => !f.dead);
     if (game.timeLeft <= 0) endGame();
   }
+  if (game.state === 'initials') updateInitials(dt);
   // 결과 화면, 그리고 게임이 끝나 바로 뜬 랭킹 화면에서도 잠금 시간을 센다
   if (game.state === 'result' || (game.state === 'ranking' && game.rankFrom === 'result')) game.resultTime += dt;
 
@@ -2914,6 +3102,7 @@ function draw(time) {
   if (game.state === 'play') drawHUD(time);
   if (game.state === 'result') drawResult(time);
   if (game.state === 'ranking') drawRanking(time);
+  if (game.state === 'initials') drawInitials(time);
   if (game.state === 'aimtest') drawAimTest();
   if (game.state === 'gunsetup') drawGunSetup();
   drawBanner();
