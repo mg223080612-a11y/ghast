@@ -1,4 +1,6 @@
 {
-  "ghast": { "pointsPerSec": 40,  "killsPerSec": 12, "baseAllow": 100, "baseKills": 20, "maxPlaySec": null },
-  "clay":  { "pointsPerSec": 900, "killsPerSec": 3,  "baseAllow": 100, "baseKills": 20, "maxPlaySec": 90 }
+  "ghast":     { "pointsPerSec": 40,  "killsPerSec": 12, "baseAllow": 100, "baseKills": 20, "maxPlaySec": null },
+  "ghasteasy": { "pointsPerSec": 40,  "killsPerSec": 12, "baseAllow": 100, "baseKills": 20, "maxPlaySec": null },
+  "ghasthard": { "pointsPerSec": 40,  "killsPerSec": 12, "baseAllow": 100, "baseKills": 20, "maxPlaySec": null },
+  "clay":      { "pointsPerSec": 900, "killsPerSec": 3,  "baseAllow": 100, "baseKills": 20, "maxPlaySec": 90 }
 }

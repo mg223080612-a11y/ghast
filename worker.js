@@ -7,7 +7,8 @@
 //   DELETE /api/scores/<id>                         기록 하나 삭제            (X-Admin-Key 필요)
 //   DELETE /api/scores?game=                        그 게임 기록 전체 삭제    (X-Admin-Key 필요)
 //
-// game: 'ghast'(가스트 사격, 기본값) | 'clay'(접시 사격). 게임마다 랭킹·점수 상한·삭제가 따로다.
+// game: 'ghast'(가스트 사격 Normal, 기본값) | 'ghasteasy'·'ghasthard'(가스트 사격 Easy·Hard) | 'clay'(접시 사격).
+//   게임마다 랭킹·점수 상한·삭제가 따로다. 허용 목록은 limits.json 의 키.
 // game 을 안 보내면 모두 'ghast' 로 처리하므로 기존 가스트 웹 게임은 고치지 않아도 그대로 동작한다.
 //
 // 게임 파일(index.html 등)은 같은 Worker 의 정적 자산으로 함께 배포됩니다.

@@ -38,8 +38,10 @@
         <label>배경 잘못 맞히면 감점<input type="number" name="missPenalty" min="0" max="20"></label>
         <label>가스트 놓치면 감점<input type="number" name="escapePenalty" min="0" max="20"></label>
         <label>레벨당 가스트 빨라지기 (%)<input type="number" name="levelSpeedUp" min="0" max="100" step="5"></label>
-        <label>가스트의 눈물 기준 점수<input type="number" name="rewardScore" min="0" max="999"></label>
-        <label>난이도 (0.5 쉬움 ~ 2 어려움)<input type="number" name="difficulty" min="0.3" max="3" step="0.1"></label>
+        <label>가스트의 눈물 기준 — Normal<input type="number" name="rewardScore" min="0" max="999"></label>
+        <label>가스트의 눈물 기준 — Easy<input type="number" name="rewardScoreEasy" min="0" max="999"></label>
+        <label>가스트의 눈물 기준 — Hard<input type="number" name="rewardScoreHard" min="0" max="999"></label>
+        <label>기본 빠르기 (Normal 기준 1, 0.5 느리게 ~ 2 빠르게)<input type="number" name="difficulty" min="0.3" max="3" step="0.1"></label>
         <label>판정 여유 (%)<input type="number" name="hitPadding" min="0" max="60" step="5"></label>
         <label>가스트 크기 (%)<input type="number" name="ghastScale" min="50" max="200" step="10"></label>
         <label>화질 (버벅이면 '가볍게')
@@ -83,7 +85,8 @@
         <button type="button" id="rank-clear">랭킹 전체 삭제</button>
       </div>
       <p class="keys">
-        단축키 — <b>Space</b> 시작 · <b>R</b> 랭킹 · <b>V</b> 조준점 켜기/끄기 (처음 화면) · <b>P</b> 일시정지 · <b>Q</b> 처음 화면 · <b>F</b> 전체화면 · <b>M</b> 소리 끄기 · <b>S</b> 설정
+        난이도(Easy·Normal·Hard)는 닉네임 창에서 고릅니다. Normal 은 위 값 그대로, Easy 는 느리고(×0.7) 크게(×1.2)·빈 곳/놓침 감점 없음, Hard 는 빠르고(×1.35) 작게(×0.85)·감점 두 배입니다.<br>
+        단축키 — <b>Space</b> 시작 · <b>2</b> 2인 대결 · <b>3</b> 토너먼트 · <b>R</b> 랭킹 · <b>V</b> 조준점 켜기/끄기 (처음 화면) · <b>P</b> 일시정지 · <b>Q</b> 처음 화면 · <b>F</b> 전체화면 · <b>M</b> 소리 끄기 · <b>S</b> 설정
       </p>
     </form>
   </div>
@@ -96,6 +99,12 @@
       <!-- 2인 대결일 때만 보이는 2P 이름 칸 -->
       <input name="nickname2" maxlength="12" placeholder="2P 이름" spellcheck="false" hidden>
       <p class="hint" id="name-hint">랭킹에 이 이름으로 기록돼요 (최대 12자)</p>
+      <!-- 난이도: 고른 값은 다음 사람에게도 그대로. 랭킹은 난이도마다 따로 -->
+      <div class="diff-row" role="group" aria-label="난이도">
+        <button type="button" class="diff-btn" data-diff="easy">Easy</button>
+        <button type="button" class="diff-btn" data-diff="normal">Normal</button>
+        <button type="button" class="diff-btn" data-diff="hard">Hard</button>
+      </div>
       <!-- 조준점 켜기/끄기 (시작! 과 다른 줄에 두어 총으로 잘못 맞히지 않게). 글자는 game.js 가 채운다 -->
       <div class="aim-row"><button type="button" id="name-aim">🎯 조준점 켬</button></div>
       <div class="actions">
@@ -106,9 +115,41 @@
     </form>
   </div>
 
+  <!-- 토너먼트: 참가 인원 → 이름 칸. 빈 칸은 랜덤 닉네임. 대진은 무작위 (tournament.js) -->
+  <div id="tournament-entry" class="overlay" hidden>
+    <form id="tournament-form" autocomplete="off">
+      <h2>토너먼트 — 참가자를 입력하세요</h2>
+      <div class="t-options">
+        <label>참가 인원
+          <span class="t-count">
+            <button type="button" id="t-minus" aria-label="한 명 빼기">−</button>
+            <input name="count" type="number" min="3" max="32" step="1" value="8">
+            <button type="button" id="t-plus" aria-label="한 명 더하기">+</button>
+          </span>
+        </label>
+        <label>한 경기 시간 (초)<input name="seconds" type="number" min="10" max="600" step="5" value="40"></label>
+        <label class="check"><input name="third" type="checkbox" checked> 3·4위전</label>
+      </div>
+      <div class="diff-row" role="group" aria-label="난이도">
+        <button type="button" class="diff-btn" data-diff="easy">Easy</button>
+        <button type="button" class="diff-btn" data-diff="normal">Normal</button>
+        <button type="button" class="diff-btn" data-diff="hard">Hard</button>
+      </div>
+      <div id="t-names" class="t-names"></div>
+      <p class="hint" id="t-hint">빈 칸은 랜덤 닉네임으로 채워요 · Enter 로 다음 칸 · 이름이 같으면 뒤에 숫자를 붙여요</p>
+      <div class="actions">
+        <button type="button" id="t-cancel">취소</button>
+        <button type="button" id="t-random">🎲 빈 칸 채우기</button>
+        <button type="submit" class="primary">대진표 만들기</button>
+      </div>
+    </form>
+  </div>
+
   <!-- 이름 입력 창 위에서 총이 어디를 겨누는지 보여 주는 조준점 -->
   <div id="gun-cursor" hidden></div>
 
+  <script src="tournament-core.js"></script>
   <script src="game.js"></script>
+  <script src="tournament.js"></script>
 </body>
 </html>

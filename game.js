@@ -18,7 +18,9 @@ const DEFAULTS = {
   // 이후로는 마지막 값(70점)을 모을 때마다. 점수로 치면 30 → 80 → 150 → 220 …
   bonusGaps: '30, 50, 70',
   bonusSeconds: 7,     // 이만큼 시간 추가
-  rewardScore: 100,    // 이 점수 이상이면 가스트의 눈물(밀키스)
+  rewardScore: 100,    // 이 점수 이상이면 가스트의 눈물(밀키스) — Normal
+  rewardScoreEasy: 150, // Easy 의 가스트의 눈물 기준
+  rewardScoreHard: 70,  // Hard 의 가스트의 눈물 기준
   killPoints: 2,       // 가스트 처치
   deflectPoints: 1,    // 날아오는 화염구 맞히기
   hitPenalty: 1,       // 화염구에 맞으면 감점
@@ -30,7 +32,10 @@ const DEFAULTS = {
   gunAxes: 'auto',     // 조준에 쓸 조이스틱 축: 'auto' 자동 / '01' 왼쪽 스틱 / '23' 오른쪽 스틱
   gunInvertX: false,   // 조준이 좌우 반대로 움직이면 켜기
   gunInvertY: false,   // 조준이 위아래 반대로 움직이면 켜기
-  difficulty: 1,       // 0.5 쉬움 ~ 2 어려움
+  difficulty: 1,       // 기본 빠르기 (Normal 기준). 0.5 느리게 ~ 2 빠르게. Easy·Hard 는 여기에 배율을 곱한다
+  diffLevel: 'normal', // 난이도 'easy' | 'normal' | 'hard' (닉네임 창에서 고르고, 다음 사람에게도 그대로)
+  tournamentSeconds: 40, // 토너먼트 한 경기 시간 (보너스 시간 없이 고정)
+  tournamentThird: true, // 토너먼트 3·4위전
   hitPadding: 15,      // 가스트 판정 범위를 몇 % 넓힐지
   ghastScale: 100,     // 가스트 크기 (%)
   quality: 'normal',   // 화질: 'normal' 보통(빠름) / 'light' 가볍게(저사양) / 'sharp' 선명하게(느릴 수 있음)
@@ -588,8 +593,8 @@ function levelMul() {
   return Math.min(3, 1 + (settings.levelSpeedUp / 100) * ((game.level || 1) - 1));
 }
 function difficulty() {
-  const p = clamp(game.elapsed / Math.max(30, settings.gameSeconds), 0, 1);
-  const d = clamp(settings.difficulty, 0.3, 3);
+  const p = clamp(game.elapsed / Math.max(30, game.baseSeconds || settings.gameSeconds), 0, 1);
+  const d = clamp(settings.difficulty * rules().speed, 0.3, 3);
   const L = levelMul();
   const lv = (game.level || 1) - 1;
   return {
@@ -620,8 +625,55 @@ const GHAST_ODDS = [
   { normal: 30, small: 20, big: 15, angry: 30, gold: 5 },     // Lv.3 — 악랄 모드 시작
   { normal: 15, small: 20, big: 20, angry: 40, gold: 5 },     // Lv.4~
 ];
+
+// ---------- 난이도 (Easy · Normal · Hard) ----------
+// Normal 은 설정 창의 값을 그대로 쓰고, Easy·Hard 는 그 값에 배율을 곱한다
+// (운영자가 설정을 바꾸면 세 난이도가 함께 따라 바뀐다). game: 랭킹 서버에서 난이도마다 따로 쓰는 이름
+const DIFFICULTIES = {
+  easy: {
+    label: 'Easy', color: '#9fe870', game: 'ghasteasy', rewardKey: 'rewardScoreEasy',
+    speed: 0.7, size: 1.2, padding: 10,          // 느리고, 크고, 판정이 넉넉하게
+    penalty: { miss: 0, escape: 0, hit: 1 },      // 빈 곳·놓침 감점 없음 (화염구 피격만)
+    odds: [                                       // 분노 가스트가 늦게, 적게
+      { normal: 85, big: 15 },
+      { normal: 65, small: 10, big: 20, gold: 5 },
+      { normal: 50, small: 15, big: 20, angry: 10, gold: 5 },
+      { normal: 40, small: 15, big: 20, angry: 20, gold: 5 },
+    ],
+  },
+  normal: {
+    label: 'Normal', color: '#ffe14a', game: 'ghast', rewardKey: 'rewardScore',
+    speed: 1, size: 1, padding: 0,
+    penalty: { miss: 1, escape: 1, hit: 1 },
+    odds: GHAST_ODDS,
+  },
+  hard: {
+    label: 'Hard', color: '#ff6a5a', game: 'ghasthard', rewardKey: 'rewardScoreHard',
+    speed: 1.35, size: 0.85, padding: -5,        // 빠르고, 작고, 판정이 빡빡하게
+    penalty: { miss: 2, escape: 2, hit: 2 },      // 감점 두 배
+    odds: [                                       // 1레벨부터 아기·분노 가스트가 많이
+      { normal: 45, small: 25, big: 5, angry: 20, gold: 5 },
+      { normal: 30, small: 25, big: 10, angry: 30, gold: 5 },
+      { normal: 15, small: 25, big: 10, angry: 45, gold: 5 },
+      { normal: 10, small: 25, big: 10, angry: 50, gold: 5 },
+    ],
+  },
+};
+const DIFF_KEYS = Object.keys(DIFFICULTIES);
+const diffKeyOf = (key) => (DIFFICULTIES[key] ? key : 'normal');
+// 지금 판의 난이도 규칙 (처음 화면에서는 고른 난이도)
+const rules = () => DIFFICULTIES[diffKeyOf(game.diff)];
+// 감점: 'miss' 빈 곳 · 'escape' 놓침 · 'hit' 화염구 피격
+const penaltyOf = (kind) => Math.round(settings[`${kind}Penalty`] * rules().penalty[kind]);
+const rewardScoreNow = () => settings[rules().rewardKey] ?? settings.rewardScore;
+const ghastScaleNow = () => settings.ghastScale * rules().size;
+const hitPaddingNow = () => Math.max(0, settings.hitPadding + rules().padding);
+// 토너먼트는 경기 시간이 늘 같게 보너스 시간이 없다 (레벨 UP 은 그대로)
+const bonusSecondsNow = () => (game.mode === 'tournament' ? 0 : settings.bonusSeconds);
+
 function pickGhastType(level) {
-  const odds = GHAST_ODDS[Math.min(level, GHAST_ODDS.length) - 1];
+  const table = rules().odds;
+  const odds = table[Math.min(level, table.length) - 1];
   let r = Math.random() * 100;
   for (const [type, pct] of Object.entries(odds)) {
     r -= pct;
@@ -664,7 +716,7 @@ class Ghast {
     this.dead = false;
   }
   get T() { return GHAST_TYPES[this.type]; }
-  get w() { return U * 24 * this.z * this.T.size * (settings.ghastScale / 100); }
+  get w() { return U * 24 * this.z * this.T.size * (ghastScaleNow() / 100); }
   get h() { return this.w * GHAST_H / GHAST_W; }
   center() { return { x: this.x, y: this.y + Math.sin(this.bob) * U * 1.2 }; }
 
@@ -680,7 +732,7 @@ class Ghast {
   hittable() { return !this.dead && this.state !== 'dying' && !(this.state === 'in' && this.alpha < 0.3); }
   hitTest(px, py) {
     const { x, y } = this.center();
-    const pad = settings.hitPadding / 100;
+    const pad = hitPaddingNow() / 100;
     const hw = this.w * (0.5 + pad), hh = this.h * (0.5 + pad);
     return px >= x - hw && px <= x + hw && py >= y - hh && py <= y + hh;
   }
@@ -911,7 +963,10 @@ const game = {
   level: 1,             // 보너스 점수를 넘을 때마다 1씩 오름 → 가스트가 빨라짐
   resultTime: 0,
   lastTick: 0,
-  mode: 'solo',         // 'solo' 1인 기록전(랭킹 저장) / 'versus' 2인 대결(랭킹 없음)
+  mode: 'solo',         // 'solo' 1인 기록전(랭킹 저장) / 'versus' 2인 대결(랭킹 없음) / 'tournament' 토너먼트 한 경기
+  diff: 'normal',       // 이번 판 난이도 (DIFFICULTIES 의 키)
+  baseSeconds: 0,       // 이번 판 시작 시간 (토너먼트는 대진표에 정한 경기 시간)
+  overtime: 0,          // 토너먼트 연장전 횟수
   players: [],          // [{ name, score, rewardShown, stats }] — 1인은 1명, 2인 대결은 2명
   rankInfo: null,       // 결과 화면의 순위 { status: 'saving'|'saved'|'error', rankToday, rankAll, local }
   lastEntryId: null,    // 방금 저장한 기록 (랭킹 화면에서 강조)
@@ -926,6 +981,7 @@ const RANK_API_ORIGIN = 'https://ghast-shooting.gcinhak.workers.dev'; // wrangle
 const RANK_PENDING_KEY = 'ghast-shooting-pending';   // 아직 못 올린 기록
 const RANK_CACHE_KEY = 'ghast-shooting-rank-cache';  // 마지막으로 받아 온 랭킹 (오프라인일 때 보여줌)
 const PLAY_SPARE_KEY = 'ghast-shooting-play-spare';  // 인터넷이 끊길 때를 대비해 미리 받아 둔 게임 시작 표
+const RANK_GAME_DEFAULT = 'ghast';                   // 랭킹 서버의 기본 게임 이름 (= Normal 랭킹, 예전 기록 모두)
 const todayStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
 // 오늘에서 day 일 떨어진 날의 0시 (0 오늘, -1 어제 …). 서머타임이 없어도 날짜 계산은 Date 에 맡긴다
 const dayStart = (day) => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + day); return d.getTime(); };
@@ -974,28 +1030,33 @@ const Ranking = {
 
   // 게임 시작 표: 서버가 '이 시각에 게임을 시작했다'고 서명해 준 것. 기록을 올릴 때 함께 낸다 (가짜 기록 방지).
   // 인터넷이 잠깐 끊겨도 기록을 올릴 수 있게 몇 장을 미리 받아 둔다 (예전에 받은 표일수록 시간 여유가 넉넉하다)
-  spares() { return readJson(PLAY_SPARE_KEY, []); },
-  async fetchToken(timeoutMs = 2500) {
+  // 표는 난이도(랭킹)마다 따로다. Normal 은 예전에 받아 둔 표를 그대로 쓰게 예전 이름으로 보관
+  spareKey(gameId) { return gameId === RANK_GAME_DEFAULT ? PLAY_SPARE_KEY : `${PLAY_SPARE_KEY}-${gameId}`; },
+  spares(gameId = RANK_GAME_DEFAULT) { return readJson(this.spareKey(gameId), []); },
+  async fetchToken(gameId = RANK_GAME_DEFAULT, timeoutMs = 2500) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      const res = await fetch(rankApi('').replace('/api/scores', '/api/play'), { signal: ctrl.signal });
+      const res = await fetch(`${rankApi('').replace('/api/scores', '/api/play')}?game=${gameId}`, { signal: ctrl.signal });
       if (!res.ok) return null;
       return (await res.json()).token || null;
     } catch { return null; } finally { clearTimeout(timer); }
   },
-  async topUpSpares() {
-    if (this.spares().length >= 3) return;
-    const t = await this.fetchToken();
-    if (t) writeJson(PLAY_SPARE_KEY, [...this.spares(), t].slice(-3));
+  async topUpSpares(gameId = RANK_GAME_DEFAULT) {
+    if (this.spares(gameId).length >= 3) return;
+    const t = await this.fetchToken(gameId);
+    if (t) writeJson(this.spareKey(gameId), [...this.spares(gameId), t].slice(-3));
+  },
+  async topUpAllSpares() {
+    for (const key of DIFF_KEYS) await this.topUpSpares(DIFFICULTIES[key].game);
   },
   // 새 표를 받고, 안 되면(오프라인) 미리 받아 둔 표를 하나 꺼낸다
-  async takeToken() {
-    const fresh = await this.fetchToken();
-    if (fresh) { this.topUpSpares(); return fresh; }
-    const list = this.spares();
+  async takeToken(gameId = RANK_GAME_DEFAULT) {
+    const fresh = await this.fetchToken(gameId);
+    if (fresh) { this.topUpSpares(gameId); return fresh; }
+    const list = this.spares(gameId);
     const t = list.shift() || null;
-    writeJson(PLAY_SPARE_KEY, list);
+    writeJson(this.spareKey(gameId), list);
     return t;
   },
 
@@ -1036,21 +1097,25 @@ const Ranking = {
 
   // scope: 'today' 날짜별(day: 0 오늘, -1 어제 …) | 'all' 전체 — 아직 못 올린 기록도 함께 보여준다.
   // 기록은 지우지 않고 모두 남아 있어서, 지난 날짜의 랭킹도 언제든 다시 볼 수 있다
-  async top(scope, limit = 10, day = 0) {
+  // gameId: 난이도별 랭킹 이름 ('ghast' Normal · 'ghasteasy' · 'ghasthard')
+  async top(scope, limit = 10, day = 0, gameId = RANK_GAME_DEFAULT) {
     const daily = scope === 'today';
     const since = daily ? dayStart(day) : 0;
     const until = daily ? dayStart(day + 1) : Number.MAX_SAFE_INTEGER;
     const inRange = (r) => r.created_at >= since && r.created_at < until;
-    const cacheKey = `${RANK_CACHE_KEY}-${scope}${daily && day ? day : ''}`;
+    // 서버가 준 목록(캐시)에는 game 이 없다 → 캐시는 난이도별 키로 이미 나뉘어 있으니 시간만 본다.
+    // 아직 못 올린 기록은 한곳에 모여 있으니 난이도도 본다 (game 이 없는 예전 기록은 Normal)
+    const sameGame = (r) => (r.game || RANK_GAME_DEFAULT) === gameId;
+    const cacheKey = `${RANK_CACHE_KEY}-${scope}${daily && day ? day : ''}${gameId === RANK_GAME_DEFAULT ? '' : `-${gameId}`}`;
     await this.flush();
     let list;
     try {
-      list = await this.request('GET', `?since=${since}${daily ? `&until=${until}` : ''}&limit=${limit}`);
+      list = await this.request('GET', `?since=${since}${daily ? `&until=${until}` : ''}&limit=${limit}&game=${gameId}`);
       writeJson(cacheKey, list);
     } catch {
       list = readJson(cacheKey, []).filter(inRange);
     }
-    const waiting = this.pending().filter(inRange).map((r) => ({ ...r, pending: true }));
+    const waiting = this.pending().filter((r) => inRange(r) && sameGame(r)).map((r) => ({ ...r, pending: true }));
     return [...list, ...waiting].sort(byRank).slice(0, limit);
   },
 
@@ -1061,17 +1126,21 @@ const Ranking = {
     }
     return this.request('DELETE', `/${id}`);
   },
-  async clear() {
-    await this.request('DELETE', '');
-    writeJson(RANK_PENDING_KEY, []);
+  // 그 난이도(랭킹) 기록만 모두 지운다
+  async clear(gameId = RANK_GAME_DEFAULT) {
+    await this.request('DELETE', `?game=${gameId}`);
+    writeJson(RANK_PENDING_KEY, this.pending().filter((p) => (p.game || RANK_GAME_DEFAULT) !== gameId));
   },
 };
 // 보관 중인 기록은 30초마다 다시 올려 본다. 미리 받아 둔 게임 시작 표도 채워 둔다
-setInterval(() => { if (Ranking.pending().length) Ranking.flush(); Ranking.topUpSpares(); }, 30_000);
-Ranking.topUpSpares();
+setInterval(() => { if (Ranking.pending().length) Ranking.flush(); Ranking.topUpAllSpares(); }, 30_000);
+Ranking.topUpAllSpares();
 
 function refreshTitleTop() {
-  Ranking.top('today', 10).then((list) => { game.titleTop = list; }).catch(() => {});
+  const diff = game.diff;
+  Ranking.top('today', 10, 0, rules().game)
+    .then((list) => { if (game.diff === diff) game.titleTop = list; })
+    .catch(() => {});
 }
 // 처음 화면에 머무는 동안에도 30초마다 새 기록을 반영한다
 setInterval(() => { if (game.state === 'title') refreshTitleTop(); }, 30_000);
@@ -1083,7 +1152,7 @@ const RANK_ALL_LIMIT = 100;
 const rankLimit = (scope) => (scope === 'today' ? RANK_TODAY_LIMIT : RANK_ALL_LIMIT);
 // 날짜별은 1년 전까지 하루씩 넘겨 본다
 const RANK_DAYS_BACK = 365;
-const rankView = { scope: 'today', day: 0, list: null, req: 0, page: 0, perPage: 10 };
+const rankView = { scope: 'today', day: 0, diff: 'normal', list: null, req: 0, page: 0, perPage: 10 };
 // 게임이 끝난 뒤 랭킹: 1~5위 + ⋮ + 내 순위와 그 위아래 2명씩 (내 순위가 가까우면 1위부터 이어서)
 const RANK_FOCUS = { top: 5, around: 2 };
 const RANK_FOCUS_ROWS = RANK_FOCUS.top + 1 + RANK_FOCUS.around * 2 + 1; // 표에 들어가는 줄 수 (⋮ 포함)
@@ -1093,6 +1162,7 @@ function openRanking() {
   game.rankFrom = game.state === 'result' ? 'result' : 'title';
   game.state = 'ranking';
   rankView.day = 0; // 열 때는 항상 오늘부터
+  rankView.diff = diffKeyOf(game.diff); // 방금 한 판(처음 화면이면 고른) 난이도의 랭킹부터
   setRankScope(rankView.scope);
   updateCornerButtons();
 }
@@ -1101,7 +1171,7 @@ function setRankScope(scope) {
   rankView.list = null;
   rankView.page = 0;
   const req = ++rankView.req;
-  Ranking.top(scope, rankAfterGame() ? RANK_FOCUS_FETCH : rankLimit(scope), rankView.day)
+  Ranking.top(scope, rankAfterGame() ? RANK_FOCUS_FETCH : rankLimit(scope), rankView.day, DIFFICULTIES[rankView.diff].game)
     .then((list) => {
       if (req !== rankView.req) return;
       rankView.list = list;
@@ -1117,6 +1187,10 @@ function turnRankDay(delta) {
   if (day === rankView.day) return;
   rankView.day = day;
   setRankScope('today');
+}
+function setRankDiff(key) {
+  rankView.diff = diffKeyOf(key);
+  setRankScope(rankView.scope);
 }
 function setRankTab(scope) {
   if (scope === 'today') rankView.day = 0;
@@ -1140,6 +1214,8 @@ const RESULT_LOCK = 3;
 
 // ---------- 총 연결 화면 (2인 대결용 1P/2P 지정) ----------
 function openGunSetup() {
+  // 토너먼트 대진표에서 왔으면 닫을 때 대진표로 돌아간다
+  game.gunSetupFrom = game.state === 'bracket' ? 'bracket' : 'title';
   game.state = 'gunsetup';
   Guns.assigning = null;
   Guns.message = '';
@@ -1150,7 +1226,19 @@ function openGunSetup() {
 function closeGunSetup() {
   if (Guns.calib) { Guns.calib = null; return; } // 보정 중이면 보정만 취소하고 총 연결 화면으로
   Guns.assigning = null;
+  if (game.gunSetupFrom === 'bracket' && Tournament.data) { Tournament.showBracket(); return; }
   goTitle();
+}
+// 두 사람이 겨루려면(2인 대결·토너먼트) 총 2대가 '게임패드(조이스틱 모드)'로 1P·2P 지정돼 있어야 한다.
+// 마우스 모드면 두 총이 커서 하나를 같이 움직여 1P 만 점수가 오르므로, 시작하지 않고 총 연결 화면으로 안내한다
+function ensureVersusGuns() {
+  if (Guns.readyForVersus()) return true;
+  openGunSetup();
+  Guns.message = Guns.list().length < 2
+    ? '두 사람이 겨루려면 두 총을 조이스틱 모드로 연결해야 해요 (지금은 1P 만 점수가 올라요)'
+    : '1P·2P 총을 지정해 주세요';
+  if (Guns.list().length >= 2) Guns.assigning = Guns.saved.p1 ? 1 : 0;
+  return false;
 }
 
 // ---------- 총마다 조준 보정 ----------
@@ -1283,6 +1371,7 @@ function spawnGhast(demo) {
 
 function goTitle() {
   game.state = 'title';
+  game.diff = settings.diffLevel; // 처음 화면의 설명·랭킹 띠는 고른 난이도로
   game.level = 1; // 처음 화면의 가스트는 천천히
   game.paused = false;
   game.confirmHome = false;
@@ -1293,10 +1382,12 @@ function goTitle() {
 }
 
 // mode·names 를 비우면 방금 한 판과 같은 모드·이름으로 다시 시작 ('다시 하기')
-function startGame(mode = game.mode, names = game.players.map((p) => p.name)) {
+// opts: { seconds 경기 시간, diff 난이도 } — 토너먼트는 대진표에 정한 값, 그 밖에는 설정의 값
+function startGame(mode = game.mode, names = game.players.map((p) => p.name), opts = {}) {
   Sound.init();
   game.mode = mode;
-  const count = mode === 'versus' ? 2 : 1;
+  game.diff = diffKeyOf(opts.diff ?? settings.diffLevel);
+  const count = isTwoPlayer(mode) ? 2 : 1;
   game.players = Array.from({ length: count }, (_, i) => ({
     name: names[i] || (count === 2 ? `${i + 1}P` : '이름없음'),
     score: 0,
@@ -1307,7 +1398,9 @@ function startGame(mode = game.mode, names = game.players.map((p) => p.name)) {
   game.countdown = 3;
   game.lastTick = 4;
   game.paused = false;
-  game.timeLeft = settings.gameSeconds;
+  game.baseSeconds = opts.seconds ?? settings.gameSeconds;
+  game.timeLeft = game.baseSeconds;
+  game.overtime = 0;
   game.elapsed = 0;
   game.spawnTimer = 0;
   game.nextBonus = bonusGaps()[0] ?? Infinity;
@@ -1315,7 +1408,7 @@ function startGame(mode = game.mode, names = game.players.map((p) => p.name)) {
   game.level = 1;
   game.rankInfo = null;
   // 1인 기록전: 시작하자마자 게임 시작 표를 받아 둔다 (기록을 올릴 때 필요)
-  game.playToken = mode === 'solo' ? Ranking.takeToken().catch(() => null) : null;
+  game.playToken = mode === 'solo' ? Ranking.takeToken(rules().game).catch(() => null) : null;
   banner = null;
   fireballs = [];
   ghasts.forEach((g) => g.hittable() && g.leave(true));
@@ -1323,6 +1416,8 @@ function startGame(mode = game.mode, names = game.players.map((p) => p.name)) {
 }
 
 function endGame() {
+  // 토너먼트는 비기면 끝내지 않고 연장전으로 이어 간다
+  if (game.mode === 'tournament' && Tournament.tied()) { Tournament.startOvertime(); return; }
   game.state = 'result';
   game.resultTime = 0;
   game.timeLeft = 0;
@@ -1330,9 +1425,10 @@ function endGame() {
   fireballs.forEach((f) => burstFire(f.x, f.y, 0.6));
   fireballs = [];
   ghasts.forEach((g) => g.hittable() && g.leave(true));
-  const win = game.players.some((p) => p.score >= settings.rewardScore);
-  Sound.end(win || game.mode === 'versus');
+  const win = game.players.some((p) => p.score >= rewardScoreNow());
+  Sound.end(win || isTwoPlayer());
   updateCornerButtons();
+  if (game.mode === 'tournament') Tournament.finishMatch();
 
   // 랭킹은 1인 기록전만 저장한다 (2인 대결은 승패만). 먼저 랭킹에 남길 이름을 총으로 쏴서 받는다
   if (game.mode !== 'solo') return;
@@ -1348,8 +1444,9 @@ function saveSoloRecord() {
   // 1인 기록전은 끝나자마자 오늘 랭킹을 보여 준다 (저장이 끝나면 내 기록이 들어간 순위로 다시 불러온다)
   rankView.scope = 'today';
   openRanking();
+  const gameId = rules().game; // 난이도마다 랭킹이 따로
   Promise.resolve(game.playToken)
-    .then((token) => Ranking.add({ name: me.name || '이름없음', score: me.score, kills: me.stats.kills, token }))
+    .then((token) => Ranking.add({ name: me.name || '이름없음', score: me.score, kills: me.stats.kills, token, game: gameId }))
     .then((r) => {
       if (r.rejected) { game.rankInfo = { status: 'rejected', reason: r.rejected }; return; }
       game.rankInfo = { status: 'saved', ...r };
@@ -1361,6 +1458,8 @@ function saveSoloRecord() {
 
 // 2인 대결에서 각 플레이어를 구분하는 색 (조준점·점수판·점수 팝업)
 const PLAYER_COLORS = ['#5ae8ff', '#ff7ad9'];
+// 두 사람이 겨루는 모드 (2인 대결·토너먼트 경기): 점수판·총 1P/2P 구분·결과 화면이 같다
+const isTwoPlayer = (mode = game.mode) => mode === 'versus' || mode === 'tournament';
 const topScore = () => Math.max(0, ...game.players.map((p) => p.score));
 // '1P 다희' 처럼 자리와 이름을 함께. 이름을 비워 '1P' 그대로면 한 번만
 const playerLabel = (p, i) => (p.name === `${i + 1}P` ? p.name : `${i + 1}P  ${p.name}`);
@@ -1371,12 +1470,12 @@ function addScore(n, who = 0) {
   if (!p) return;
   p.score = Math.max(0, p.score + n);
   let rewardNow = false;
-  if (!p.rewardShown && p.score >= settings.rewardScore) {
+  if (!p.rewardShown && p.score >= rewardScoreNow()) {
     p.rewardShown = true;
     rewardNow = true;
     Sound.reward();
-    const title = game.mode === 'versus' ? `${p.name} 가스트의 눈물 확보!` : '가스트의 눈물 확보!';
-    showBanner(title, `${settings.rewardScore}점 달성`, '#9ff6ff');
+    const title = isTwoPlayer() ? `${p.name} 가스트의 눈물 확보!` : '가스트의 눈물 확보!';
+    showBanner(title, `${rewardScoreNow()}점 달성`, '#9ff6ff');
   }
   // 마지막 보너스 이후 점수를 새로 30 → 50 → 70 … 모을 때마다 시간 추가
   // (감점으로 내려갔다 다시 넘어도 같은 구간은 한 번만). 2인 대결은 앞선 사람 점수 기준
@@ -1385,7 +1484,7 @@ function addScore(n, who = 0) {
     const reached = game.nextBonus;
     const gaps = bonusGaps();
     while (top >= game.nextBonus) {
-      game.timeLeft += settings.bonusSeconds;
+      game.timeLeft += bonusSecondsNow();
       game.bonusCount++;
       game.level++;
       // 다음 보너스까지 새로 모아야 하는 점수 (목록이 끝나면 마지막 값을 계속 사용)
@@ -1397,7 +1496,7 @@ function addScore(n, who = 0) {
     const what = game.level >= 4 ? '악랄 모드! 화염구를 여러 발 쏴요'
       : game.level === 3 ? '가스트들이 화났다! 갑자기 돌진해요'
       : '가스트가 빨라지고 점수도 올라가요';
-    const sub = `+${settings.bonusSeconds}초 보너스  ·  ${what}`;
+    const sub = bonusSecondsNow() > 0 ? `+${bonusSecondsNow()}초 보너스  ·  ${what}` : what;
     const color = game.level >= 3 ? '#ff6a5a' : '#ffe14a';
     if (rewardNow) showBanner(`가스트의 눈물 확보!  Lv.${game.level}`, sub, '#9ff6ff', 2.8);
     else showBanner(`레벨 UP!  Lv.${game.level}`, sub, color, 2.6);
@@ -1410,14 +1509,15 @@ function ghastEscaped(gh) {
   if (game.state !== 'play' || gh.T.noEscapePenalty) return; // 황금 가스트는 놓쳐도 감점 없음
   Sound.escape();
   // 놓친 가스트는 모두의 책임: 2인 대결이면 두 사람 모두 감점
+  const pen = penaltyOf('escape');
   game.players.forEach((p, i) => {
     p.stats.escapes++;
-    if (settings.escapePenalty > 0) addScore(-settings.escapePenalty, i);
+    if (pen > 0) addScore(-pen, i);
   });
-  if (settings.escapePenalty > 0) {
+  if (pen > 0) {
     // 가스트가 사라진 쪽 화면 가장자리에 표시
     const x = clamp(gh.x, U * 10, W - U * 10);
-    popupScore(x, clamp(gh.y, U * 22, H - U * 10), `-${settings.escapePenalty} 놓침!`, '#ff6a5a');
+    popupScore(x, clamp(gh.y, U * 22, H - U * 10), `-${pen} 놓침!`, '#ff6a5a');
   }
 }
 
@@ -1429,11 +1529,12 @@ function playerHit(fb) {
   shake = Math.max(shake, U * 2.5);
   doFlash('#ff2a10', 0.5);
   // 화면에 닿은 화염구는 모두가 맞은 것: 2인 대결이면 두 사람 모두 감점
+  const pen = penaltyOf('hit');
   game.players.forEach((p, i) => {
     p.stats.hitsTaken++;
-    if (settings.hitPenalty > 0) addScore(-settings.hitPenalty, i);
+    if (pen > 0) addScore(-pen, i);
   });
-  if (settings.hitPenalty > 0) popupScore(fb.x, fb.y - U * 6, `-${settings.hitPenalty}`, '#ff6a5a');
+  if (pen > 0) popupScore(fb.x, fb.y - U * 6, `-${pen}`, '#ff6a5a');
 }
 
 // ---------- 입력 (센서 터치 / 마우스 / 펜) ----------
@@ -1490,13 +1591,15 @@ function onTap(x, y, who = 0, source = 'mouse') {
   if (!allowShot(source, now)) return; // 연사: 조용히 무시 (점수·감점·소리·표시 없음)
   Sound.init();
 
-  // 이름 입력 창이 떠 있으면 게임 화면 대신 창 안의 버튼(시작! · 🎲 · 취소)을 누른다.
+  // 입력 창(닉네임·토너먼트)이 떠 있으면 게임 화면 대신 창 안의 버튼(시작! · 🎲 · 취소 …)을 누른다.
   // 조이스틱 모드 총은 마우스 클릭이 아니라서 직접 그 자리의 버튼을 찾아 누른다. 창 밖을 쏘면 아무 일도 없다
-  if (nameOpen()) {
+  const form = overlayForm();
+  if (form) {
     const el = document.elementFromPoint(x, y);
-    const btn = el?.closest('#name-form button');
-    if (btn) btn.click();
-    else if (el?.closest('#name-form input')) el.closest('input').focus();
+    const btn = el?.closest('button');
+    const input = el?.closest('input');
+    if (btn && form.contains(btn)) btn.click();
+    else if (input && form.contains(input)) input.focus();
     return;
   }
 
@@ -1512,11 +1615,11 @@ function onTap(x, y, who = 0, source = 'mouse') {
     recordAimShot(x, y);
     return;
   }
-  if (['title', 'result', 'ranking', 'gunsetup', 'initials'].includes(game.state)) {
+  if (['title', 'result', 'ranking', 'gunsetup', 'initials', 'bracket', 'champion'].includes(game.state)) {
     for (const b of buttons) {
       if (b.enabled && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { b.action(); return; }
     }
-    if (game.state === 'ranking' || game.state === 'gunsetup' || game.state === 'initials') return;
+    if (game.state !== 'title' && game.state !== 'result') return;
     // 처음 화면의 가스트는 연습용으로 맞힐 수 있다 (점수 없음)
     const g = [...ghasts].sort((a, b) => b.z - a.z).find((o) => o.hittable() && o.hitTest(x, y));
     if (g) { g.kill(); Sound.hit(); }
@@ -1532,7 +1635,7 @@ function onTap(x, y, who = 0, source = 'mouse') {
   if (game.state !== 'play') return;
   const shooter = game.players[who];
   if (!shooter) return;
-  const versus = game.mode === 'versus';
+  const versus = isTwoPlayer();
   // 2인 대결에서는 점수 팝업에 누가 얻었는지(1P/2P)와 그 사람 색을 붙인다
   const tag = (s) => (versus ? `${who + 1}P ${s}` : s);
   const tint = (c) => (versus ? PLAYER_COLORS[who] : c);
@@ -1573,9 +1676,10 @@ function onTap(x, y, who = 0, source = 'mouse') {
   for (let i = 0; i < 6; i++) {
     addPart({ x, y, vx: rand(-1, 1) * U * 8, vy: rand(-1, 0.3) * U * 8, g: U * 40, size: U * 0.6, life: 0.4, color: '#bbbbbb' });
   }
-  if (settings.missPenalty > 0) {
-    popupScore(x, y - U * 4, tag(`-${settings.missPenalty}`), versus ? PLAYER_COLORS[who] : '#ff6a5a');
-    addScore(-settings.missPenalty, who);
+  const missPen = penaltyOf('miss');
+  if (missPen > 0) {
+    popupScore(x, y - U * 4, tag(`-${missPen}`), versus ? PLAYER_COLORS[who] : '#ff6a5a');
+    addScore(-missPen, who);
   }
 }
 
@@ -1732,7 +1836,7 @@ const Guns = {
     if (this.hiddenInSolo(s)) return;     // 1인 기록전 중 1P 가 아닌 총은 무시
     // 2인 대결 중에는 지정된 자리로, 그 밖에는 (1인 기록전·메뉴) 1P 로 친다
     let who = 0;
-    if (game.mode === 'versus' && (game.state === 'play' || game.state === 'countdown')) {
+    if (isTwoPlayer() && (game.state === 'play' || game.state === 'countdown')) {
       who = this.playerOf(s);
       if (who < 0) return; // 지정 안 된 총은 대결 중 무시
     }
@@ -1743,7 +1847,7 @@ const Guns = {
   draw(time) {
     const now = performance.now();
     // 이름 입력 창은 캔버스보다 위에 떠서 조준점이 가려진다 → 창 위에 따로 띄운 조준점(#gun-cursor)을 옮긴다
-    const recent = nameOpen() && this.list().filter((s) => now - s.lastActive <= 10000).sort((a, b) => b.lastActive - a.lastActive)[0];
+    const recent = overlayForm() && this.list().filter((s) => now - s.lastActive <= 10000).sort((a, b) => b.lastActive - a.lastActive)[0];
     gunCursor.hidden = !recent;
     if (recent) gunCursor.style.transform = `translate(${recent.x}px, ${recent.y}px)`;
     // 게임 중에는 '큰 조준점' 설정일 때만 총 조준점(과녁)을 그린다. 메뉴·총 테스트에서는 버튼을 고를 수 있게 항상 보인다
@@ -1779,6 +1883,10 @@ window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeNameEntry();
     return;
   }
+  if (Tournament.formOpen()) {
+    if (e.key === 'Escape') Tournament.closeForm();
+    return;
+  }
   Sound.init();
   // 엑스거너 총에는 q·s·w·a·d·5 같은 키보드 버튼이 달려 있다.
   // 게임 중에 학생이 잘못 눌러 판이 끝나거나(Q) 설정 창이 뜨지(S) 않도록 막는다.
@@ -1799,6 +1907,7 @@ window.addEventListener('keydown', (e) => {
       else if (game.state === 'aimtest') goTitle();
       else if (game.state === 'gunsetup') closeGunSetup();
       else if (game.state === 'play' && game.paused) resumeGame();
+      else if (game.state === 'bracket') Tournament.startNextIfReady();
       break;
     case 'KeyL': {   // 렉 걸릴 때 바로: 화질 보통 ↔ 가볍게 (+ 효과 줄이기) 바꾸기
       const light = settings.quality === 'light' && settings.fewEffects;
@@ -1816,6 +1925,10 @@ window.addEventListener('keydown', (e) => {
     case 'Digit2':   // 처음 화면에서 2 = 2인 대결
     case 'Numpad2':
       if (game.state === 'title') { e.preventDefault(); openNameEntry('versus'); }
+      break;
+    case 'Digit3':   // 처음 화면에서 3 = 토너먼트 (진행 중이면 이어하기)
+    case 'Numpad3':
+      if (game.state === 'title') { e.preventDefault(); Tournament.open(); }
       break;
     case 'KeyV':     // 조준점 켜기/끄기 (처음 화면에서만. 엑스거너 총의 키 버튼과 겹치지 않는 글자)
       if (game.state === 'title') toggleAim();
@@ -1847,7 +1960,7 @@ window.addEventListener('keydown', (e) => {
     case 'Escape':
       if (game.state === 'ranking') closeRanking();
       else if (game.state === 'gunsetup') closeGunSetup();
-      else if (game.state === 'aimtest' || e.code === 'KeyQ') goTitle();
+      else if (game.state === 'aimtest' || game.state === 'bracket' || game.state === 'champion' || e.code === 'KeyQ') goTitle();
       break;
     case 'KeyF':
       toggleFullscreen();
@@ -1892,18 +2005,23 @@ async function loadRankAdmin() {
   const where = document.getElementById('rank-where');
   box.textContent = '불러오는 중…';
   let list = [];
-  try { list = await Ranking.top('all', 100); } catch { box.textContent = '랭킹을 불러오지 못했습니다'; return; }
+  try {
+    // 난이도별 랭킹을 모두 모아 [Easy] [Normal] [Hard] 순서로 보여 준다
+    const lists = await Promise.all(DIFF_KEYS.map((key) => Ranking.top('all', 100, 0, DIFFICULTIES[key].game)
+      .then((rows) => rows.map((r, i) => ({ ...r, rank: i + 1, diffLabel: DIFFICULTIES[key].label })))));
+    list = lists.flat();
+  } catch { box.textContent = '랭킹을 불러오지 못했습니다'; return; }
   const waiting = Ranking.pending().length;
   where.textContent = `저장 위치: Cloudflare 온라인 DB — ${Ranking.online ? '연결됨' : '연결 안 됨 (인터넷 확인)'}`
     + (waiting ? ` · 올리지 못한 기록 ${waiting}개 (연결되면 자동 업로드)` : '')
     + ' · 삭제하려면 아래 관리자 키가 필요합니다';
   box.textContent = '';
   if (!list.length) { box.textContent = '아직 기록이 없습니다'; return; }
-  list.forEach((r, i) => {
+  list.forEach((r) => {
     const row = document.createElement('div');
     row.className = 'rank-row';
     const label = document.createElement('span');
-    label.textContent = `${i + 1}. ${r.name} · ${r.score}점 · ${new Date(r.created_at).toLocaleString('ko-KR')}${r.pending ? ' · 업로드 대기' : ''}`;
+    label.textContent = `[${r.diffLabel}] ${r.rank}. ${r.name} · ${r.score}점 · ${new Date(r.created_at).toLocaleString('ko-KR')}${r.pending ? ' · 업로드 대기' : ''}`;
     const del = document.createElement('button');
     del.type = 'button';
     del.textContent = '삭제';
@@ -1918,8 +2036,10 @@ async function loadRankAdmin() {
   });
 }
 document.getElementById('rank-clear').addEventListener('click', async () => {
-  if (!confirm('랭킹 기록을 모두 지울까요? 되돌릴 수 없습니다.')) return;
-  await Ranking.clear().catch((err) => alert(`삭제 실패: ${err.message}`));
+  if (!confirm('랭킹 기록을 모두(Easy·Normal·Hard) 지울까요? 되돌릴 수 없습니다.')) return;
+  for (const key of DIFF_KEYS) {
+    await Ranking.clear(DIFFICULTIES[key].game).catch((err) => alert(`${DIFFICULTIES[key].label} 삭제 실패: ${err.message}`));
+  }
   loadRankAdmin();
   refreshTitleTop();
 });
@@ -1932,6 +2052,8 @@ const nameInput2 = nameForm.elements.nickname2;
 const nameHint = document.getElementById('name-hint');
 const nameTitle = document.getElementById('name-title');
 const nameOpen = () => !nameEl.hidden;
+// 화면 위에 떠 있는 입력 창(닉네임·토너먼트 참가자)의 form. 떠 있는 동안 총알은 창 안 버튼을 누른다
+const overlayForm = () => document.querySelector('.overlay:not([hidden]) form');
 const gunCursor = document.getElementById('gun-cursor');
 let nameMode = 'solo';
 
@@ -1962,6 +2084,23 @@ function toggleAim() {
 }
 // 이름 입력 창: 시작 직전에 확인하고 바꾼다 (총으로 쏴도 눌린다). 누른 뒤에도 Enter 로 바로 시작하도록 이름 칸으로 돌아간다
 nameAimButton.addEventListener('click', () => { toggleAim(); nameInput.focus(); });
+
+// 난이도 버튼 (닉네임 창·토너먼트 창에 있음). 고른 값은 저장되어 다음 사람에게도 그대로
+function updateDiffButtons() {
+  document.querySelectorAll('.diff-btn').forEach((b) => b.classList.toggle('on', b.dataset.diff === settings.diffLevel));
+}
+function setDiffLevel(key) {
+  settings = { ...settings, diffLevel: diffKeyOf(key) };
+  saveSettings();
+  // 처음 화면 위에 창이 떠 있으면 뒤의 설명(감점·상품 점수)과 랭킹 띠도 바로 바꾼다
+  if (game.state === 'title') { game.diff = settings.diffLevel; refreshTitleTop(); }
+  updateDiffButtons();
+  Sound.tick();
+}
+document.querySelectorAll('.diff-btn').forEach((b) => b.addEventListener('click', () => {
+  setDiffLevel(b.dataset.diff);
+  if (b.closest('#name-form')) nameInput.focus(); // Enter 로 바로 시작할 수 있게
+}));
 // 랜덤 닉네임: 형용사 + 동물 (예: 용감한 판다). 이름 칸을 열 때마다, 🎲 버튼을 누를 때마다 새로 뽑는다
 const NAME_ADJECTIVES = [
   '용감한', '날쌘', '졸린', '배고픈', '수줍은', '씩씩한', '엉뚱한', '느긋한', '화난', '신난',
@@ -1990,16 +2129,7 @@ function fillRandomNames() {
 // mode: 'solo' 1인 기록전(닉네임 필수, 랭킹 저장) / 'versus' 2인 대결(이름 두 개, 비우면 1P·2P)
 function openNameEntry(mode = 'solo') {
   Sound.init();
-  // 2인 대결은 총 2대가 '게임패드(조이스틱 모드)'로 따로 잡혀야 한다.
-  // 마우스 모드면 두 총이 커서 하나를 같이 움직여 1P 만 점수가 오르므로, 시작하지 않고 총 연결 화면으로 안내
-  if (mode === 'versus' && !Guns.readyForVersus()) {
-    openGunSetup();
-    Guns.message = Guns.list().length < 2
-      ? '2인 대결은 두 총을 조이스틱 모드로 연결해야 해요 (지금은 1P 만 점수가 올라요)'
-      : '1P·2P 총을 지정해 주세요';
-    if (Guns.list().length >= 2) Guns.assigning = Guns.saved.p1 ? 1 : 0;
-    return;
-  }
+  if (mode === 'versus' && !ensureVersusGuns()) return;
   if (game.state !== 'title') goTitle();
   nameMode = mode;
   const versus = mode === 'versus';
@@ -2015,11 +2145,13 @@ function openNameEntry(mode = 'solo') {
     : '랜덤 이름으로 랭킹에 기록돼요. 🎲 로 다시 뽑거나 직접 고쳐도 돼요 (최대 12자)';
   nameHint.classList.remove('error');
   updateNameAimButton();
+  updateDiffButtons();
   nameEl.hidden = false;
   // 글자를 치면 랜덤 이름이 바로 지워지고 새로 써지도록 전체 선택
   setTimeout(() => { nameInput.focus(); nameInput.select(); }, 0);
 }
 function closeNameEntry() { nameEl.hidden = true; }
+// (토너먼트 참가자 창은 tournament.js)
 // 2인 대결: 1P 칸에서 Enter 를 누르면 바로 시작하지 않고 2P 칸으로 넘어간다
 nameInput.addEventListener('keydown', (e) => {
   if (nameMode === 'versus' && e.key === 'Enter' && !e.isComposing) {
@@ -2044,8 +2176,11 @@ document.getElementById('name-random').addEventListener('click', () => {
   fillRandomNames();
   nameHint.classList.remove('error');
 });
-// 결과 화면 → 다음 사람/새 대결 (이름 새로 입력)
-function nextPlayer() { openNameEntry(game.mode); }
+// 결과 화면 → 다음 사람/새 대결 (이름 새로 입력). 토너먼트는 대진표(또는 우승 발표)로
+function nextPlayer() {
+  if (game.mode === 'tournament') { Tournament.afterResult(); return; }
+  openNameEntry(game.mode);
+}
 // 1인 기록전 '다시 하기': 새 랜덤 닉네임(방금 이름과 다르게)을 배정해 바로 다시 시작
 function retrySolo() { startGame('solo', [randomNickname(game.players[0]?.name)]); }
 function closeSettings() { settingsEl.hidden = true; }
@@ -2077,7 +2212,7 @@ document.getElementById('btn-fullscreen').addEventListener('click', toggleFullsc
 document.getElementById('btn-aimtest').addEventListener('click', () => { Sound.init(); openAimTest(); });
 document.getElementById('btn-gunsetup').addEventListener('click', () => { Sound.init(); openGunSetup(); });
 function updateCornerButtons() {
-  const menu = game.state === 'title' || game.state === 'result';
+  const menu = ['title', 'result', 'bracket', 'champion'].includes(game.state);
   for (const id of ['btn-gunsetup', 'btn-aimtest', 'btn-fullscreen', 'btn-settings']) {
     document.getElementById(id).hidden = !menu;
   }
@@ -2098,7 +2233,14 @@ const INITIALS = {
   max: 6,        // 최대 글자 수
   idle: 5,       // 마지막으로 쏜 뒤 이 시간(초)이 지나면 자동 등록
   lock: 2,       // 판이 뜬 뒤 잠깐 잠금 (게임 끝까지 쏘던 총알이 글자로 들어가지 않게)
-  rows: ['ABCDEFGHIJ', 'KLMNOPQRST', 'UVWXYZ', '0123456789'],
+  // 실제 키보드와 같은 배치. offset: 줄이 오른쪽으로 밀리는 정도 (글자 칸 단위)
+  rows: [
+    { keys: '1234567890', offset: 0 },
+    { keys: 'QWERTYUIOP', offset: 0.5 },
+    { keys: 'ASDFGHJKL', offset: 0.75 },
+    { keys: 'ZXCVBNM', offset: 1.25 },
+  ],
+  eraseWidth: 2.25, // Z 줄 끝에 붙는 '← 지우기' 칸 넓이 (글자 칸 단위)
 };
 function openInitials() {
   game.state = 'initials';
@@ -2172,14 +2314,17 @@ function drawInitials(time) {
     text('잠깐! 곧 쏠 수 있어요', cx, by + U * 1.5, U * 3.2, '#c9a89a');
   }
 
-  // 글자판: A-J / K-T / U-Z + 지우기 / 0-9
-  const kw = U * 10.6, kh = U * 9, kg = U * 1.6;
-  const gx0 = cx - (10 * kw + 9 * kg) / 2, gy0 = py + U * 45;
+  // 글자판: 실제 키보드처럼 1~0 / QWERTYUIOP / ASDFGHJKL / ZXCVBNM ← 지우기 (줄마다 오른쪽으로 조금씩 밀림)
+  const kw = U * 10, kh = U * 9, kg = U * 1.5, pitch = kw + kg;
+  const lastRow = INITIALS.rows.length - 1;
+  const span = Math.max(...INITIALS.rows.map((row, r) => row.offset + row.keys.length + (r === lastRow ? INITIALS.eraseWidth : 0)));
+  const gx0 = cx - (span * pitch - kg) / 2, gy0 = py + U * 45;
   INITIALS.rows.forEach((row, r) => {
     const y = gy0 + r * (kh + kg);
-    [...row].forEach((ch, c) => button(ch, gx0 + c * (kw + kg) + kw / 2, y, kw, kh, () => typeInitial(ch), ready));
-    if (r === 2) {
-      const x = gx0 + 6 * (kw + kg), w = 4 * kw + 3 * kg;
+    const x0 = gx0 + row.offset * pitch;
+    [...row.keys].forEach((ch, c) => button(ch, x0 + c * pitch + kw / 2, y, kw, kh, () => typeInitial(ch), ready));
+    if (r === lastRow) {
+      const x = x0 + row.keys.length * pitch, w = INITIALS.eraseWidth * pitch - kg;
       button('← 지우기', x + w / 2, y, w, kh, eraseInitial, ready && ini.text.length > 0);
     }
   });
@@ -2193,6 +2338,7 @@ function drawInitials(time) {
 
 function goHome() {
   if (nameOpen()) closeNameEntry();
+  if (Tournament.formOpen()) Tournament.closeForm();
   // 이름 쏘는 중에 처음 화면으로 가면 원래 닉네임으로 기록은 남긴다
   if (game.state === 'initials') finishInitials(true);
   if (game.state === 'play') {
@@ -2321,7 +2467,7 @@ function button(label, cx, cy, w, h, action, enabled = true, primary = false) {
   ctx.fillStyle = primary ? '#24461a' : '#3e3e3e';
   ctx.fillRect(x, y + h - b, w, b);
   ctx.fillRect(x + w - b, y, b, h);
-  text(label, cx, cy, h * 0.42, '#ffffff');
+  text(label, cx, cy, fitTextSize(label, h * 0.42, w - U * 2), '#ffffff'); // 긴 글자는 버튼 안에 들어가게 줄임
   ctx.globalAlpha = 1;
   buttons.push({ x: x - b, y: y - b, w: w + b * 2, h: h + b * 2, action, enabled });
 }
@@ -2346,14 +2492,13 @@ function formatTime(s) {
 
 // ---------- 화면별 그리기 ----------
 // ---------- 처음 화면 배치 (U 단위) ----------
-// 버튼 줄: [랭킹] [1인 기록전] [2인 대결] [조준점] — 가운데를 기준으로 좌우 대칭
-const TITLE_BTN = { bigW: 34, smallW: 26, h: 11, gap: 4 };
+// 버튼 줄: [랭킹] [1인 기록전] [2인 대결] [토너먼트] [조준점] — 가운데를 기준으로 좌우 대칭
+const TITLE_BTN = { bigW: 29, smallW: 22, h: 11, gap: 3 };
 const titleButtonRowY = () => H * 0.84;
-const titleButtonX = (slot) => {          // slot: -2(왼쪽 작은) -1 1(가운데 큰 둘) 2(오른쪽 작은)
+const titleButtonX = (slot) => {          // slot: -2(왼쪽 작은) -1 0 1(가운데 큰 셋) 2(오른쪽 작은)
   const { bigW, smallW, gap } = TITLE_BTN;
-  const big = gap / 2 + bigW / 2;
-  const small = gap / 2 + bigW + gap + smallW / 2;
-  return W / 2 + U * Math.sign(slot) * (Math.abs(slot) === 1 ? big : small);
+  const offset = Math.abs(slot) === 2 ? bigW * 1.5 + gap * 2 + smallW / 2 : Math.abs(slot) * (bigW + gap);
+  return W / 2 + U * Math.sign(slot) * offset;
 };
 const titleAimButtonPos = () => ({ x: titleButtonX(2), y: titleButtonRowY() });
 
@@ -2408,10 +2553,11 @@ function drawTitle(time) {
   drawTitleCards(cx, py + U * 8.5, pw - U * 6);
   ctx.fillStyle = 'rgba(255, 170, 120, 0.25)';
   ctx.fillRect(cx - pw / 2 + U * 4, py + U * 30.5, pw - U * 8, Math.max(1, U * 0.25));
-  text(`배경을 맞히면 -${settings.missPenalty}점  ·  가스트를 놓치면 -${settings.escapePenalty}점  ·  화염구에 맞으면 -${settings.hitPenalty}점`, cx, py + U * 33.6, U * 3.1, '#ff9a8a');
+  const pen = (kind) => (penaltyOf(kind) > 0 ? `-${penaltyOf(kind)}점` : '감점 없음');
+  text(`배경을 맞히면 ${pen('miss')}  ·  가스트를 놓치면 ${pen('escape')}  ·  화염구에 맞으면 ${pen('hit')}`, cx, py + U * 33.6, U * 3.1, '#ff9a8a');
   text(`제한 시간 ${timeLabel(settings.gameSeconds)}  ·  ${bonusSteps()}점마다 +${settings.bonusSeconds}초 & 레벨 UP!`, cx, py + U * 38.2, U * 3.2, '#ffe14a');
   // 상품 줄: 글자 바로 양옆에 가스트의 눈물
-  const reward = `${settings.rewardScore}점 이상이면 '가스트의 눈물'을 드려요`;
+  const reward = `${rewardScoreNow()}점 이상이면 '가스트의 눈물'을 드려요`;
   const rs = U * 3.6, ry = py + U * 42.9;
   text(reward, cx, ry, rs, '#9ff6ff');
   ctx.font = `bold ${Math.round(rs)}px ${FONT}`;
@@ -2420,13 +2566,14 @@ function drawTitle(time) {
   ctx.drawImage(IMG.tear, cx + rw / 2 + U * 2, ry - ts / 2, ts, ts);
   text('※ 화면만 쏘세요! 사람을 향해 쏘면 안 돼요', cx, py + U * 46.8, U * 2.7, '#ff8a7a');
 
-  // 버튼 줄 (좌우 대칭, 높이 같음): 랭킹 · 1인 기록전 · 2인 대결 · 조준점
+  // 버튼 줄 (좌우 대칭, 높이 같음): 랭킹 · 1인 기록전 · 2인 대결 · 토너먼트 · 조준점
   const by = titleButtonRowY(), { bigW, smallW, h } = TITLE_BTN;
   button('랭킹', titleButtonX(-2), by, U * smallW, U * h, openRanking);
   button('1인 기록전', titleButtonX(-1), by, U * bigW, U * h, () => openNameEntry('solo'), true, true);
-  button('2인 대결', titleButtonX(1), by, U * bigW, U * h, () => openNameEntry('versus'), true, true);
+  button('2인 대결', titleButtonX(0), by, U * bigW, U * h, () => openNameEntry('versus'), true, true);
+  button(Tournament.inProgress() ? '토너먼트 이어하기' : '토너먼트', titleButtonX(1), by, U * bigW, U * h, () => Tournament.open(), true, true);
   button(aimLabel(), titleButtonX(2), by, U * smallW, U * h, toggleAim, true, aimOn());
-  text('Space 1인 · 2 대결 · R 랭킹 · V 조준점 · G 총 연결 · S 설정', cx, by + U * 9, U * 2.5, '#c9a89a');
+  text(`난이도 ${rules().label} (닉네임 창에서 변경)  ·  Space 1인 · 2 대결 · 3 토너먼트 · R 랭킹 · V 조준점 · G 총 연결 · S 설정`, cx, by + U * 9, U * 2.5, '#c9a89a');
 
   drawTitleBottomBar(time);
 }
@@ -2445,7 +2592,7 @@ function drawTitleBottomBar(time) {
   if (!list.length) return;
   ctx.font = `bold ${Math.round(U * 2.4)}px ${FONT}`;
   const rightW = ctx.measureText(right).width;
-  const label = `오늘의 랭킹 TOP ${list.length}`;
+  const label = `오늘의 ${rules().label} TOP ${list.length}`;
   text(label, U * 2, mid, U * 2.8, '#ffe14a', 'left');
   ctx.font = `bold ${Math.round(U * 2.8)}px ${FONT}`;
   const x0 = U * 2 + ctx.measureText(label).width + U * 3;
@@ -2567,7 +2714,8 @@ function drawGunSetup() {
 
   // 안내 문구: 지금 무엇을 해야 하는지. 두 총이 다 준비되면 바로 대결을 시작할 수 있는 버튼
   if (Guns.assigning === null && Guns.readyForVersus()) {
-    button('2인 대결 시작 ▶', cx, py + ph - U * 33, U * 50, U * 8, () => { closeGunSetup(); openNameEntry('versus'); }, true, true);
+    if (game.gunSetupFrom === 'bracket') button('대진표로 돌아가기 ▶', cx, py + ph - U * 33, U * 50, U * 8, closeGunSetup, true, true);
+    else button('2인 대결 시작 ▶', cx, py + ph - U * 33, U * 50, U * 8, () => { closeGunSetup(); openNameEntry('versus'); }, true, true);
   } else {
     const ask = Guns.assigning !== null ? `${Guns.assigning + 1}P 총의 방아쇠를 당기세요` : Guns.message;
     if (ask) text(ask, cx, py + ph - U * 33, fitTextSize(ask, U * 4, pw - U * 8), Guns.assigning !== null ? PLAYER_COLORS[Guns.assigning] : '#9ff6ff');
@@ -2705,8 +2853,12 @@ function drawRanking(time) {
   const dayTitle = focus ? `오늘의 랭킹 · ${dayLabel(0)}`
     : rankView.day === 0 ? `오늘의 TOP 10 · ${dayLabel(0)}` : `${dayLabel(rankView.day)} TOP 10`;
   text(today ? dayTitle : '전체 랭킹', cx, py + U * 7, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
-  button('날짜별', cx - U * 13, py + U * 17, U * 22, U * 7, () => setRankTab('today'), true, rankView.scope === 'today');
-  button('전체', cx + U * 13, py + U * 17, U * 22, U * 7, () => setRankTab('all'), true, rankView.scope === 'all');
+  // 왼쪽: 날짜별 · 전체 / 오른쪽: 난이도별 랭킹 (Easy · Normal · Hard)
+  button('날짜별', cx - U * 37, py + U * 17, U * 19, U * 7, () => setRankTab('today'), true, rankView.scope === 'today');
+  button('전체', cx - U * 16.5, py + U * 17, U * 19, U * 7, () => setRankTab('all'), true, rankView.scope === 'all');
+  DIFF_KEYS.forEach((key, i) => {
+    button(DIFFICULTIES[key].label, cx + U * (8 + i * 16), py + U * 17, U * 14, U * 7, () => setRankDiff(key), true, rankView.diff === key);
+  });
 
   // 게임이 끝나 바로 뜬 랭킹은 아래에 내 기록 두 줄이 더 들어가서 표를 조금 줄인다
   const afterGame = game.rankFrom === 'result' && game.mode === 'solo';
@@ -2777,14 +2929,14 @@ function drawRanking(time) {
     // 방금 끝난 판: 내 점수·순위·보상을 보여 주고, 다음 사람이 바로 시작할 수 있게
     const me = game.players[0];
     const ri = game.rankInfo;
-    const win = me.score >= settings.rewardScore;
-    let mine = `${me.name || '이름없음'} 님 ${me.score}점`;
+    const win = me.score >= rewardScoreNow();
+    let mine = `${me.name || '이름없음'} 님 ${me.score}점 (${rules().label})`;
     if (ri?.status === 'saving') mine += '  ·  랭킹 저장 중…';
     else if (ri?.status === 'saved' && !ri.pending) mine += `  ·  오늘 ${ri.rankToday}위 · 전체 ${ri.rankAll}위`;
     else if (ri?.status === 'saved') mine += '  ·  이 PC에 보관 (연결되면 올라가요)';
     else if (ri?.status === 'rejected' || ri?.status === 'error') mine += '  ·  랭킹 저장 실패';
     text(mine, cx, by - U * 11, U * 4, '#ffe14a');
-    text(win ? '가스트의 눈물 획득! 진행요원에게 받아가세요' : `${settings.rewardScore}점 이상이면 가스트의 눈물을 받을 수 있어요`,
+    text(win ? '가스트의 눈물 획득! 진행요원에게 받아가세요' : `${rewardScoreNow()}점 이상이면 가스트의 눈물을 받을 수 있어요`,
       cx, by - U * 6.2, U * 3, win ? '#9ff6ff' : '#c9a89a');
     const ready = game.resultTime > RESULT_LOCK; // 계속 쏘던 총알이 실수로 버튼을 누르지 않게 잠깐 잠금
     button('다음 사람', cx - U * 33, by, U * 29, U * 8, nextPlayer, ready, true);
@@ -2836,7 +2988,7 @@ function drawVersusScores(time) {
 
 function drawHUD(time) {
   // 점수
-  if (game.mode === 'versus') {
+  if (isTwoPlayer()) {
     drawVersusScores(time);
   } else {
     panel(U * 2.5, U * 2.5, U * 40, U * 13, 0.6);
@@ -2854,24 +3006,26 @@ function drawHUD(time) {
   ctx.scale(pulse, pulse);
   text(formatTime(game.timeLeft), 0, 0, U * 10, danger ? '#ff5a4a' : '#ffffff');
   ctx.restore();
-  text(`Lv.${game.level}`, W / 2, U * 17, U * 3.6, LEVEL_COLORS[Math.min(game.level, LEVEL_COLORS.length) - 1]);
+  text(`${rules().label}  ·  Lv.${game.level}`, W / 2, U * 17, U * 3.6, LEVEL_COLORS[Math.min(game.level, LEVEL_COLORS.length) - 1]);
 
   const bonusOn = settings.bonusSeconds > 0 && Number.isFinite(game.nextBonus);
-  // 2인 대결은 양쪽에 점수판이 있으니, 다음 보너스만 타이머 아래 글자로
-  if (game.mode === 'versus') {
-    if (bonusOn) text(`다음 +${settings.bonusSeconds}초: 먼저 ${game.nextBonus}점`, W / 2, U * 21.5, U * 2.6, '#ffe14a');
+  // 2인 대결·토너먼트는 양쪽에 점수판이 있으니, 다음 보너스만 타이머 아래 글자로
+  if (isTwoPlayer()) {
+    if (game.overtime) text(`연장전${game.overtime > 1 ? ` ${game.overtime}` : ''}  ·  끝날 때 앞선 사람이 승리!`, W / 2, U * 21.5, U * 2.8, '#ff8a7a');
+    else if (bonusOn && bonusSecondsNow() > 0) text(`다음 +${bonusSecondsNow()}초: 먼저 ${game.nextBonus}점`, W / 2, U * 21.5, U * 2.6, '#ffe14a');
+    else if (bonusOn) text(`다음 레벨: 먼저 ${game.nextBonus}점`, W / 2, U * 21.5, U * 2.6, '#ffe14a');
     return;
   }
 
   // 목표 진행 막대: 가스트의 눈물 점수 / 다음 보너스 점수 표시
   const myScore = game.players[0].score;
   const bw = U * 52, bh = U * 3.4, bx = W - bw - U * 5, by = U * 9;
-  const max = Math.max(settings.rewardScore, bonusOn ? game.nextBonus : 0, myScore, 1) * 1.15;
+  const max = Math.max(rewardScoreNow(), bonusOn ? game.nextBonus : 0, myScore, 1) * 1.15;
   panel(bx - U * 2.5, U * 2.5, bw + U * 5, U * 13, 0.6);
   ctx.fillStyle = '#2a1010';
   ctx.fillRect(bx, by, bw, bh);
   const fill = clamp(myScore / max, 0, 1);
-  ctx.fillStyle = myScore >= settings.rewardScore ? '#7de3ff' : '#ff7a3a';
+  ctx.fillStyle = myScore >= rewardScoreNow() ? '#7de3ff' : '#ff7a3a';
   ctx.fillRect(bx, by, bw * fill, bh);
   const mark = (score, label, color, img) => {
     const mx = bx + bw * clamp(score / max, 0, 1);
@@ -2881,7 +3035,7 @@ function drawHUD(time) {
     else text(label, mx, by - U * 3.4, U * 2.8, color);
     text(`${score}`, mx, by + bh + U * 2.6, U * 2.6, color);
   };
-  mark(settings.rewardScore, '', '#9ff6ff', IMG.tear);
+  mark(rewardScoreNow(), '', '#9ff6ff', IMG.tear);
   if (bonusOn) mark(game.nextBonus, `+${settings.bonusSeconds}초`, '#ffe14a');
 }
 
@@ -2907,7 +3061,9 @@ function drawVersusResult(time) {
   const [a, b] = game.players;
   const winner = a.score === b.score ? -1 : a.score > b.score ? 0 : 1;
 
-  text('대결 종료!', cx, py + U * 7, U * 6, '#ffcf5a');
+  const tournament = game.mode === 'tournament';
+  text(tournament ? Tournament.resultHeading() : '대결 종료!', cx, py + U * 7, U * 6, '#ffcf5a');
+  if (tournament) text(Tournament.resultNote(), cx, py + U * 22.5, U * 3.2, '#ffe14a');
   if (winner < 0) text('무승부!', cx, py + U * 16, U * 9, '#ffffff', 'center', { shadow: '#a3200c' });
   else {
     const w = game.players[winner];
@@ -2932,7 +3088,7 @@ function drawVersusResult(time) {
     const acc = st.shots ? Math.round(((st.kills + st.deflects) / st.shots) * 100) : 0;
     const statLine = `처치 ${st.kills} · 반사 ${st.deflects} · 빗나감 ${st.misses} · 명중률 ${acc}%`;
     text(statLine, ccx, top + U * 29, fitTextSize(statLine, U * 2.8, colW - U * 6), '#ffd9b0');
-    if (p.score >= settings.rewardScore) {
+    if (p.score >= rewardScoreNow()) {
       // 눈물 아이콘 + 글자를 한 덩어리로 가운데 정렬
       const msg = '가스트의 눈물 획득!';
       const ts = U * 6, gap = U * 1.5;
@@ -2949,25 +3105,26 @@ function drawVersusResult(time) {
 
   const ready = game.resultTime > RESULT_LOCK;
   const by = py + ph - U * 8;
+  if (tournament) { Tournament.drawResultButtons(cx, by, ready); return; }
   button('새 대결', cx - U * 33, by, U * 29, U * 9, () => openNameEntry('versus'), ready, true);
   button('다시 대결', cx, by, U * 29, U * 9, () => startGame(), ready);
   button('처음 화면', cx + U * 33, by, U * 29, U * 9, goTitle, ready);
 }
 
 function drawResult(time) {
-  if (game.mode === 'versus') { drawVersusResult(time); return; }
+  if (isTwoPlayer()) { drawVersusResult(time); return; }
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.fillRect(0, 0, W, H);
   const cx = W / 2, pw = Math.min(W - U * 8, U * 110), ph = U * 92;
   const py = Math.max(U * 2, (H - ph) / 2);
   panel(cx - pw / 2, py, pw, ph, 0.82);
   const me = game.players[0];
-  const win = me.score >= settings.rewardScore;
+  const win = me.score >= rewardScoreNow();
   const st = me.stats;
   text(`${me.name || '이름없음'} 님 · 미션 종료!`, cx, py + U * 7, U * 6.5, '#ffcf5a');
   text(`${me.score}점`, cx, py + U * 20, U * 15, '#ffffff', 'center', { shadow: '#a3200c' });
   const acc = st.shots ? Math.round(((st.kills + st.deflects) / st.shots) * 100) : 0;
-  text(`처치 ${st.kills}  ·  반사 ${st.deflects}  ·  빗나감 ${st.misses}  ·  놓침 ${st.escapes}  ·  피격 ${st.hitsTaken}  ·  명중률 ${acc}%  ·  레벨 ${game.level}`, cx, py + U * 31, U * 3.2, '#ffd9b0');
+  text(`처치 ${st.kills}  ·  반사 ${st.deflects}  ·  빗나감 ${st.misses}  ·  놓침 ${st.escapes}  ·  피격 ${st.hitsTaken}  ·  명중률 ${acc}%  ·  ${rules().label} 레벨 ${game.level}`, cx, py + U * 31, U * 3.2, '#ffd9b0');
 
   // 순위
   const ri = game.rankInfo;
@@ -2988,7 +3145,7 @@ function drawResult(time) {
     text('진행요원에게 가스트의 눈물을 받아가세요', cx, py + U * 73, U * 3.4, '#ffffff');
   } else {
     text('아쉬워요!', cx, py + U * 53, U * 7, '#ff8a7a');
-    text(`${settings.rewardScore}점 이상이면 가스트의 눈물을 받을 수 있어요`, cx, py + U * 63, U * 3.6, '#ffffff');
+    text(`${rewardScoreNow()}점 이상이면 가스트의 눈물을 받을 수 있어요`, cx, py + U * 63, U * 3.6, '#ffffff');
   }
 
   const ready = game.resultTime > RESULT_LOCK; // 계속 쏘던 총알이 실수로 버튼을 누르지 않게 잠깐 잠금
@@ -3065,7 +3222,7 @@ function update(dt) {
   }
   if (game.state === 'initials') updateInitials(dt);
   // 결과 화면, 그리고 게임이 끝나 바로 뜬 랭킹 화면에서도 잠금 시간을 센다
-  if (game.state === 'result' || (game.state === 'ranking' && game.rankFrom === 'result')) game.resultTime += dt;
+  if (['result', 'bracket', 'champion'].includes(game.state) || (game.state === 'ranking' && game.rankFrom === 'result')) game.resultTime += dt;
 
   updateParts(dt);
   shake = Math.max(0, shake - dt * U * 8);
@@ -3111,6 +3268,8 @@ function draw(time) {
   if (game.state === 'result') drawResult(time);
   if (game.state === 'ranking') drawRanking(time);
   if (game.state === 'initials') drawInitials(time);
+  if (game.state === 'bracket') Tournament.drawBracketScreen(time);
+  if (game.state === 'champion') Tournament.drawChampion(time);
   if (game.state === 'aimtest') drawAimTest();
   if (game.state === 'gunsetup') drawGunSetup();
   drawBanner();
@@ -3134,7 +3293,7 @@ function draw(time) {
   const cursor = hideCursor ? 'none' : inGame ? 'crosshair' : 'default';
   if (canvas.style.cursor !== cursor) canvas.style.cursor = cursor;
   // 2인 대결에서는 마우스 조준점 대신 총마다 색이 다른 조준점을 그린다
-  const mouseAim = showBig && aim.seen && game.state !== 'aimtest' && !(game.mode === 'versus' && inGame && Guns.active());
+  const mouseAim = showBig && aim.seen && game.state !== 'aimtest' && !(isTwoPlayer() && inGame && Guns.active());
   if (mouseAim) drawAim(aim.x, aim.y);
   // 게임패드로 연결된 총의 조준점 (메뉴에서도 보여야 총으로 버튼을 고를 수 있다)
   Guns.draw(time);

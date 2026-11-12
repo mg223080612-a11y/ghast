@@ -22,3 +22,4 @@ migrations
 limits.json
 docs
 .github
+tests
