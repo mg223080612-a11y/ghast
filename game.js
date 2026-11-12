@@ -1640,6 +1640,13 @@ const Guns = {
       && keys.includes(this.saved.p1) && keys.includes(this.saved.p2);
   },
   triggerOf(s) { return this.saved.trigger[s.key] ?? 0; },
+  // 1인 기록전 게임 중에는 1P 총만 쓴다: 다른 총(2P 등)은 조준점도 그리지 않고 방아쇠도 무시한다.
+  // 1P 총이 연결돼 있지 않으면(2P 수신기만 꽂힌 경우 등) 1인 기록전을 할 수 있게 모든 총을 그대로 쓴다
+  hiddenInSolo(s) {
+    if (game.mode !== 'solo' || (game.state !== 'play' && game.state !== 'countdown')) return false;
+    const p1Connected = this.list().some((p) => p.key === this.saved.p1);
+    return p1Connected && s.key !== this.saved.p1;
+  },
 
   // 조준에 쓸 축: 설정에서 고르거나(0·1 / 2·3), 자동이면 더 많이 움직인 쪽
   aimAxes(s, gp) {
@@ -1722,6 +1729,7 @@ const Guns = {
       return;
     }
     if (i !== this.triggerOf(s)) return; // 방아쇠가 아닌 버튼은 무시
+    if (this.hiddenInSolo(s)) return;     // 1인 기록전 중 1P 가 아닌 총은 무시
     // 2인 대결 중에는 지정된 자리로, 그 밖에는 (1인 기록전·메뉴) 1P 로 친다
     let who = 0;
     if (game.mode === 'versus' && (game.state === 'play' || game.state === 'countdown')) {
@@ -1742,7 +1750,7 @@ const Guns = {
     const inGame = (game.state === 'play' || game.state === 'countdown') && !game.paused;
     if (inGame && settings.aimMode !== 'big') return;
     for (const s of this.list()) {
-      if (now - s.lastActive > 10000) continue;
+      if (now - s.lastActive > 10000 || this.hiddenInSolo(s)) continue;
       const who = this.playerOf(s);
       drawAim(s.x, s.y, who >= 0 ? PLAYER_COLORS[who] : null, who >= 0 ? `${who + 1}P` : '총');
     }
