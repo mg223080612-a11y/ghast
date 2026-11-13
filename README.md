@@ -14,12 +14,12 @@
 | 플랫폼 | 받을 파일 / 주소 | 받는 곳 | 비고 |
 |---|---|---|---|
 | 🌐 **온라인 (브라우저)** | https://ghast-shooting.gcinhak.workers.dev | [▶ 바로 플레이](https://ghast-shooting.gcinhak.workers.dev) | 설치 없음. Chrome 권장, **F** 로 전체화면 |
-| 🪟 **Windows** (설치형) | `ghast-shooting-2.1.0-setup.exe` | [⬇ 최신 릴리스](https://github.com/mg223080612-a11y/ghast/releases/latest) | 설치하면 바탕화면에 **가스트 사격** 아이콘 |
-| 🪟 **Windows** (휴대용) | `ghast-shooting-2.1.0-portable.exe` | [⬇ 최신 릴리스](https://github.com/mg223080612-a11y/ghast/releases/latest) | 설치 없이 파일 하나로 실행 (USB 용) |
-| 🍎 **macOS** (애플 실리콘 M1~M4) | `ghast-shooting-2.1.0-mac-arm64.zip` | [⬇ 최신 릴리스](https://github.com/mg223080612-a11y/ghast/releases/latest) | 압축을 풀면 `Ghast Shooting.app` |
-| 🍎 **macOS** (인텔) | `ghast-shooting-2.1.0-mac-x64.zip` | [⬇ 최신 릴리스](https://github.com/mg223080612-a11y/ghast/releases/latest) | 압축을 풀면 `Ghast Shooting.app` |
+| 🪟 **Windows** (설치형) | `ghast-shooting-2.2.0-setup.exe` | [⬇ 최신 릴리스](https://github.com/mg223080612-a11y/ghast/releases/latest) | 설치하면 바탕화면에 **가스트 사격** 아이콘 |
+| 🪟 **Windows** (휴대용) | `ghast-shooting-2.2.0-portable.exe` | [⬇ 최신 릴리스](https://github.com/mg223080612-a11y/ghast/releases/latest) | 설치 없이 파일 하나로 실행 (USB 용) |
+| 🍎 **macOS** (애플 실리콘 M1~M4) | `ghast-shooting-2.2.0-mac-arm64.zip` | [⬇ 최신 릴리스](https://github.com/mg223080612-a11y/ghast/releases/latest) | 압축을 풀면 `Ghast Shooting.app` |
+| 🍎 **macOS** (인텔) | `ghast-shooting-2.2.0-mac-x64.zip` | [⬇ 최신 릴리스](https://github.com/mg223080612-a11y/ghast/releases/latest) | 압축을 풀면 `Ghast Shooting.app` |
 
-- **최신인지 확인:** 컴퓨터용 프로그램을 켜면 처음 화면 **맨 아래 띠 오른쪽(© 2026 SYNC 왼쪽)에 `v2.1.0`** 이 보여야 합니다. 그보다 낮은 버전(`v2.0.0` 등)이거나 버전이 안 보이면 옛 앱이니 [업데이트](#-업데이트-옛-앱에서-바꾸기)하세요.
+- **최신인지 확인:** 컴퓨터용 프로그램을 켜면 처음 화면 **맨 아래 띠 오른쪽(© 2026 SYNC 왼쪽)에 `v2.2.0`** 이 보여야 합니다. 그보다 낮은 버전(`v2.1.0` 등)이거나 버전이 안 보이면 옛 앱이니 [업데이트](#-업데이트-옛-앱에서-바꾸기)하세요.
 - **처음 열 때 경고가 뜨면** (코드 서명 인증서가 없어서 뜨는 안내입니다)
   - Windows "Windows의 PC 보호" → **추가 정보 → 실행**
   - 맥 "악성 코드가 없음을 확인할 수 없습니다" → **완료** → 시스템 설정 → 개인정보 보호 및 보안 → 맨 아래 **그래도 열기**
@@ -175,7 +175,7 @@ https://ghast-shooting.gcinhak.workers.dev 를 Chrome 으로 열고 **F** 로 �
    - 맥: 응용 프로그램 폴더의 옛 `Ghast Shooting`·`Ghast Shooting (Aim)`·`(No Aim)` 앱을 휴지통으로. 같은 게임이 여러 개면 헷갈리고, 동시에 켤 수도 없습니다.
    - **설정은 이어집니다:** 총 보정·1P/2P 배정·조준점·게임 설정은 앱 밖 폴더에 저장되어 있어서 앱을 지워도 남고, 새 앱이 그대로 씁니다.
    - 아직 못 보낸 기록도 같은 곳에 남아 있어 새 앱이 이어서 보냅니다 (단, 표 없이 만든 기록은 서버가 받지 않습니다).
-3. 새 앱을 설치하고 켜서 처음 화면 맨 아래 오른쪽에 `v2.1.0` 이 보이는지 확인합니다.
+3. 새 앱을 설치하고 켜서 처음 화면 맨 아래 오른쪽에 `v2.2.0` 이 보이는지 확인합니다.
 4. **인터넷에 연결한 채로 한 번 켜 둡니다.** 켜질 때 '게임 시작 표'를 미리 3장 받아 둡니다.
 
 ---
@@ -326,7 +326,7 @@ https://ghast-shooting.gcinhak.workers.dev 를 Chrome 으로 열고 **F** 로 �
 
 | 증상 | 확인할 것 |
 |---|---|
-| 랭킹에 기록이 안 올라감 | 처음 화면에 `v2.1.0` 이 보이는지 (안 보이면 [업데이트](#-업데이트-옛-앱에서-바꾸기)), 인터넷 연결 |
+| 랭킹에 기록이 안 올라감 | 처음 화면에 `v2.2.0` 이 보이는지 (안 보이면 [업데이트](#-업데이트-옛-앱에서-바꾸기)), 인터넷 연결 |
 | 결과 화면에 "이 PC에 보관했어요" | 인터넷 끊김. 기록은 노트북에 보관됐다가 연결되면 자동으로 올라갑니다 (오프라인은 3판까지) |
 | 처음 실행이 막힘 | Windows: **추가 정보 → 실행** / 맥: 시스템 설정 → 개인정보 보호 및 보안 → **그래도 열기** |
 | 총을 쏴도 반응이 없음 | 총 전원·배터리, 수신기 연결, DIP 스위치 일치, 센서 전원, 라이트건 모드(Space + 5 + 조이스틱 위) |
