@@ -278,7 +278,8 @@ tForm.addEventListener('submit', (e) => {
 function bracketLayout(t) {
   const R = Math.log2(t.size);
   const px = U * 3, py = U * 2, pw = W - U * 6, ph = H - U * 4;
-  const top = py + U * 15, bottom = py + ph - U * 24.5;
+  // 위쪽은 오른쪽 위 운영 버튼(크게 보임)과 제목이 겹치지 않게 조금 비운다
+  const top = py + U * 19, bottom = py + ph - U * 24.5;
   const colW = (pw - U * 4) / (2 * R + 1);
   const rowH = (bottom - top) / (t.size / 2);
   return {
@@ -397,9 +398,9 @@ function drawThirdPlace(L, t, next, time) {
 function drawBracketHeader(L, tour) {
   const t = tour.data.bracket;
   const d = DIFFICULTIES[tour.data.diff];
-  text('토너먼트 대진표', W / 2, L.py + U * 5.5, U * 6, '#ffcf5a', 'center', { shadow: '#a3200c' });
+  text('토너먼트 대진표', W / 2, L.py + U * 9, U * 6, '#ffcf5a', 'center', { shadow: '#a3200c' });
   const info = `${t.players.length}명  ·  난이도 ${d.label}  ·  한 경기 ${timeLabel(tour.data.seconds)} (동점이면 ${TOURNAMENT.overtime}초 연장)  ·  3·4위전 ${Bracket.thirdPlaceMatch(t) ? '있음' : '없음'}`;
-  text(info, W / 2, L.py + U * 11, fitTextSize(info, U * 2.6, L.pw - U * 6), '#ffd9b0');
+  text(info, W / 2, L.py + U * 14.5, fitTextSize(info, U * 2.6, L.pw - U * 6), '#ffd9b0');
 }
 
 function drawBracketFooter(L, tour, next) {
@@ -445,8 +446,9 @@ function drawChampionScreen(tour, time) {
   if (!tour.data) { goTitle(); return; }
   const t = tour.data.bracket;
   const s = Bracket.standings(t);
-  const cx = W / 2, pw = Math.min(W - U * 8, U * 120), ph = Math.min(H - U * 4, U * 92);
-  const py = (H - ph) / 2;
+  // 위쪽은 오른쪽 위 운영 버튼과 붙지 않게 조금 비운다
+  const cx = W / 2, pw = Math.min(W - U * 8, U * 120), ph = U * 90;
+  const py = panelTopBelowCorner(ph);
   panel(cx - pw / 2, py, pw, ph, 0.88);
   text('토너먼트 우승!', cx, py + U * 8, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
   const cy = py + U * 34;

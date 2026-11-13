@@ -55,6 +55,11 @@ html, body {
 }
 #corner-buttons.hidden { display: none; }
 #corner-buttons button[hidden] { display: none; }
+/* 메뉴 화면: 총으로도 맞히기 쉽게 크게 (약 1.6배, 화면 크기에 비례) */
+#corner-buttons:not(.in-game) { gap: clamp(8px, 0.7vw, 14px); }
+#corner-buttons:not(.in-game) button { font-size: clamp(18px, 1.25vw, 30px); padding: 0.5em 0.9em; }
+/* 게임이 막 끝난 뒤 잠깐: 총으로는 안 눌림 (마우스는 됨) */
+#corner-buttons.locked button { opacity: 0.45; }
 /* 게임 중에는 점수판을 가리지 않게 오른쪽 아래(바닥 쪽)에 작고 흐리게 */
 #corner-buttons.in-game { top: auto; bottom: 12px; opacity: 0.55; }
 #corner-buttons.in-game:hover { opacity: 1; }
@@ -113,6 +118,9 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
   border: 2px solid #777;
 }
 #settings .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+/* 저장·취소·기본값은 총으로도 맞히기 쉽게 크게 */
+#settings .actions button { font-size: 20px; padding: 10px 24px; }
+#settings .actions button + button { margin-left: 6px; }
 #settings .keys { font-size: 13px; opacity: 0.75; margin: 16px 0 0; line-height: 1.6; }
 #settings h3 { margin: 24px 0 4px; color: var(--accent); border-top: 2px solid var(--line); padding-top: 16px; }
 #rank-admin { max-height: 240px; overflow: auto; margin-top: 8px; font-size: 14px; }
@@ -158,8 +166,21 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
 #name-form.versus input[name="nickname2"] { border-color: #ff7ad9; }
 #name-form .hint { margin: 12px 0 0; font-size: 16px; opacity: 0.8; }
 #name-form .hint.error { color: #ff8a7a; opacity: 1; }
-#name-form .actions { display: flex; justify-content: center; gap: 12px; margin-top: 24px; }
+#name-form .actions { display: flex; justify-content: center; gap: 12px; margin-top: 18px; }
 #name-form button { font-size: 22px; padding: 12px 28px; white-space: nowrap; }
+#name-form .actions button { font-size: 18px; padding: 8px 22px; }
+#name-form .field-label { margin: 16px 0 -8px; font-size: 15px; opacity: 0.75; }
+/* 게임 시작: 창 너비 가득, 글자 크게, 천천히 빛남 */
+#name-form .start-btn {
+  display: block;
+  width: 100%;
+  margin-top: 18px;
+  font-size: 38px;
+  padding: 18px 0;
+  animation: start-glow 1.6s ease-in-out infinite;
+}
+@keyframes start-glow { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.3); } }
+@media (prefers-reduced-motion: reduce) { #name-form .start-btn { animation: none; } }
 /* 조준점 켜기/끄기: 켜져 있으면 초록(시작! 버튼과 같은 색), 꺼져 있으면 기본 회색 */
 #name-form .aim-row { display: flex; justify-content: center; margin-top: 16px; }
 #name-form #name-aim { font-size: 18px; padding: 8px 20px; }

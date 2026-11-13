@@ -29,6 +29,7 @@
       "style.css",
       "game.js",
       "tournament-core.js",
+      "aim-cap.js",
       "tournament.js",
       "assets/**",
       "fonts/**",

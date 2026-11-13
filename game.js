@@ -32,6 +32,7 @@ const DEFAULTS = {
   gunAxes: 'auto',     // 조준에 쓸 조이스틱 축: 'auto' 자동 / '01' 왼쪽 스틱 / '23' 오른쪽 스틱
   gunInvertX: false,   // 조준이 좌우 반대로 움직이면 켜기
   gunInvertY: false,   // 조준이 위아래 반대로 움직이면 켜기
+  versusAimHz: 40,     // 2인 대결·토너먼트 중 총마다 조준 위치를 1초에 약 몇 번까지 새로 받는지 (빠른 총이 유리하지 않게, 0 = 제한 없음)
   difficulty: 1,       // 기본 빠르기 (Normal 기준). 0.5 느리게 ~ 2 빠르게. Easy·Hard 는 여기에 배율을 곱한다
   diffLevel: 'normal', // 난이도 'easy' | 'normal' | 'hard' (닉네임 창에서 고르고, 다음 사람에게도 그대로)
   tournamentSeconds: 40, // 토너먼트 한 경기 시간 (보너스 시간 없이 고정)
@@ -633,7 +634,7 @@ const DIFFICULTIES = {
   easy: {
     label: 'Easy', color: '#9fe870', game: 'ghasteasy', rewardKey: 'rewardScoreEasy',
     speed: 0.7, size: 1.2, padding: 10,          // 느리고, 크고, 판정이 넉넉하게
-    penalty: { miss: 0, escape: 0, hit: 1 },      // 빈 곳·놓침 감점 없음 (화염구 피격만)
+    penalty: { miss: 1, escape: 1, hit: 1 },      // 감점은 Normal 과 같다
     odds: [                                       // 분노 가스트가 늦게, 적게
       { normal: 85, big: 15 },
       { normal: 65, small: 10, big: 20, gold: 5 },
@@ -1163,6 +1164,7 @@ function openRanking() {
   game.state = 'ranking';
   rankView.day = 0; // 열 때는 항상 오늘부터
   rankView.diff = diffKeyOf(game.diff); // 방금 한 판(처음 화면이면 고른) 난이도의 랭킹부터
+  rankView.cycleT = 0;                  // 게임 직후 랭킹 ↔ 설명판은 늘 랭킹부터
   setRankScope(rankView.scope);
   updateCornerButtons();
 }
@@ -1188,6 +1190,16 @@ function turnRankDay(delta) {
   rankView.day = day;
   setRankScope('today');
 }
+// 게임 직후 랭킹: 랭킹 10초 ↔ 가스트 설명판 6초를 버튼을 누를 때까지 번갈아 (기다리는 다음 사람에게 게임 방법을 보여 주려고)
+const AFTER_GAME_CYCLE = { rank: 10, rules: 6, fade: 0.35 };
+function afterGamePhase() {
+  const { rank, rules: rulesSec, fade } = AFTER_GAME_CYCLE;
+  const t = (rankView.cycleT || 0) % (rank + rulesSec);
+  const showRules = t >= rank;
+  const since = showRules ? t - rank : t;
+  const alpha = rankView.cycleT < rank ? 1 : clamp(since / fade, 0, 1);
+  return { rules: showRules, alpha };
+}
 function setRankDiff(key) {
   rankView.diff = diffKeyOf(key);
   setRankScope(rankView.scope);
@@ -1211,6 +1223,30 @@ async function loadLocalAdminKey() {
 
 // 결과 화면 버튼 잠금 시간(초): 게임이 끝나도 계속 쏘는 학생이 버튼을 잘못 누르지 않게
 const RESULT_LOCK = 3;
+
+// ---------- 오래 가만히 있으면 처음 화면으로 ----------
+// 1인 기록전·2인 대결이 끝난 화면(결과·게임 직후 랭킹)에서 이 시간 동안 아무 입력(총·마우스·키)이 없으면
+// 처음 화면으로 돌아가 다음 사람이 바로 시작할 수 있게 한다. 토너먼트는 진행요원이 넘기므로 빼고, 마지막 10초는 알려 준다
+const IDLE_TO_TITLE = 60;
+const IDLE_WARN = 10;
+const idleWatched = () => !settingsOpen() && game.mode !== 'tournament'
+  && (game.state === 'result' || (game.state === 'ranking' && rankAfterGame()));
+function noteInput() { game.idleT = 0; }
+function updateIdle(dt) {
+  if (!idleWatched()) { game.idleT = 0; return; }
+  game.idleT = (game.idleT || 0) + dt;
+  if (game.idleT >= IDLE_TO_TITLE) goTitle();
+}
+function drawIdleNotice() {
+  if (!idleWatched() || game.idleT < IDLE_TO_TITLE - IDLE_WARN) return;
+  const left = Math.ceil(IDLE_TO_TITLE - game.idleT);
+  const msg = `${left}초 뒤 처음 화면으로 돌아가요`, y = H - U * 2.6;
+  ctx.font = `bold ${Math.round(U * 2.6)}px ${FONT}`;
+  const w = ctx.measureText(msg).width + U * 4;
+  ctx.fillStyle = 'rgba(10, 2, 2, 0.9)';  // 판 테두리에 겹쳐도 읽히게 어두운 바탕
+  ctx.fillRect(W / 2 - w / 2, y - U * 2, w, U * 4);
+  text(msg, W / 2, y, U * 2.6, '#ffd9b0', 'center', { live: true });
+}
 
 // ---------- 총 연결 화면 (2인 대결용 1P/2P 지정) ----------
 function openGunSetup() {
@@ -1579,17 +1615,48 @@ function allowShot(source, now) {
   return true;
 }
 
+// 총으로 오른쪽 위 버튼을 누를 수 있는 화면. 게임 중(오른쪽 아래 '처음 화면')과 이름 쏘기 판은 빗나간 총알이
+// 판을 멈추지 않게 빼 둔다
+const CORNER_GUN_STATES = ['title', 'result', 'ranking', 'bracket', 'champion', 'gunsetup', 'aimtest'];
+function cornerButtonAt(x, y) {
+  if (!CORNER_GUN_STATES.includes(game.state)) return null;
+  return document.elementFromPoint(x, y)?.closest('#corner-buttons button') || null;
+}
+// 게임이 끝난 직후에는 다른 버튼처럼 잠깐 잠근다 (계속 쏘던 총알이 설정·전체화면을 누르지 않게). 마우스는 바로 된다
+function cornerLocked() {
+  if (game.state === 'bracket') return game.resultTime <= TOURNAMENT.lock;
+  const afterGame = game.state === 'result' || game.state === 'champion' || (game.state === 'ranking' && game.rankFrom === 'result');
+  return afterGame && game.resultTime <= RESULT_LOCK;
+}
+// 총(조이스틱 모드)으로 설정 창 조작: 버튼은 누르고, 체크 칸은 켜고 끄고, 고르는 칸은 다음 값으로 (저장을 눌러야 적용).
+// 숫자·글자 칸은 키보드로 (총으로 쏘면 그 칸에 커서만 둔다). 랭킹 기록 삭제는 실수로 지우지 않게 총으로 누르지 않는다
+function clickSettingsByGun(x, y) {
+  const el = document.elementFromPoint(x, y);
+  if (!el || !settingsEl.contains(el) || el.closest('#rank-admin, #rank-clear')) return;
+  const btn = el.closest('button');
+  if (btn) { btn.click(); return; }
+  const field = el.closest('input, select') || el.closest('label')?.querySelector('input, select');
+  if (!field) return;
+  if (field.type === 'checkbox') field.checked = !field.checked;
+  else if (field.tagName === 'SELECT') field.selectedIndex = (field.selectedIndex + 1) % field.options.length;
+  else field.focus();
+  Sound.tick();
+}
+
 let buttons = [];
 // who: 쏜 사람 (0 = 1P, 1 = 2P). 마우스·1인 기록전은 항상 1P
 // source: 어느 입력 장치에서 왔는지 (연사 차단을 장치마다 따로 하려고)
 function onTap(x, y, who = 0, source = 'mouse') {
   // 설정 창이 열려 있으면 총알이 창 뒤의 화면(처음 화면 버튼 등)을 누르지 않게 한다.
   // 마우스는 창이 막아 주지만, 조이스틱 모드 총은 창과 상관없이 여기로 들어온다
-  if (settingsOpen()) return;
+  noteInput();
   const now = performance.now();
   if (isDuplicateTap(x, y, now)) return;
   if (!allowShot(source, now)) return; // 연사: 조용히 무시 (점수·감점·소리·표시 없음)
   Sound.init();
+  // 설정 창이 열려 있으면 총알은 창 안만 누른다 (창 뒤의 처음 화면 버튼 등은 누르지 않는다).
+  // 마우스는 창이 직접 받고, 조이스틱 모드 총만 여기로 온다
+  if (settingsOpen()) { clickSettingsByGun(x, y); return; }
 
   // 입력 창(닉네임·토너먼트)이 떠 있으면 게임 화면 대신 창 안의 버튼(시작! · 🎲 · 취소 …)을 누른다.
   // 조이스틱 모드 총은 마우스 클릭이 아니라서 직접 그 자리의 버튼을 찾아 누른다. 창 밖을 쏘면 아무 일도 없다
@@ -1600,6 +1667,13 @@ function onTap(x, y, who = 0, source = 'mouse') {
     const input = el?.closest('input');
     if (btn && form.contains(btn)) btn.click();
     else if (input && form.contains(input)) input.focus();
+    return;
+  }
+
+  // 오른쪽 위 운영 버튼(처음 화면·총 연결·총 테스트·전체화면·설정): 메뉴 화면에서는 총으로도 누른다
+  const corner = cornerButtonAt(x, y);
+  if (corner) {
+    if (!cornerLocked()) corner.click();
     return;
   }
 
@@ -1744,6 +1818,10 @@ const Guns = {
       && keys.includes(this.saved.p1) && keys.includes(this.saved.p2);
   },
   triggerOf(s) { return this.saved.trigger[s.key] ?? 0; },
+  // 조준 위치 속도 제한을 쓰는 때: 2인 대결·토너먼트 경기 중 (설정에서 0 이면 제한 없음)
+  aimLimited() {
+    return isTwoPlayer() && (game.state === 'play' || game.state === 'countdown') && AimCap.gapForHz(settings.versusAimHz) > 0;
+  },
   // 1인 기록전 게임 중에는 1P 총만 쓴다: 다른 총(2P 등)은 조준점도 그리지 않고 방아쇠도 무시한다.
   // 1P 총이 연결돼 있지 않으면(2P 수신기만 꽂힌 경우 등) 1인 기록전을 할 수 있게 모든 총을 그대로 쓴다
   hiddenInSolo(s) {
@@ -1791,12 +1869,23 @@ const Guns = {
       const o = screenOffset();
       const nx = clamp(u * screen.width - o.x, 0, W);
       const ny = clamp(v * screen.height - o.y, 0, H);
-      if (Math.hypot(nx - s.x, ny - s.y) > 2) s.lastActive = now;
+      if (Math.hypot(nx - (s.rx ?? s.x), ny - (s.ry ?? s.y)) > 2) s.lastActive = now;
       // 총 상태 확인용: 1초에 위치가 몇 번 바뀌는지 (총이 화면·센서를 잘 보면 움직일 때 50 이상, 못 보면 한 자리 수)
       const axKey = gp.axes[ix] + ',' + gp.axes[iy];
       if (axKey !== s.axKey) { s.axKey = axKey; s.moves = (s.moves || 0) + 1; }
-      if (!s.rateAt || now - s.rateAt >= 1000) { s.rate = s.moves || 0; s.moves = 0; s.rateAt = now; }
-      s.x = nx; s.y = ny;
+      if (!s.rateAt || now - s.rateAt >= 1000) {
+        s.rate = s.moves || 0; s.moves = 0; s.rateAt = now;
+        s.capRate = s.capMoves || 0; s.capMoves = 0;
+      }
+      s.rx = nx; s.ry = ny;
+      // 2인 대결·토너먼트 경기 중에는 총마다 새 위치를 1초에 약 versusAimHz 번만 받는다 (빠른 총이 유리하지 않게).
+      // 조준점도 이 위치에 그려서 보이는 곳 = 맞는 곳. 메뉴에서는 그대로 (버튼을 고르기 쉽게)
+      const capped = AimCap.nextCappedAim(s.cap || { x: nx, y: ny, at: -1e9 }, nx, ny, now, AimCap.gapForHz(settings.versusAimHz));
+      if (!s.cap || capped.at !== s.cap.at) s.capMoves = (s.capMoves || 0) + 1;
+      s.cap = capped;
+      const limited = this.aimLimited();
+      s.x = limited ? capped.x : nx;
+      s.y = limited ? capped.y : ny;
       s.axes = [...gp.axes];
       gp.buttons.forEach((b, i) => {
         const down = b.pressed || b.value > 0.5;
@@ -1847,7 +1936,7 @@ const Guns = {
   draw(time) {
     const now = performance.now();
     // 이름 입력 창은 캔버스보다 위에 떠서 조준점이 가려진다 → 창 위에 따로 띄운 조준점(#gun-cursor)을 옮긴다
-    const recent = overlayForm() && this.list().filter((s) => now - s.lastActive <= 10000).sort((a, b) => b.lastActive - a.lastActive)[0];
+    const recent = (overlayForm() || settingsOpen()) && this.list().filter((s) => now - s.lastActive <= 10000).sort((a, b) => b.lastActive - a.lastActive)[0];
     gunCursor.hidden = !recent;
     if (recent) gunCursor.style.transform = `translate(${recent.x}px, ${recent.y}px)`;
     // 게임 중에는 '큰 조준점' 설정일 때만 총 조준점(과녁)을 그린다. 메뉴·총 테스트에서는 버튼을 고를 수 있게 항상 보인다
@@ -1874,6 +1963,7 @@ window.addEventListener('keydown', (e) => {
   // 맥의 Cmd 조합(Cmd+Q 종료, Cmd+H 숨기기, Cmd+C 복사, Cmd+R 새로 고침 등)은 게임 단축키로 쓰지 않는다
   // (안 그러면 Cmd+R 이 랭킹을, Cmd+C 가 처음 화면을 연다)
   if (e.metaKey) return;
+  noteInput();
   // 설정 창·닉네임 입력 중에는 게임 단축키를 쓰지 않는다 (글자 입력과 겹치지 않게)
   if (settingsOpen()) {
     if (e.key === 'Escape') closeSettings();
@@ -2141,8 +2231,8 @@ function openNameEntry(mode = 'solo') {
   nameInput2.hidden = !versus;
   fillRandomNames();
   nameHint.textContent = versus
-    ? '랜덤 이름이에요. 🎲 로 다시 뽑거나 직접 고쳐도 돼요 (대결은 랭킹에 저장되지 않아요)'
-    : '랜덤 이름으로 랭킹에 기록돼요. 🎲 로 다시 뽑거나 직접 고쳐도 돼요 (최대 12자)';
+    ? '랜덤 이름이에요 · 직접 고쳐도 돼요 (대결은 랭킹에 저장되지 않아요)'
+    : '랜덤 이름이에요 · 직접 고쳐도 돼요 (최대 12자, 랭킹에 기록)';
   nameHint.classList.remove('error');
   updateNameAimButton();
   updateDiffButtons();
@@ -2211,6 +2301,7 @@ document.getElementById('btn-settings').addEventListener('click', openSettings);
 document.getElementById('btn-fullscreen').addEventListener('click', toggleFullscreen);
 document.getElementById('btn-aimtest').addEventListener('click', () => { Sound.init(); openAimTest(); });
 document.getElementById('btn-gunsetup').addEventListener('click', () => { Sound.init(); openGunSetup(); });
+const cornerEl = document.getElementById('corner-buttons');
 function updateCornerButtons() {
   const menu = ['title', 'result', 'bracket', 'champion'].includes(game.state);
   for (const id of ['btn-gunsetup', 'btn-aimtest', 'btn-fullscreen', 'btn-settings']) {
@@ -2221,6 +2312,20 @@ function updateCornerButtons() {
   const corner = document.getElementById('corner-buttons');
   corner.classList.remove('hidden');
   corner.classList.toggle('in-game', game.state === 'play' || game.state === 'countdown');
+  measureCorner();
+}
+// 오른쪽 위 운영 버튼의 아래 끝(px). 버튼 글자는 px 단위라 작은 화면(1280×720 등)에서는 상대적으로 커서,
+// 결과·우승 판을 그 아래부터 그려 겹치지 않게 한다. 버튼 줄이 바뀔 때와 창 크기가 바뀔 때만 잰다
+let cornerBottomPx = 0;
+function measureCorner() {
+  const r = cornerEl.getBoundingClientRect();
+  cornerBottomPx = r.height ? r.bottom : 0;
+}
+window.addEventListener('resize', () => measureCorner());
+// 높이 ph 인 판의 위쪽 y: 운영 버튼 아래, 화면 가운데 쪽, 그러면서 화면 안
+function panelTopBelowCorner(ph) {
+  const top = Math.max(U * 7, cornerBottomPx + U, (H - ph) / 2);
+  return Math.min(top, Math.max(0, H - ph));
 }
 
 function resumeGame() {
@@ -2231,7 +2336,8 @@ function resumeGame() {
 // ---------- 게임 직후 이름 쏘기 (A-Z·0-9) ----------
 const INITIALS = {
   max: 6,        // 최대 글자 수
-  idle: 5,       // 마지막으로 쏜 뒤 이 시간(초)이 지나면 자동 등록
+  first: 20,     // 판이 뜬 뒤(잠금이 풀린 뒤) 첫 글자를 쏠 때까지 기다리는 시간(초). 안 쏘면 원래 닉네임으로 등록
+  idle: 10,      // 글자를 쏜 뒤 이 시간(초) 동안 더 안 쏘면 자동 등록 (키보드 배치에서 글자를 찾을 여유)
   lock: 2,       // 판이 뜬 뒤 잠깐 잠금 (게임 끝까지 쏘던 총알이 글자로 들어가지 않게)
   // 실제 키보드와 같은 배치. offset: 줄이 오른쪽으로 밀리는 정도 (글자 칸 단위)
   rows: [
@@ -2244,22 +2350,21 @@ const INITIALS = {
 };
 function openInitials() {
   game.state = 'initials';
-  game.initials = { text: '', t: 0, idle: INITIALS.idle, lastTick: INITIALS.idle };
+  // full: 지금 세고 있는 대기 시간의 길이 (처음엔 first, 글자를 쏘면 idle) — 남은 시간 막대의 기준
+  game.initials = { text: '', t: 0, idle: INITIALS.first, full: INITIALS.first, lastTick: INITIALS.first };
   banner = null; // 끝나기 직전에 뜬 '레벨 UP!' 같은 안내가 판 위에 겹치지 않게
   updateCornerButtons();
 }
 const initialsReady = () => game.initials.t >= INITIALS.lock;
 function typeInitial(ch) {
-  const ini = game.initials;
-  ini.idle = INITIALS.idle;
-  ini.lastTick = INITIALS.idle;
-  if (ini.text.length >= INITIALS.max) return;
+  const ini = { ...game.initials, idle: INITIALS.idle, full: INITIALS.idle, lastTick: INITIALS.idle };
+  if (ini.text.length >= INITIALS.max) { game.initials = ini; return; }
   game.initials = { ...ini, text: ini.text + ch };
   Sound.hit();
 }
 function eraseInitial() {
   const ini = game.initials;
-  game.initials = { ...ini, text: ini.text.slice(0, -1), idle: INITIALS.idle, lastTick: INITIALS.idle };
+  game.initials = { ...ini, text: ini.text.slice(0, -1), idle: INITIALS.idle, full: INITIALS.idle, lastTick: INITIALS.idle };
   Sound.tick();
 }
 // skip: 입력한 글자를 버리고 원래(게임할 때) 닉네임으로
@@ -2308,8 +2413,9 @@ function drawInitials(time) {
     ctx.fillStyle = 'rgba(255,255,255,0.12)';
     ctx.fillRect(cx - bw / 2, by - U * 0.8, bw, U * 1.6);
     ctx.fillStyle = ini.idle <= 2 ? '#ff8a7a' : '#ffe14a';
-    ctx.fillRect(cx - bw / 2, by - U * 0.8, bw * clamp(ini.idle / INITIALS.idle, 0, 1), U * 1.6);
-    text(`${Math.ceil(Math.max(0, ini.idle))}초 동안 안 쏘면 자동 등록`, cx, by + U * 3.6, U * 2.6, '#c9a89a');
+    ctx.fillRect(cx - bw / 2, by - U * 0.8, bw * clamp(ini.idle / (ini.full || INITIALS.idle), 0, 1), U * 1.6);
+    const left = Math.ceil(Math.max(0, ini.idle));
+    text(ini.text ? `${left}초 동안 안 쏘면 자동 등록` : `${left}초 안에 첫 글자를 쏘세요`, cx, by + U * 3.6, U * 2.6, '#c9a89a');
   } else {
     text('잠깐! 곧 쏠 수 있어요', cx, by + U * 1.5, U * 3.2, '#c9a89a');
   }
@@ -2545,9 +2651,24 @@ function drawTitle(time) {
   text('가스트 사격', cx, H * 0.14 + bobY, U * 13, '#ffffff', 'center', { shadow: '#a3200c' });
   text('GHAST SHOOTING', cx, H * 0.14 + U * 9.8, U * 4, '#ffcf5a');
 
-  // 설명 패널: 목표 → 가스트·화염구 카드(점수) → 감점 → 시간·보너스 → 상품 → 안전
-  const pw = Math.min(W - U * 8, U * 118), ph = U * 49;
-  const py = H * 0.275;
+  drawRulesPanel(cx, H * 0.275, Math.min(W - U * 8, U * 118));
+
+  // 버튼 줄 (좌우 대칭, 높이 같음): 랭킹 · 1인 기록전 · 2인 대결 · 토너먼트 · 조준점
+  const by = titleButtonRowY(), { bigW, smallW, h } = TITLE_BTN;
+  button('랭킹', titleButtonX(-2), by, U * smallW, U * h, openRanking);
+  button('1인 기록전', titleButtonX(-1), by, U * bigW, U * h, () => openNameEntry('solo'), true, true);
+  button('2인 대결', titleButtonX(0), by, U * bigW, U * h, () => openNameEntry('versus'), true, true);
+  button(Tournament.inProgress() ? '토너먼트 이어하기' : '토너먼트', titleButtonX(1), by, U * bigW, U * h, () => Tournament.open(), true, true);
+  button(aimLabel(), titleButtonX(2), by, U * smallW, U * h, toggleAim, true, aimOn());
+  text(`난이도 ${rules().label} (닉네임 창에서 변경)  ·  Space 1인 · 2 대결 · 3 토너먼트 · R 랭킹 · V 조준점 · G 총 연결 · S 설정`, cx, by + U * 9, U * 2.5, '#c9a89a');
+
+  drawTitleBottomBar(time);
+}
+
+// 가스트 설명판 (처음 화면, 게임 직후 랭킹에서 번갈아): 목표 → 가스트·화염구 카드(점수) → 감점 → 시간·보너스 → 상품 → 안전
+const RULES_PANEL_H = 49; // U
+function drawRulesPanel(cx, py, pw) {
+  const ph = U * RULES_PANEL_H;
   panel(cx - pw / 2, py, pw, ph, 0.86);
   text('네더의 가스트가 화염구를 쏘기 전에 맞혀라!', cx, py + U * 5, U * 4.4, '#ffffff');
   drawTitleCards(cx, py + U * 8.5, pw - U * 6);
@@ -2565,17 +2686,6 @@ function drawTitle(time) {
   ctx.drawImage(IMG.tear, cx - rw / 2 - U * 2 - ts, ry - ts / 2, ts, ts);
   ctx.drawImage(IMG.tear, cx + rw / 2 + U * 2, ry - ts / 2, ts, ts);
   text('※ 화면만 쏘세요! 사람을 향해 쏘면 안 돼요', cx, py + U * 46.8, U * 2.7, '#ff8a7a');
-
-  // 버튼 줄 (좌우 대칭, 높이 같음): 랭킹 · 1인 기록전 · 2인 대결 · 토너먼트 · 조준점
-  const by = titleButtonRowY(), { bigW, smallW, h } = TITLE_BTN;
-  button('랭킹', titleButtonX(-2), by, U * smallW, U * h, openRanking);
-  button('1인 기록전', titleButtonX(-1), by, U * bigW, U * h, () => openNameEntry('solo'), true, true);
-  button('2인 대결', titleButtonX(0), by, U * bigW, U * h, () => openNameEntry('versus'), true, true);
-  button(Tournament.inProgress() ? '토너먼트 이어하기' : '토너먼트', titleButtonX(1), by, U * bigW, U * h, () => Tournament.open(), true, true);
-  button(aimLabel(), titleButtonX(2), by, U * smallW, U * h, toggleAim, true, aimOn());
-  text(`난이도 ${rules().label} (닉네임 창에서 변경)  ·  Space 1인 · 2 대결 · 3 토너먼트 · R 랭킹 · V 조준점 · G 총 연결 · S 설정`, cx, by + U * 9, U * 2.5, '#c9a89a');
-
-  drawTitleBottomBar(time);
 }
 
 // 1·2·3위 색 (금·은·동). 처음 화면 랭킹 띠·랭킹 화면에서 쓴다
@@ -2706,7 +2816,8 @@ function drawGunSetup() {
       text(`방아쇠 = 버튼 ${Guns.triggerOf(s)}  ·  축 [${axes}]${fresh ? '  ● 움직임' : ''}`, px + U * 34, y, U * 2.6, '#ffd9b0', 'left', { live: true });
       // 움직이는 중에 위치 갱신이 적으면 총이 화면(센서)을 잘 못 보는 것: 배터리·렌즈·총 보정 확인
       const rateColor = !fresh ? '#8a7a72' : s.rate >= 40 ? '#7dff7a' : s.rate >= 15 ? '#ffe14a' : '#ff8a7a';
-      text(`위치 갱신 ${s.rate ?? 0}/초${fresh && s.rate < 15 ? '  ← 느림: 배터리·렌즈·총 보정 확인' : ''}`, px + U * 66, y + U * 4, U * 2.4, rateColor, 'left', { live: true });
+      const capNote = AimCap.gapForHz(settings.versusAimHz) > 0 ? `  ·  대결 중 ${s.capRate ?? 0}/초` : '';
+      text(`위치 갱신 ${s.rate ?? 0}/초${capNote}${fresh && s.rate < 15 ? '  ← 느림: 배터리·렌즈·총 보정 확인' : ''}`, px + U * 66, y + U * 4, U * 2.4, rateColor, 'left', { live: true });
       text(s.id.slice(0, 48), px + U * 6, y + U * 4, U * 2.2, '#8a7a72', 'left');
       y += U * 9.5;
     });
@@ -2838,7 +2949,10 @@ function drawRanking(time) {
   const today = rankView.scope === 'today';
   const focus = rankAfterGame() && rankView.list ? rankFocusEntries(rankView.list) : null;
   const cols = !focus && !today && W - U * 8 >= U * 140 ? 2 : 1;
-  const pw = Math.min(W - U * 8, cols === 2 ? U * 150 : U * 100);
+  // 게임이 끝나 바로 뜬 랭킹: 탭 없이 내 난이도·오늘만, 가스트 설명판과 번갈아 (설명판이 들어가게 조금 넓게)
+  const afterGame = rankAfterGame();
+  const phase = afterGame ? afterGamePhase() : { rules: false, alpha: 1 };
+  const pw = Math.min(W - U * 8, afterGame ? U * 124 : cols === 2 ? U * 150 : U * 100);
   const ph = Math.min(H - U * 4, U * 100);
   const px = cx - pw / 2, py = (H - ph) / 2;
   panel(px, py, pw, ph, 0.88);
@@ -2852,17 +2966,23 @@ function drawRanking(time) {
 
   const dayTitle = focus ? `오늘의 랭킹 · ${dayLabel(0)}`
     : rankView.day === 0 ? `오늘의 TOP 10 · ${dayLabel(0)}` : `${dayLabel(rankView.day)} TOP 10`;
-  text(today ? dayTitle : '전체 랭킹', cx, py + U * 7, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
-  // 왼쪽: 날짜별 · 전체 / 오른쪽: 난이도별 랭킹 (Easy · Normal · Hard)
-  button('날짜별', cx - U * 37, py + U * 17, U * 19, U * 7, () => setRankTab('today'), true, rankView.scope === 'today');
-  button('전체', cx - U * 16.5, py + U * 17, U * 19, U * 7, () => setRankTab('all'), true, rankView.scope === 'all');
-  DIFF_KEYS.forEach((key, i) => {
-    button(DIFFICULTIES[key].label, cx + U * (8 + i * 16), py + U * 17, U * 14, U * 7, () => setRankDiff(key), true, rankView.diff === key);
-  });
+  if (afterGame) {
+    // 탭은 숨긴다: 끝까지 쏘던 총알이 다른 표로 바꾸지 않게. 아래 점은 지금 보이는 쪽
+    const label = DIFFICULTIES[rankView.diff].label;
+    text(phase.rules ? `게임 방법 · ${label}` : `오늘의 ${label} 랭킹 · ${dayLabel(0)}`, cx, py + U * 7, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
+    text(phase.rules ? '○ 랭킹     ● 게임 방법' : '● 랭킹     ○ 게임 방법', cx, py + U * 13, U * 2.4, '#c9a89a');
+  } else {
+    text(today ? dayTitle : '전체 랭킹', cx, py + U * 7, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
+    // 왼쪽: 날짜별 · 전체 / 오른쪽: 난이도별 랭킹 (Easy · Normal · Hard)
+    button('날짜별', cx - U * 37, py + U * 17, U * 19, U * 7, () => setRankTab('today'), true, rankView.scope === 'today');
+    button('전체', cx - U * 16.5, py + U * 17, U * 19, U * 7, () => setRankTab('all'), true, rankView.scope === 'all');
+    DIFF_KEYS.forEach((key, i) => {
+      button(DIFFICULTIES[key].label, cx + U * (8 + i * 16), py + U * 17, U * 14, U * 7, () => setRankDiff(key), true, rankView.diff === key);
+    });
+  }
 
-  // 게임이 끝나 바로 뜬 랭킹은 아래에 내 기록 두 줄이 더 들어가서 표를 조금 줄인다
-  const afterGame = game.rankFrom === 'result' && game.mode === 'solo';
-  const top = py + U * 31, bottom = py + ph - U * (afterGame ? 21 : 17);
+  // 게임이 끝나 바로 뜬 랭킹은 탭이 없어 표를 위로 올리고, 아래에 내 기록 두 줄이 더 들어간다
+  const top = py + U * (afterGame ? 21 : 31), bottom = py + ph - U * (afterGame ? 21 : 17);
   const rowH = Math.min(U * 6.4, (bottom - top) / (focus ? Math.max(10, focus.length) : 10));
   const colW = (pw - U * 6) / cols;
   const size = Math.min(U * 3.8, rowH * 0.62);
@@ -2877,7 +2997,7 @@ function drawRanking(time) {
   const drawColumn = (c, entries) => {
     const left = px + U * 3 + c * colW;
     const colRank = left + U * 5, colName = left + U * 12, colKills = left + colW - U * 21, colScore = left + colW - U * 3;
-    const headY = py + U * 26;
+    const headY = py + U * (afterGame ? 17 : 26);
     text('순위', colRank, headY, U * 2.8, '#c9a89a');
     text('닉네임', colName, headY, U * 2.8, '#c9a89a', 'left');
     text('처치', colKills, headY, U * 2.8, '#c9a89a');
@@ -2908,7 +3028,11 @@ function drawRanking(time) {
     });
   };
 
-  if (!list) {
+  ctx.globalAlpha = phase.alpha; // 랭킹 ↔ 설명판이 바뀔 때 살짝 나타나게
+  if (phase.rules) {
+    // 표 자리(제목 아래 ~ 내 점수 줄 위)의 가운데에
+    drawRulesPanel(cx, (py + U * 16 + py + ph - U * 22 - U * RULES_PANEL_H) / 2, pw - U * 6);
+  } else if (!list) {
     text('불러오는 중…', cx, top + rowH * 3, U * 4, '#ffffff');
   } else if (!list.length) {
     const empty = !today ? '아직 기록이 없어요' : rankView.day === 0 ? '오늘은 아직 기록이 없어요' : '이날은 기록이 없어요';
@@ -2922,6 +3046,8 @@ function drawRanking(time) {
       if (rows.length) drawColumn(c, rows);
     }
   }
+
+  ctx.globalAlpha = 1;
 
   // 아래: 날짜별은 전날 · 다음 날, 전체는 이전 · 다음 쪽과 지금 보고 있는 순위 범위
   const by = py + ph - U * 7;
@@ -2939,9 +3065,10 @@ function drawRanking(time) {
     text(win ? '가스트의 눈물 획득! 진행요원에게 받아가세요' : `${rewardScoreNow()}점 이상이면 가스트의 눈물을 받을 수 있어요`,
       cx, by - U * 6.2, U * 3, win ? '#9ff6ff' : '#c9a89a');
     const ready = game.resultTime > RESULT_LOCK; // 계속 쏘던 총알이 실수로 버튼을 누르지 않게 잠깐 잠금
-    button('다음 사람', cx - U * 33, by, U * 29, U * 8, nextPlayer, ready, true);
-    button('다시 하기', cx, by, U * 29, U * 8, retrySolo, ready);
-    button('결과 보기', cx + U * 33, by, U * 29, U * 8, closeRanking, ready);
+    button('다음 사람', cx - U * 43.5, by, U * 26, U * 8, nextPlayer, ready, true);
+    button('다시 하기', cx - U * 14.5, by, U * 26, U * 8, retrySolo, ready);
+    button('결과 보기', cx + U * 14.5, by, U * 26, U * 8, closeRanking, ready);
+    button('처음 화면', cx + U * 43.5, by, U * 26, U * 8, goTitle, ready);
     return;
   }
   if (today) {
@@ -3055,8 +3182,8 @@ function drawCountdown() {
 function drawVersusResult(time) {
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
   ctx.fillRect(0, 0, W, H);
-  const cx = W / 2, pw = Math.min(W - U * 8, U * 130), ph = U * 92;
-  const px = cx - pw / 2, py = Math.max(U * 2, (H - ph) / 2);
+  const cx = W / 2, pw = Math.min(W - U * 8, U * 130), ph = U * 90;
+  const px = cx - pw / 2, py = panelTopBelowCorner(ph);
   panel(px, py, pw, ph, 0.85);
   const [a, b] = game.players;
   const winner = a.score === b.score ? -1 : a.score > b.score ? 0 : 1;
@@ -3115,8 +3242,9 @@ function drawResult(time) {
   if (isTwoPlayer()) { drawVersusResult(time); return; }
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.fillRect(0, 0, W, H);
-  const cx = W / 2, pw = Math.min(W - U * 8, U * 110), ph = U * 92;
-  const py = Math.max(U * 2, (H - ph) / 2);
+  // 위쪽은 오른쪽 위 운영 버튼과 제목이 붙지 않게 조금 비운다
+  const cx = W / 2, pw = Math.min(W - U * 8, U * 110), ph = U * 90;
+  const py = panelTopBelowCorner(ph);
   panel(cx - pw / 2, py, pw, ph, 0.82);
   const me = game.players[0];
   const win = me.score >= rewardScoreNow();
@@ -3134,7 +3262,7 @@ function drawResult(time) {
   else if (ri?.status === 'rejected') rankLine = `랭킹에 올리지 못했어요: ${ri.reason}`;
   else if (ri?.status === 'saved' && ri.pending) rankLine = '인터넷 연결이 안 돼 이 PC에 보관했어요 (연결되면 자동으로 올라가요)';
   else if (ri?.status === 'saved') rankLine = `오늘 ${ri.rankToday}위  ·  전체 ${ri.rankAll}위`;
-  text(rankLine, cx, py + U * 38, U * 4.4, ri?.status === 'error' || ri?.status === 'rejected' ? '#ff8a7a' : '#ffe14a');
+  text(rankLine, cx, py + U * 38, fitTextSize(rankLine, U * 4.4, pw - U * 8), ri?.status === 'error' || ri?.status === 'rejected' ? '#ff8a7a' : '#ffe14a');
 
   if (win) {
     const ts = U * 15, ty = py + U * 53 + Math.sin(time * 3) * U;
@@ -3150,9 +3278,10 @@ function drawResult(time) {
 
   const ready = game.resultTime > RESULT_LOCK; // 계속 쏘던 총알이 실수로 버튼을 누르지 않게 잠깐 잠금
   const by = py + ph - U * 8;
-  button('다음 사람', cx - U * 33, by, U * 29, U * 9, nextPlayer, ready, true);
-  button('다시 하기', cx, by, U * 29, U * 9, retrySolo, ready);
-  button('랭킹', cx + U * 33, by, U * 29, U * 9, openRanking, ready);
+  button('다음 사람', cx - U * 39.75, by, U * 24, U * 9, nextPlayer, ready, true);
+  button('다시 하기', cx - U * 13.25, by, U * 24, U * 9, retrySolo, ready);
+  button('랭킹', cx + U * 13.25, by, U * 24, U * 9, openRanking, ready);
+  button('처음 화면', cx + U * 39.75, by, U * 24, U * 9, goTitle, ready);
 }
 
 function drawBanner() {
@@ -3223,6 +3352,10 @@ function update(dt) {
   if (game.state === 'initials') updateInitials(dt);
   // 결과 화면, 그리고 게임이 끝나 바로 뜬 랭킹 화면에서도 잠금 시간을 센다
   if (['result', 'bracket', 'champion'].includes(game.state) || (game.state === 'ranking' && game.rankFrom === 'result')) game.resultTime += dt;
+  if (game.state === 'ranking' && rankAfterGame()) rankView.cycleT += dt;
+  updateIdle(dt);
+  // 잠긴 동안에는 오른쪽 위 버튼을 흐리게 (총으로는 안 눌림)
+  cornerEl.classList.toggle('locked', CORNER_GUN_STATES.includes(game.state) && cornerLocked());
 
   updateParts(dt);
   shake = Math.max(0, shake - dt * U * 8);
@@ -3273,6 +3406,7 @@ function draw(time) {
   if (game.state === 'aimtest') drawAimTest();
   if (game.state === 'gunsetup') drawGunSetup();
   drawBanner();
+  drawIdleNotice();
 
   if (game.paused) {
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
