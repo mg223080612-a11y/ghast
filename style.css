@@ -223,6 +223,18 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
 #tournament-form input:focus { border-color: var(--accent); }
 #tournament-form .t-options input[type="number"] { width: 90px; font-size: 22px; padding: 6px; text-align: center; }
 #tournament-form .t-options input[type="checkbox"] { width: 22px; height: 22px; }
+#tournament-form .t-roster { display: flex; justify-content: center; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+#tournament-form .t-roster select {
+  font-family: var(--font);
+  font-size: 18px;
+  padding: 7px 10px;
+  max-width: 420px;
+  background: #000;
+  color: #fff;
+  border: 3px solid #888;
+}
+#tournament-form .t-roster button { font-size: 18px; padding: 8px 18px; white-space: nowrap; }
+#tournament-form .t-roster button:disabled { opacity: 0.4; cursor: default; }
 #tournament-form .t-names {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

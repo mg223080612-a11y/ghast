@@ -140,8 +140,15 @@
         <button type="button" class="diff-btn" data-diff="normal">Normal</button>
         <button type="button" class="diff-btn" data-diff="hard">Hard</button>
       </div>
+      <!-- 명단: 파일(CSV·txt)로 열면 이 PC 에 저장해 두고 다음부터 고르기만. 학생 이름은 게임 파일에 넣지 않는다 -->
+      <div class="t-roster">
+        <select id="t-roster-list" aria-label="저장된 명단"></select>
+        <button type="button" id="t-roster-file">📂 명단 파일 열기</button>
+        <button type="button" id="t-roster-del">명단 지우기</button>
+        <input type="file" id="t-roster-input" accept=".csv,.txt,text/csv,text/plain" hidden>
+      </div>
       <div id="t-names" class="t-names"></div>
-      <p class="hint" id="t-hint">빈 칸은 랜덤 닉네임으로 채워요 · Enter 로 다음 칸 · 이름이 같으면 뒤에 숫자를 붙여요</p>
+      <p class="hint" id="t-hint">빈 칸은 랜덤 닉네임 · Enter 로 다음 칸 · 이름이 같으면 뒤에 숫자 · 엑셀에서 이름 칸을 복사해 붙여넣어도 돼요</p>
       <div class="actions">
         <button type="button" id="t-cancel">취소</button>
         <button type="button" id="t-random">🎲 빈 칸 채우기</button>
@@ -154,6 +161,7 @@
   <div id="gun-cursor" hidden></div>
 
   <script src="tournament-core.js"></script>
+  <script src="roster-core.js"></script>
   <script src="aim-cap.js"></script>
   <script src="game.js"></script>
   <script src="tournament.js"></script>

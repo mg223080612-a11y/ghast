@@ -21,6 +21,12 @@ const tNames = document.getElementById('t-names');
 const tHint = document.getElementById('t-hint');
 const tCount = tForm.elements.count;
 const T_HINT = tHint.textContent;
+// 명단: 파일로 연 명단은 이 PC 에만 저장 (roster-core.js 의 전역 Roster)
+const ROSTER_KEY = 'ghast-shooting-rosters';
+const ROSTER_MAX_BYTES = 200 * 1024;
+const tRosterList = document.getElementById('t-roster-list');
+const tRosterInput = document.getElementById('t-roster-input');
+const tRosterDel = document.getElementById('t-roster-del');
 
 // 저장 모양: { bracket, seconds, diff, current: { id } | null, last: { id, winner, scores, overtime } | null }
 function loadTournament() {
@@ -71,6 +77,7 @@ const Tournament = {
     tNames.replaceChildren();
     setNameCount(names.length || TOURNAMENT.defaultCount);
     nameInputs().forEach((input, i) => { input.value = names[i] ?? ''; });
+    renderRosterList();
     showHint(T_HINT, false);
     updateDiffButtons();
     tEntry.hidden = false;
@@ -221,6 +228,82 @@ function uniqueName(base, used) {
   }
   return base;
 }
+// ---------- 명단 (파일 열기 · 저장된 명단 고르기 · 붙여넣기) ----------
+const savedRosters = () => Roster.sanitizeRosters(readJson(ROSTER_KEY, []));
+function renderRosterList(selected = '') {
+  const list = savedRosters();
+  const placeholder = new Option(list.length ? '저장된 명단 고르기 ▾' : '저장된 명단 없음', '');
+  const options = list.map((r) => new Option(`${r.title} (${r.names.length}명)`, r.title));
+  tRosterList.replaceChildren(placeholder, ...options);
+  tRosterList.value = list.some((r) => r.title === selected) ? selected : '';
+  tRosterDel.disabled = !tRosterList.value;
+}
+// 이름 배열로 칸을 새로 채운다. 32명이 넘으면 채우지 않는다
+function fillNames(names, label) {
+  if (names.length > Bracket.MAX_PLAYERS) {
+    showHint(`${label} ${names.length}명 — 토너먼트는 ${Bracket.MAX_PLAYERS}명까지예요`, true);
+    return false;
+  }
+  tNames.replaceChildren();
+  setNameCount(names.length);
+  nameInputs().forEach((input, i) => { input.value = names[i] ?? ''; });
+  const fewer = names.length < Bracket.MIN_PLAYERS ? ' · 모자란 칸은 랜덤 닉네임' : '';
+  showHint(`${label} ${names.length}명을 넣었어요${fewer} · 대진은 [대진표 만들기]에서 무작위로 뽑아요`, false);
+  return true;
+}
+// 한글 윈도우 엑셀의 기본 CSV 는 UTF-8 이 아니라 EUC-KR 이라서 둘 다 읽는다.
+// 엑셀 '유니코드 텍스트'(UTF-16, 앞에 BOM)는 BOM 을 보고 UTF-16 으로 읽는다
+async function readTextFile(file) {
+  const buf = await file.arrayBuffer();
+  const [b0, b1] = new Uint8Array(buf.slice(0, 2));
+  if (b0 === 0xff && b1 === 0xfe) return new TextDecoder('utf-16le').decode(buf);
+  if (b0 === 0xfe && b1 === 0xff) return new TextDecoder('utf-16be').decode(buf);
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+  catch { return new TextDecoder('euc-kr').decode(buf); }
+}
+async function openRosterFile(file) {
+  if (/\.xlsx?$/i.test(file.name)) throw new Error("엑셀 파일은 '다른 이름으로 저장 → CSV' 로 바꿔서 열어 주세요");
+  if (file.size > ROSTER_MAX_BYTES) throw new Error('파일이 너무 커요 (명단 파일이 맞나요?)');
+  const names = Roster.parseRoster(await readTextFile(file));
+  const title = Roster.titleFromFileName(file.name);
+  if (!fillNames(names, `'${title}'`)) return;
+  writeJson(ROSTER_KEY, Roster.upsertRoster(savedRosters(), { title, names }));
+  renderRosterList(title);
+  // writeJson 은 저장이 안 돼도 조용히 넘어가므로, 다시 읽어서 확인한다
+  if (!savedRosters().some((r) => r.title === title)) {
+    showHint(`'${title}' ${names.length}명을 넣었지만 이 PC 에 저장하지 못했어요 (이번만 쓰고, 다음에는 파일을 다시 열어 주세요)`, true);
+  }
+  Sound.tick();
+}
+
+document.getElementById('t-roster-file').addEventListener('click', () => tRosterInput.click());
+tRosterInput.addEventListener('change', () => {
+  const file = tRosterInput.files?.[0];
+  tRosterInput.value = ''; // 같은 파일을 다시 골라도 열리게
+  if (!file) return;
+  openRosterFile(file).catch((err) => showHint(`명단을 읽지 못했어요: ${err.message}`, true));
+});
+tRosterList.addEventListener('change', () => {
+  const roster = savedRosters().find((r) => r.title === tRosterList.value);
+  tRosterDel.disabled = !roster;
+  if (roster) fillNames(roster.names, `'${roster.title}'`);
+});
+tRosterDel.addEventListener('click', () => {
+  const title = tRosterList.value;
+  if (!title || !confirm(`'${title}' 명단을 이 PC 에서 지울까요? (명단 파일은 그대로 남아요)`)) return;
+  writeJson(ROSTER_KEY, Roster.removeRoster(savedRosters(), title));
+  renderRosterList();
+  showHint(`'${title}' 명단을 이 PC 에서 지웠어요`, false);
+});
+// 엑셀에서 여러 줄을 복사해 이름 칸에 붙여넣으면 명단으로 채운다 (지금 칸은 모두 바뀜). 한 줄은 보통 붙여넣기
+tNames.addEventListener('paste', (e) => {
+  const text = e.clipboardData?.getData('text') ?? '';
+  if (!/[\r\n]/.test(text.trim())) return;
+  e.preventDefault();
+  try { fillNames(Roster.parseRoster(text), '붙여넣은 명단'); }
+  catch (err) { showHint(`붙여넣기: ${err.message}`, true); }
+});
+
 // 칸의 이름을 정리해서 돌려준다. 빈 칸은 랜덤 닉네임
 function collectNames() {
   return nameInputs().reduce((used, input) => {
