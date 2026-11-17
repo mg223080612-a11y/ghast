@@ -120,10 +120,28 @@
     </form>
   </div>
 
-  <!-- 토너먼트: 참가 인원 → 이름 칸. 빈 칸은 랜덤 닉네임. 대진은 무작위 (tournament.js) -->
+  <!-- 대회 모드: 방식 고르기 (토너먼트 · 리그전) → 참가자 입력 창 (tournament.js) -->
+  <div id="contest-pick" class="overlay" hidden>
+    <!-- form 이어야 총(조이스틱 모드)으로도 버튼을 누를 수 있다 (game.js overlayForm) -->
+    <form class="contest-pick-box" autocomplete="off" onsubmit="return false">
+      <h2>대회 모드 — 방식을 고르세요</h2>
+      <div class="contest-options">
+        <button type="button" class="contest-opt" data-kind="tournament"><b>🏆 토너먼트</b><span>1:1 로 지면 탈락 · 이긴 사람이 올라가 우승</span></button>
+        <button type="button" class="contest-opt" data-kind="league"><b>📋 리그전</b><span>한 사람당 4판(바꿀 수 있음) · 모두 다른 상대 · 점수 합계로 순위</span></button>
+      </div>
+      <div class="actions"><button type="button" id="contest-cancel">취소</button></div>
+    </form>
+  </div>
+
+  <!-- 대회 참가자 입력: 참가 인원 → 이름 칸. 빈 칸은 랜덤 닉네임. 대진은 무작위 (tournament.js) -->
   <div id="tournament-entry" class="overlay" hidden>
     <form id="tournament-form" autocomplete="off">
-      <h2>토너먼트 — 참가자를 입력하세요</h2>
+      <h2 id="t-title">토너먼트 — 참가자를 입력하세요</h2>
+      <div class="kind-row" role="group" aria-label="대회 방식">
+        <button type="button" class="kind-btn" data-kind="tournament">🏆 토너먼트</button>
+        <button type="button" class="kind-btn" data-kind="league">📋 리그전</button>
+      </div>
+      <p class="hint" id="t-kind-hint"></p>
       <div class="t-options">
         <label>참가 인원
           <span class="t-count">
@@ -133,7 +151,13 @@
           </span>
         </label>
         <label>한 경기 시간 (초)<input name="seconds" type="number" min="10" max="600" step="5" value="40"></label>
-        <label class="check"><input name="third" type="checkbox" checked> 3·4위전</label>
+        <label class="check t-third"><input name="third" type="checkbox" checked> 3·4위전</label>
+        <label class="t-games" hidden>한 사람당
+          <select name="games">
+            <option value="1">1판</option><option value="2">2판</option><option value="3">3판</option>
+            <option value="4" selected>4판</option><option value="5">5판</option><option value="6">6판</option>
+          </select>
+        </label>
       </div>
       <div class="diff-row" role="group" aria-label="난이도">
         <button type="button" class="diff-btn" data-diff="easy">Easy</button>
@@ -161,9 +185,11 @@
   <div id="gun-cursor" hidden></div>
 
   <script src="tournament-core.js"></script>
+  <script src="league-core.js"></script>
   <script src="roster-core.js"></script>
   <script src="aim-cap.js"></script>
   <script src="game.js"></script>
   <script src="tournament.js"></script>
+  <script src="league.js"></script>
 </body>
 </html>

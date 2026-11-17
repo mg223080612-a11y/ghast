@@ -29,44 +29,54 @@ test('참가자가 3명보다 적거나 32명보다 많으면 거절한다', () 
   assert.throws(() => B.createBracket(names(33)), /3~32/);
 });
 
-test('대진표 크기는 참가자 수 이상인 가장 작은 2의 거듭제곱이다', () => {
-  assert.equal(B.createBracket(names(3)).size, 4);
-  assert.equal(B.createBracket(names(4)).size, 4);
-  assert.equal(B.createBracket(names(5)).size, 8);
-  assert.equal(B.createBracket(names(17)).size, 32);
-  assert.equal(B.createBracket(names(32)).size, 32);
+// 라운드마다 남은 사람 수
+const roundSizes = (t) => B.rounds(t).map((list) => list.reduce((sum, m) => sum + (m.bye ? 1 : 2), 0));
+// 한 사람이 결승까지 가는 길에 받는 부전승 수의 최댓값
+function maxByesOnPath(t) {
+  const all = B.rounds(t);
+  const byes = all.reduce((prev, list) => list.map((m) => Math.max(...m.src.map((s) => prev[s] ?? 0)) + (m.bye ? 1 : 0)), []);
+  return Math.max(...byes);
+}
+
+test('20명: 첫 판에 모두 10경기, 홀수가 되는 라운드에서만 한 명이 쉰다', () => {
+  const t = B.createBracket(names(20), { rng: fixedRng(3) });
+  assert.deepEqual(roundSizes(t), [20, 10, 5, 3, 2]);
+  const all = B.rounds(t);
+  assert.equal(all[0].filter((m) => m.bye).length, 0);
+  assert.equal(all[0].length, 10);
+  assert.deepEqual(all.map((list) => list.filter((m) => m.bye).length), [0, 0, 1, 1, 0]);
 });
 
-test('모든 참가자가 정확히 한 자리씩 들어간다', () => {
+test('모든 참가자가 첫 라운드에 정확히 한 번씩 나온다', () => {
   const t = B.createBracket(names(11), { rng: fixedRng(3) });
-  const placed = t.slots.filter((s) => s !== null).sort((a, b) => a - b);
-  assert.deepEqual(placed, Array.from({ length: 11 }, (_, i) => i));
+  const seen = B.rounds(t)[0].flatMap((m) => (m.bye ? [m.a] : [m.a, m.b])).sort((a, b) => a - b);
+  assert.deepEqual(seen, Array.from({ length: 11 }, (_, i) => i));
 });
 
-test('부전승끼리 붙는 경기(빈 자리 둘)는 없다', () => {
+test('3~32명: 한 라운드에 쉬는 사람은 많아야 1명, 사람 수가 짝수인 라운드는 아무도 안 쉰다', () => {
   for (let n = 3; n <= 32; n++) {
     const t = B.createBracket(names(n), { rng: fixedRng(n) });
-    for (let k = 0; k < t.size / 2; k++) {
-      assert.ok(t.slots[2 * k] !== null || t.slots[2 * k + 1] !== null, `${n}명: ${k}번째 경기가 비어 있음`);
-    }
+    const sizes = roundSizes(t);
+    B.rounds(t).forEach((list, r) => {
+      const byes = list.filter((m) => m.bye).length;
+      assert.equal(byes, sizes[r] % 2, `${n}명 ${r + 1}라운드`);
+    });
+    assert.equal(sizes[sizes.length - 1], 2, `${n}명: 마지막은 결승`);
   }
 });
 
-test('부전승은 왼쪽·오른쪽 절반에 고르게 나뉜다', () => {
-  const t = B.createBracket(names(10), { rng: fixedRng(5) }); // 크기 16, 부전승 6
-  const half = t.size / 2;
-  const emptyLeft = t.slots.slice(0, half).filter((s) => s === null).length;
-  const emptyRight = t.slots.slice(half).filter((s) => s === null).length;
-  assert.equal(emptyLeft + emptyRight, 6);
-  assert.equal(emptyLeft, emptyRight);
+test('3~32명: 한 사람이 부전승을 두 번 받지 않는다', () => {
+  for (let n = 3; n <= 32; n++) {
+    assert.ok(maxByesOnPath(B.createBracket(names(n), { rng: fixedRng(n) })) <= 1, `${n}명`);
+  }
 });
 
-test('부전승 경기는 저절로 승자가 정해지고 다음 경기로 고르지 않는다', () => {
+test('부전승 자리는 저절로 승자가 정해지고 다음 경기로 고르지 않는다', () => {
   const t = B.createBracket(names(3), { rng: fixedRng(1) });
   const first = B.rounds(t)[0];
   const bye = first.find((m) => m.bye);
   assert.ok(bye);
-  assert.notEqual(bye.winner, undefined);
+  assert.equal(bye.winner, bye.a);
   assert.equal(B.nextMatch(t).bye, false);
 });
 
@@ -161,7 +171,7 @@ test('첫 경기 전에는 다시 섞을 수 있고, 결과가 하나라도 있�
   const again = B.reshuffle(t, fixedRng(99));
   assert.equal(again.players.length, 8);
   assert.equal(again.thirdPlace, false);
-  assert.notDeepEqual(again.slots, t.slots);
+  assert.notDeepEqual(again.order, t.order);
   const m = B.nextMatch(t);
   const started = B.recordResult(t, m.id, m.a, [1, 0]);
   assert.throws(() => B.reshuffle(started), /이미 경기를 시작/);
@@ -173,12 +183,12 @@ test('라운드 이름: 결승·4강·8강·16강·32강', () => {
   assert.equal(B.matchLabel(t, B.thirdPlaceMatch(t) || { id: 'THIRD' }), '3·4위전');
 });
 
-test('경기 이름은 그 라운드의 실제 경기(부전승 제외) 순번을 쓴다', () => {
-  const t = B.createBracket(names(5), { rng: fixedRng(1) }); // 크기 8, 부전승 3 → 1라운드 실제 경기 1개
-  const real = B.rounds(t)[0].filter((m) => !m.bye);
-  assert.equal(real.length, 1);
-  assert.equal(B.matchLabel(t, real[0]), '8강 1경기');
-  assert.equal(B.matchLabel(t, B.rounds(t)[2][0]), '결승');
+test('경기 이름: 2의 거듭제곱이 아닌 라운드는 N라운드, 결승 바로 앞은 준결승', () => {
+  const t = B.createBracket(names(20), { rng: fixedRng(1) });
+  assert.deepEqual([0, 1, 2, 3, 4].map((r) => B.roundName(t, r)), ['1라운드', '2라운드', '3라운드', '준결승', '결승']);
+  assert.equal(B.matchLabel(t, B.rounds(t)[0][0]), '1라운드 1경기');
+  assert.equal(B.matchLabel(t, B.rounds(t)[4][0]), '결승');
+  assert.equal(B.roundCount(t), 5);
 });
 
 test('JSON 으로 저장했다 불러와도 그대로 이어서 진행된다', () => {
@@ -194,6 +204,9 @@ test('망가진 저장 데이터는 올바르지 않다고 알려 준다', () =>
   assert.equal(B.isValid(null), false);
   assert.equal(B.isValid({ size: 4, slots: [0, 1], players: [] }), false);
   assert.equal(B.isValid({ size: 4, slots: [0, 1, 2, 9], players: [{ id: 0, name: 'a' }], results: {} }), false);
+  const ok = B.createBracket(names(4), { rng: fixedRng(1) });
+  assert.equal(B.isValid({ ...ok, order: [0, 1, 2, 2] }), false);
+  assert.equal(B.isValid({ ...ok, format: undefined }), false); // 예전 방식(32강 칸) 저장본
 });
 
 test('경기 id 로 경기를 찾는다 (3·4위전 포함), 없는 id 는 null', () => {

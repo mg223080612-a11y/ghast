@@ -27,13 +27,23 @@ const ROSTER_MAX_BYTES = 200 * 1024;
 const tRosterList = document.getElementById('t-roster-list');
 const tRosterInput = document.getElementById('t-roster-input');
 const tRosterDel = document.getElementById('t-roster-del');
+// 대회 방식: 토너먼트 | 리그 (한 사람당 정해진 판 수, 점수 합계 순위)
+const LEAGUE_FORM = { maxGames: 6 };
+const tKindHint = document.getElementById('t-kind-hint');
+const tPick = document.getElementById('contest-pick');
+const tTitle = document.getElementById('t-title');
+let formKind = 'tournament';
 
-// 저장 모양: { bracket, seconds, diff, current: { id } | null, last: { id, winner, scores, overtime } | null }
+// 저장 모양: 토너먼트 { bracket, seconds, diff, current: { id } | null, last: { id, winner, scores, overtime } | null }
+//          리그     { league, seconds, diff, current, last: { id, scores, prevRanks } | null }  (league-core.js)
 function loadTournament() {
   const d = readJson(TOURNAMENT_KEY, null);
-  if (!d || !Bracket.isValid(d.bracket)) return null;
+  if (!d) return null;
   const seconds = clamp(Math.round(Number(d.seconds)) || TOURNAMENT.defaultSeconds, TOURNAMENT.minSeconds, TOURNAMENT.maxSeconds);
-  return { bracket: d.bracket, seconds, diff: diffKeyOf(d.diff), current: d.current ?? null, last: d.last ?? null };
+  const common = { seconds, diff: diffKeyOf(d.diff), current: d.current ?? null, last: d.last ?? null };
+  if (League.isValid(d.league)) return { league: d.league, ...common };
+  if (Bracket.isValid(d.bracket)) return { bracket: d.bracket, ...common };
+  return null;
 }
 
 // 경기장에 남은 가스트·화염구를 치우고 메뉴 화면으로
@@ -54,58 +64,91 @@ const Tournament = {
     else { try { localStorage.removeItem(TOURNAMENT_KEY); } catch { /* 저장 불가 환경 */ } }
   },
   bracket() { return this.data?.bracket; },
-  name(id) { return Bracket.playerName(this.bracket(), id); },
-  inProgress() { return !!this.data && !Bracket.isFinished(this.data.bracket); },
+  isLeague() { return !!this.data?.league; },
+  name(id) { return this.isLeague() ? League.playerName(this.data.league, id) : Bracket.playerName(this.bracket(), id); },
+  finished() {
+    if (!this.data) return false;
+    return this.isLeague() ? League.isFinished(this.data.league) : Bracket.isFinished(this.data.bracket);
+  },
+  inProgress() { return !!this.data && !this.finished(); },
+  playerNames() { return (this.data?.league || this.data?.bracket)?.players.map((p) => p.name) ?? []; },
+  nextMatch() {
+    if (!this.data) return null;
+    return this.isLeague() ? League.nextMatch(this.data.league) : Bracket.nextMatch(this.data.bracket);
+  },
+  findMatch(id) {
+    if (!this.data || !id) return null;
+    return this.isLeague() ? League.findMatch(this.data.league, id) : Bracket.findMatch(this.data.bracket, id);
+  },
+  // 처음 화면 버튼 글자
+  titleLabel() { return this.inProgress() ? '대회 이어하기' : '대회 모드'; },
 
-  // 처음 화면 [토너먼트] · 3 키: 진행 중이면 대진표로, 아니면 참가자 입력
+  // 처음 화면 [대회 모드] · 3 키: 진행 중이면 대진표·순위표로, 아니면 방식 고르기(토너먼트 · 리그전)
   open() {
     Sound.init();
     if (this.inProgress()) this.showBracket();
-    else this.openForm();
+    else this.openPick();
   },
+  pickOpen() { return !tPick.hidden; },
+  openPick() {
+    Sound.init();
+    if (nameOpen()) closeNameEntry();
+    if (game.state !== 'title') goTitle();
+    tEntry.hidden = true;
+    tPick.hidden = false;
+    setTimeout(() => tPick.querySelector(`.contest-opt[data-kind="${settings.contestKind === 'league' ? 'league' : 'tournament'}"]`)?.focus(), 0);
+  },
+  closePick() { tPick.hidden = true; },
 
   // ---------- 참가자 입력 창 ----------
-  formOpen() { return !tEntry.hidden; },
+  formOpen() { return !tEntry.hidden || !tPick.hidden; },
   openForm() {
     Sound.init();
     if (nameOpen()) closeNameEntry();
     if (game.state !== 'title') goTitle();
     tForm.elements.seconds.value = settings.tournamentSeconds;
     tForm.elements.third.checked = settings.tournamentThird;
-    // 지난 토너먼트 참가자를 미리 채워 둔다 (같은 반이 한 번 더 할 때 편하게)
-    const names = this.data ? this.data.bracket.players.map((p) => p.name) : [];
+    tForm.elements.games.value = String(clamp(Math.round(Number(settings.leagueGames)) || League.DEFAULT_GAMES, 1, LEAGUE_FORM.maxGames));
+    // 지난 대회 참가자를 미리 채워 둔다 (같은 반이 한 번 더 할 때 편하게)
+    const names = this.playerNames();
     tNames.replaceChildren();
     setNameCount(names.length || TOURNAMENT.defaultCount);
     nameInputs().forEach((input, i) => { input.value = names[i] ?? ''; });
     renderRosterList();
+    setFormKind(settings.contestKind);
     showHint(T_HINT, false);
     updateDiffButtons();
     tEntry.hidden = false;
     setTimeout(() => nameInputs()[0]?.focus(), 0);
   },
-  closeForm() { tEntry.hidden = true; },
+  closeForm() { tEntry.hidden = true; tPick.hidden = true; },
 
   create(names, opts) {
-    const bracket = Bracket.createBracket(names, { thirdPlace: opts.third });
-    this.set({ bracket, seconds: opts.seconds, diff: opts.diff, current: null, last: null });
+    const common = { seconds: opts.seconds, diff: opts.diff, current: null, last: null };
+    if (opts.kind === 'league') this.set({ league: League.createLeague(names, { games: opts.games }), ...common });
+    else this.set({ bracket: Bracket.createBracket(names, { thirdPlace: opts.third }), ...common });
     Sound.bonus();
     this.showBracket();
   },
   // 첫 경기 전에만: 같은 참가자로 대진을 다시 뽑는다
   reshuffle() {
     if (!this.data) return;
-    this.set({ ...this.data, bracket: Bracket.reshuffle(this.data.bracket) });
+    if (this.isLeague()) this.set({ ...this.data, league: League.reshuffle(this.data.league) });
+    else this.set({ ...this.data, bracket: Bracket.reshuffle(this.data.bracket) });
     Sound.tick();
   },
-  // 진행 중인 토너먼트를 버리고 새로 (진행요원 확인)
+  // 진행 중인 대회를 버리고 새로 (진행요원 확인)
   startOver() {
-    if (this.inProgress() && !confirm('진행 중인 토너먼트를 끝내고 새로 만들까요? 지금 대진표는 사라집니다.')) return;
-    this.openForm();
+    const what = this.isLeague() ? '리그' : '토너먼트';
+    if (this.inProgress() && !confirm(`진행 중인 ${what}를 끝내고 새로 만들까요? 지금 ${this.isLeague() ? '순위표' : '대진표'}는 사라집니다.`)) return;
+    this.openPick();
   },
 
   // ---------- 화면 이동 ----------
-  showBracket() {
+  // reveal: 경기 직후에 열면 리그 순위표가 1위부터 차례로 나타난다
+  showBracket(reveal = false) {
     leaveField();
+    this.reveal = reveal && this.isLeague();
     game.state = 'bracket';
     game.resultTime = 0;
     updateCornerButtons();
@@ -118,27 +161,32 @@ const Tournament = {
     updateCornerButtons();
   },
   // 경기 결과 화면 → 대진표 (마지막 경기였으면 우승 발표)
+  // 리그는 마지막 경기여도 순위표를 먼저 보여 주고, 거기서 [최종 순위 발표]
   afterResult() {
-    if (this.data && Bracket.isFinished(this.data.bracket)) this.showChampion();
+    if (this.isLeague()) this.showBracket(true);
+    else if (this.finished()) this.showChampion();
     else this.showBracket();
+  },
+  // 결과 화면에서 매 프레임 (game.js): 리그는 잠깐 뒤 저절로 순위표로
+  tickResult() {
+    if (this.isLeague() && game.resultTime > LEAGUE.resultHold) this.afterResult();
   },
 
   // ---------- 경기 ----------
   startNextIfReady() {
-    if (game.resultTime > TOURNAMENT.lock) this.startNext();
+    if (game.resultTime > TOURNAMENT.lock && (!this.isLeague() || leagueRevealDone(this))) this.startNext();
   },
   startNext() {
-    const m = this.data && Bracket.nextMatch(this.data.bracket);
+    const m = this.nextMatch();
     if (!m) { this.showChampion(); return; }
     if (!ensureVersusGuns()) return; // 총 2대가 1P·2P 로 지정돼 있어야 한다 (아니면 총 연결 화면으로)
     this.set({ ...this.data, current: { id: m.id } });
     startGame('tournament', [this.name(m.a), this.name(m.b)], { seconds: this.data.seconds, diff: this.data.diff });
   },
-  currentMatch() {
-    const id = this.data?.current?.id;
-    return id ? Bracket.findMatch(this.data.bracket, id) : null;
-  },
+  currentMatch() { return this.findMatch(this.data?.current?.id); },
+  // 동점이면 연장전 (토너먼트만. 리그는 점수 합계라 비겨도 그대로 끝)
   tied() {
+    if (this.isLeague()) return false;
     const [a, b] = game.players;
     return !!a && !!b && a.score === b.score;
   },
@@ -154,6 +202,7 @@ const Tournament = {
     if (!m) return; // 대진표가 바뀌었으면(새 토너먼트 등) 결과를 넣지 않는다
     banner = null; // 경기 막판의 '연장전!'·'레벨 UP!' 안내가 결과 화면에 겹치지 않게
     const scores = game.players.map((p) => p.score);
+    if (this.isLeague()) { this.finishLeagueMatch(m, scores); return; }
     const winner = scores[0] > scores[1] ? m.a : m.b;
     try {
       const bracket = Bracket.recordResult(this.data.bracket, m.id, winner, scores);
@@ -163,28 +212,40 @@ const Tournament = {
     }
   },
 
-  // ---------- 경기 결과 화면 (game.js 의 2인 대결 결과 화면 안에서 부른다) ----------
-  lastMatch() {
-    const id = this.data?.last?.id;
-    return id ? Bracket.findMatch(this.data.bracket, id) : null;
+  // 리그: 점수를 넣고, 순위표에 ▲▼ 를 그리려고 경기 전 순위를 함께 남긴다
+  finishLeagueMatch(m, scores) {
+    try {
+      const before = League.standings(this.data.league);
+      const prevRanks = Object.fromEntries(before.map((r) => [r.id, r.rank]));
+      const league = League.recordResult(this.data.league, m.id, scores);
+      this.set({ ...this.data, league, current: null, last: { id: m.id, scores, prevRanks } });
+    } catch (err) {
+      reportError(err);
+    }
   },
+
+  // ---------- 경기 결과 화면 (game.js 의 2인 대결 결과 화면 안에서 부른다) ----------
+  lastMatch() { return this.findMatch(this.data?.last?.id); },
   resultHeading() {
+    if (this.isLeague()) return leagueResultHeading(this);
     const m = this.lastMatch();
     return m ? `${Bracket.matchLabel(this.data.bracket, m)} 종료!` : '경기 종료!';
   },
   resultNote() {
+    if (this.isLeague()) return leagueResultNote(this);
     const m = this.lastMatch();
     if (!m) return '';
     const t = this.data.bracket;
-    const finalRound = Math.log2(t.size) - 1;
+    const finalRound = Bracket.roundCount(t) - 1;
     const what = m.id === 'THIRD' ? '3위 확정!'
       : m.round === finalRound ? '토너먼트 우승!'
-      : `${Bracket.roundName(t, m.round + 1)} 진출!`;
+      : advanceNote(t, m);
     const ot = this.data.last.overtime;
     return `${this.name(m.winner)} ${what}${ot ? `  (연장 ${ot}번)` : ''}`;
   },
   drawResultButtons(cx, by, ready) {
-    if (this.data && Bracket.isFinished(this.data.bracket)) {
+    if (this.isLeague()) { drawLeagueResultButtons(this, cx, by, ready); return; }
+    if (this.finished()) {
       button('우승 발표 ▶', cx - U * 20, by, U * 36, U * 9, () => this.showChampion(), ready, true);
       button('대진표 보기', cx + U * 20, by, U * 36, U * 9, () => this.showBracket(), ready);
       return;
@@ -192,9 +253,23 @@ const Tournament = {
     button('대진표 보기 ▶', cx, by, U * 50, U * 9, () => this.showBracket(), ready, true);
   },
 
-  drawBracketScreen(time) { drawBracketScreen(this, time); },
-  drawChampion(time) { drawChampionScreen(this, time); },
+  drawBracketScreen(time) {
+    if (this.isLeague()) drawLeagueScreen(this, time);
+    else drawBracketScreen(this, time);
+  },
+  drawChampion(time) {
+    if (this.isLeague()) drawLeagueChampion(this, time);
+    else drawChampionScreen(this, time);
+  },
 };
+
+// 이긴 사람이 다음 라운드에서 쉬고(부전승) 올라가면 그다음 라운드까지 알려 준다
+function advanceNote(t, m) {
+  const all = Bracket.rounds(t);
+  const next = all[m.round + 1]?.find((x) => x.src.includes(m.index));
+  if (next?.bye) return `${Bracket.roundName(t, m.round + 2)} 진출! (${Bracket.roundName(t, m.round + 1)} 부전승)`;
+  return `${Bracket.roundName(t, m.round + 1)} 진출!`;
+}
 
 // ---------- 참가자 입력 창 도우미 ----------
 function nameInputs() { return [...tNames.querySelectorAll('input')]; }
@@ -218,7 +293,41 @@ function setNameCount(n) {
     return label;
   });
   tNames.replaceChildren(...labels);
+  updateKindHint();
 }
+
+// ---------- 대회 방식 (토너먼트 · 리그) ----------
+function setFormKind(kind) {
+  formKind = kind === 'league' ? 'league' : 'tournament';
+  document.querySelectorAll('.kind-btn').forEach((b) => b.classList.toggle('on', b.dataset.kind === formKind));
+  tForm.querySelector('.t-games').hidden = formKind !== 'league';
+  tForm.querySelector('.t-third').hidden = formKind === 'league';
+  tTitle.textContent = `${formKind === 'league' ? '리그전' : '토너먼트'} — 참가자를 입력하세요`;
+  tForm.querySelector('button[type=submit]').textContent = formKind === 'league' ? '리그 대진 만들기' : '대진표 만들기';
+  updateKindHint();
+}
+// 방식 고르기 창: 고르면 그 방식으로 참가자 입력 창
+tPick.querySelectorAll('.contest-opt').forEach((b) => b.addEventListener('click', () => {
+  settings = { ...settings, contestKind: b.dataset.kind };
+  saveSettings();
+  Sound.tick();
+  tPick.hidden = true;
+  Tournament.openForm();
+}));
+document.getElementById('contest-cancel').addEventListener('click', () => Tournament.closePick());
+// 방식 설명. 리그는 지금 인원·판 수로 짤 수 있는지 함께 알려 준다
+function updateKindHint() {
+  if (formKind !== 'league') {
+    tKindHint.textContent = '지면 탈락 · 이긴 사람이 올라가 우승을 가려요';
+    tKindHint.classList.remove('error');
+    return;
+  }
+  const check = League.checkGames(nameInputs().length, tForm.elements.games.value);
+  tKindHint.textContent = check.ok ? `${check.message} · 모두 서로 다른 상대 · 점수 합계로 순위` : check.message;
+  tKindHint.classList.toggle('error', !check.ok);
+}
+document.querySelectorAll('.kind-btn').forEach((b) => b.addEventListener('click', () => { setFormKind(b.dataset.kind); Sound.tick(); }));
+tForm.elements.games.addEventListener('change', updateKindHint);
 // 같은 이름이 있으면 뒤에 숫자를 붙인다 (판다 → 판다2). 12자를 넘지 않게
 function uniqueName(base, used) {
   if (!used.includes(base)) return base;
@@ -241,14 +350,14 @@ function renderRosterList(selected = '') {
 // 이름 배열로 칸을 새로 채운다. 32명이 넘으면 채우지 않는다
 function fillNames(names, label) {
   if (names.length > Bracket.MAX_PLAYERS) {
-    showHint(`${label} ${names.length}명 — 토너먼트는 ${Bracket.MAX_PLAYERS}명까지예요`, true);
+    showHint(`${label} ${names.length}명 — 대회는 ${Bracket.MAX_PLAYERS}명까지예요`, true);
     return false;
   }
   tNames.replaceChildren();
   setNameCount(names.length);
   nameInputs().forEach((input, i) => { input.value = names[i] ?? ''; });
   const fewer = names.length < Bracket.MIN_PLAYERS ? ' · 모자란 칸은 랜덤 닉네임' : '';
-  showHint(`${label} ${names.length}명을 넣었어요${fewer} · 대진은 [대진표 만들기]에서 무작위로 뽑아요`, false);
+  showHint(`${label} ${names.length}명을 넣었어요${fewer} · 대진은 아래 만들기 버튼을 누르면 무작위로 짜요`, false);
   return true;
 }
 // 한글 윈도우 엑셀의 기본 CSV 는 UTF-8 이 아니라 EUC-KR 이라서 둘 다 읽는다.
@@ -345,46 +454,90 @@ tForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const seconds = clamp(Math.round(Number(tForm.elements.seconds.value)) || TOURNAMENT.defaultSeconds, TOURNAMENT.minSeconds, TOURNAMENT.maxSeconds);
   const third = tForm.elements.third.checked;
-  settings = { ...settings, tournamentSeconds: seconds, tournamentThird: third };
+  const games = clamp(Math.round(Number(tForm.elements.games.value)) || League.DEFAULT_GAMES, 1, LEAGUE_FORM.maxGames);
+  settings = { ...settings, tournamentSeconds: seconds, tournamentThird: third, contestKind: formKind, leagueGames: games };
   saveSettings();
   try {
     const names = collectNames();
+    if (formKind === 'league') {
+      const check = League.checkGames(names.length, games);
+      if (!check.ok) { showHint(check.message, true); return; }
+    }
     Tournament.closeForm();
-    Tournament.create(names, { seconds, third, diff: settings.diffLevel });
+    Tournament.create(names, { kind: formKind, seconds, third, games, diff: settings.diffLevel });
   } catch (err) {
     showHint(err.message, true);
   }
 });
 
 // ---------- 대진표 그리기 ----------
-// 왼쪽 절반은 왼쪽에서, 오른쪽 절반은 오른쪽에서 가운데 결승(우승 자리)으로 모인다
-function bracketLayout(t) {
-  const R = Math.log2(t.size);
+// 왼쪽 절반은 왼쪽에서, 오른쪽 절반은 오른쪽에서 가운데 결승(우승 자리)으로 모인다.
+// 자리(r, k) = r 라운드의 k 번째 참가 자리. 결승의 두 자리에서 거꾸로 내려가며 왼쪽·오른쪽을 정하고,
+// 1라운드 자리는 쪽마다 위에서부터 한 줄씩, 그다음 라운드 자리는 올라온 자리들의 가운데 높이에 둔다.
+// 부전승(쉬고 올라감)은 같은 높이로 곧게 이어진다.
+function seatCounts(t, all) {
+  return [t.order.length, ...all.map((list) => list.length)];
+}
+function seatSides(all) {
+  const R = all.length;
+  const sides = Array.from({ length: R + 1 }, () => []);
+  sides[R] = [0];
+  for (let r = R - 1; r >= 0; r--) {
+    all[r].forEach((m, i) => m.src.forEach((k) => { sides[r][k] = r === R - 1 ? (k === 0 ? -1 : 1) : sides[r + 1][i]; }));
+  }
+  return sides;
+}
+// 1라운드 자리 수: 왼쪽·오른쪽과 둘 중 많은 쪽(= 줄 수)
+function sideCounts(sides) {
+  const counts = { '-1': sides[0].filter((s) => s < 0).length, 1: sides[0].filter((s) => s > 0).length };
+  return { counts, rows: Math.max(counts[-1], counts[1]) };
+}
+function seatRows(all, sides, top, rowH) {
+  const { counts, rows } = sideCounts(sides);
+  const seen = { '-1': 0, 1: 0 };
+  const first = sides[0].map((side) => {
+    const j = seen[side];
+    seen[side] = j + 1;
+    return top + rowH * ((rows - counts[side]) / 2 + j + 0.5);
+  });
+  return all.reduce((ys, list) => [...ys, list.map((m) => m.src.reduce((sum, k) => sum + ys[ys.length - 1][k], 0) / m.src.length)], [first]);
+}
+// 자리마다 그 자리를 쓰는 경기와 위치(0 = 위쪽 1P, 1 = 아래쪽 2P)
+function seatConsumers(all) {
+  return all.map((list) => list.reduce((acc, m) => {
+    m.src.forEach((k, pos) => { acc[k] = { m, pos }; });
+    return acc;
+  }, []));
+}
+function bracketLayout(t, all) {
+  const R = all.length;
   const px = U * 3, py = U * 2, pw = W - U * 6, ph = H - U * 4;
   // 위쪽은 오른쪽 위 운영 버튼(크게 보임)과 제목이 겹치지 않게 조금 비운다
   const top = py + U * 19, bottom = py + ph - U * 24.5;
   const colW = (pw - U * 4) / (2 * R + 1);
-  const rowH = (bottom - top) / (t.size / 2);
+  const sides = seatSides(all);
+  const rowH = (bottom - top) / sideCounts(sides).rows;
   return {
-    R, px, py, pw, ph, top, bottom, colW, rowH,
+    R, px, py, pw, ph, top, bottom, colW, rowH, sides,
+    ys: seatRows(all, sides, top, rowH),
+    consumers: seatConsumers(all),
+    counts: seatCounts(t, all),
     left: px + U * 2,
     boxW: colW - U * 3,
     boxH: Math.min(rowH * 0.78, U * 6.5),
     champW: colW - U * 3, // 양옆 결승 진출자 칸과 겹치지 않게 같은 넓이
   };
 }
-// 자리(라운드 깊이 d 의 k 번째)의 화면 위치. side: -1 왼쪽 · 1 오른쪽 · 0 가운데(우승)
-function seatPos(L, t, d, k) {
-  if (d === L.R) return { x: L.left + L.colW * (L.R + 0.5), y: (L.top + L.bottom) / 2, side: 0 };
-  const half = t.size / 2 ** d / 2;
-  const right = k >= half;
-  const j = right ? k - half : k;
-  const col = right ? 2 * L.R - d : d;
-  return { x: L.left + L.colW * (col + 0.5), y: L.top + L.rowH * (j + 0.5) * 2 ** d, side: right ? 1 : -1 };
+// 자리의 화면 위치. side: -1 왼쪽 · 1 오른쪽 · 0 가운데(우승)
+function seatPos(L, r, k) {
+  if (r === L.R) return { x: L.left + L.colW * (L.R + 0.5), y: (L.top + L.bottom) / 2, side: 0 };
+  const side = L.sides[r][k];
+  const col = side > 0 ? 2 * L.R - r : r;
+  return { x: L.left + L.colW * (col + 0.5), y: L.ys[r][k], side };
 }
 // 그 자리에 앉은 사람 (1라운드는 처음 배정, 그다음부터는 앞 경기의 승자)
-function seatOccupant(t, all, d, k) {
-  return d === 0 ? t.slots[k] : all[d - 1][k].winner;
+function seatOccupant(t, all, r, k) {
+  return r === 0 ? t.order[k] : all[r - 1][k].winner;
 }
 
 // 자리 → 다음 라운드 자리를 잇는 ㄱ자 선. 이긴 쪽은 금색
@@ -421,40 +574,36 @@ function drawSeatBox(x, y, w, h, seat, time) {
 }
 
 // 자리 상태: 그 자리에서 치른(치를) 경기를 보고 정한다
-function seatState(t, all, d, k, next) {
-  const id = seatOccupant(t, all, d, k);
+function seatState(t, L, all, r, k, next) {
+  const id = seatOccupant(t, all, r, k);
   const name = Bracket.playerName(t, id);
   if (typeof id !== 'number') return { id, name, state: 'tbd', score: null, who: -1 };
-  const m = all[d][Math.floor(k / 2)];
-  if (next && m.id === next.id) return { id, name, state: 'next', score: null, who: k % 2 };
+  const { m, pos } = L.consumers[r][k];
+  if (next && m.id === next.id) return { id, name, state: 'next', score: null, who: pos };
   if (m.bye || typeof m.winner !== 'number') return { id, name, state: 'plain', score: null, who: -1 };
-  const score = t.results[m.id]?.scores?.[k % 2] ?? null;
+  const score = t.results[m.id]?.scores?.[pos] ?? null;
   return { id, name, state: m.winner === id ? 'won' : 'lost', score, who: -1 };
 }
 
 function drawBracketLines(L, t, all) {
   all.forEach((round, r) => round.forEach((m, idx) => {
-    const parent = seatPos(L, t, r + 1, idx);
-    [2 * idx, 2 * idx + 1].forEach((k) => {
+    const parent = seatPos(L, r + 1, idx);
+    m.src.forEach((k) => {
       const id = seatOccupant(t, all, r, k);
-      if (id === null) return; // 빈 자리(부전승 상대)는 선을 긋지 않는다
-      drawConnector(L, seatPos(L, t, r, k), parent, !m.bye && typeof id === 'number' && m.winner === id);
+      drawConnector(L, seatPos(L, r, k), parent, !m.bye && typeof id === 'number' && m.winner === id);
     });
   }));
 }
 
 function drawBracketSeats(L, t, all, next, time) {
-  for (let d = 0; d < L.R; d++) {
-    const count = t.size / 2 ** d;
-    for (let k = 0; k < count; k++) {
-      const seat = seatState(t, all, d, k, next);
-      if (seat.id === null) continue; // 빈 자리는 그리지 않는다 (상대는 부전승)
-      const p = seatPos(L, t, d, k);
-      drawSeatBox(p.x, p.y, L.boxW, L.boxH, seat, time);
+  for (let r = 0; r < L.R; r++) {
+    for (let k = 0; k < L.counts[r]; k++) {
+      const p = seatPos(L, r, k);
+      drawSeatBox(p.x, p.y, L.boxW, L.boxH, seatState(t, L, all, r, k, next), time);
     }
   }
   // 가운데: 우승 자리
-  const c = seatPos(L, t, L.R, 0);
+  const c = seatPos(L, L.R, 0);
   const champ = all[L.R - 1][0].winner;
   const decided = typeof champ === 'number';
   const h = Math.max(L.boxH, U * 5);
@@ -466,7 +615,7 @@ function drawBracketSeats(L, t, all, next, time) {
 function drawThirdPlace(L, t, next, time) {
   const m = Bracket.thirdPlaceMatch(t);
   if (!m) return;
-  const c = seatPos(L, t, L.R, 0);
+  const c = seatPos(L, L.R, 0);
   const h = Math.max(L.boxH, U * 4.5);
   const y0 = c.y + U * 13;
   const decided = typeof m.winner === 'number';
@@ -493,7 +642,7 @@ function drawBracketFooter(L, tour, next) {
   if (!next) {
     text('모든 경기가 끝났어요!', cx, fy + U * 3, U * 4.4, '#ffe14a');
     button('우승 발표 ▶', cx - U * 20, by, U * 36, U * 8.5, () => tour.showChampion(), ready, true);
-    button('새 토너먼트', cx + U * 20, by, U * 36, U * 8.5, () => tour.startOver(), ready);
+    button('새 대회', cx + U * 20, by, U * 36, U * 8.5, () => tour.startOver(), ready);
     return;
   }
   text(`다음 경기  ·  ${Bracket.matchLabel(t, next)}`, cx, fy, U * 3.2, '#ffcf5a');
@@ -503,7 +652,7 @@ function drawBracketFooter(L, tour, next) {
   text(b, cx + U * 6, fy + U * 5.5, fitTextSize(b, size, W * 0.4), PLAYER_COLORS[1], 'left');
   if (Object.keys(t.results).length === 0) button('대진 다시 섞기', cx - U * 40, by, U * 32, U * 8.5, () => tour.reshuffle(), ready);
   button('경기 시작 ▶', cx, by, U * 40, U * 8.5, () => tour.startNext(), ready, true);
-  button('새 토너먼트', cx + U * 40, by, U * 32, U * 8.5, () => tour.startOver(), ready);
+  button('새 대회', cx + U * 40, by, U * 32, U * 8.5, () => tour.startOver(), ready);
 }
 
 function drawBracketScreen(tour, time) {
@@ -511,9 +660,9 @@ function drawBracketScreen(tour, time) {
   ctx.fillRect(0, 0, W, H);
   if (!tour.data) { goTitle(); return; }
   const t = tour.data.bracket;
-  const L = bracketLayout(t);
-  panel(L.px, L.py, L.pw, L.ph, 0.88);
   const all = Bracket.rounds(t);
+  const L = bracketLayout(t, all);
+  panel(L.px, L.py, L.pw, L.ph, 0.88);
   const next = Bracket.nextMatch(t);
   drawBracketHeader(L, tour);
   drawBracketLines(L, t, all);
@@ -552,6 +701,6 @@ function drawChampionScreen(tour, time) {
   const ready = game.resultTime > RESULT_LOCK;
   const by = py + ph - U * 8;
   button('대진표 보기', cx - U * 33, by, U * 29, U * 9, () => tour.showBracket(), ready);
-  button('새 토너먼트', cx, by, U * 29, U * 9, () => tour.openForm(), ready, true);
+  button('새 대회', cx, by, U * 29, U * 9, () => tour.openPick(), ready, true);
   button('처음 화면', cx + U * 33, by, U * 29, U * 9, goTitle, ready);
 }

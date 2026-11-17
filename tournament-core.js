@@ -2,12 +2,16 @@
 // 토너먼트 대진표 계산 (화면 그리기와 상관없는 순수 계산)
 //   게임(index.html)에서는 전역 Bracket 으로, 테스트(node)에서는 require 로 쓴다.
 //
-// 대진표 = { size, players: [{ id, name }], slots: [선수 id | null], results: { 경기 id: { winner, scores } }, thirdPlace }
-//   size  : 4·8·16·32 (참가자 수 이상인 가장 작은 2의 거듭제곱)
-//   slots : 1라운드 자리. null 은 빈 자리(그 경기의 상대는 부전승)
+// 방식: 라운드마다 남은 사람끼리 모두 짝을 짓는다 (20명 → 첫 판 10경기).
+//   사람 수가 홀수인 라운드에서만 한 명이 쉬고(부전승) 올라가며, 이미 쉰 쪽은 되도록 다시 쉬지 않는다.
+//   예) 20명: 20 → 10 → 5(2경기 + 1명 쉼) → 3(준결승 1경기 + 1명 쉼) → 결승
+//
+// 대진표 = { format: 2, players: [{ id, name }], order: [선수 id], results: { 경기 id: { winner, scores } }, thirdPlace }
+//   order : 1라운드 자리 순서 (무작위). 라운드 짜임은 인원 수만으로 정해진다 (plan)
 //   결과를 넣을 때마다 원래 대진표는 그대로 두고 새 대진표를 돌려준다.
-// 경기 = { id: 'R라운드-순번' | 'THIRD', round, index, a, b, winner, bye }
-//   a·b·winner: 선수 id, null(빈 자리), undefined(아직 모름). a(위쪽) 가 1P, b(아래쪽) 가 2P
+// 경기 = { id: 'R라운드-순번' | 'THIRD', round, index, a, b, winner, bye, src }
+//   a·b·winner: 선수 id, null(부전승이라 상대 없음), undefined(아직 모름). a(위쪽) 가 1P, b(아래쪽) 가 2P
+//   src: 앞 라운드(1라운드는 order)의 몇 번째 자리에서 왔는지. 부전승은 한 자리
 // =============================================================
 (function (root, factory) {
   const api = factory();
@@ -16,28 +20,41 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   const MIN_PLAYERS = 3;
   const MAX_PLAYERS = 32;
+  const FORMAT = 2; // 1 = 예전 방식(2의 거듭제곱 칸 + 첫 판 부전승)
   const THIRD_ID = 'THIRD';
 
-  const roundCount = (t) => Math.log2(t.size);
   const matchId = (round, index) => `R${round}-${index}`;
   const isPlayer = (v) => typeof v === 'number';
 
-  function bracketSize(n) {
-    let size = 4;
-    while (size < n) size *= 2;
-    return size;
+  // 홀수 라운드에서 쉴 자리: 짝을 깨지 않게 짝수 번째 자리 중, 아직 안 쉰 쪽의 맨 뒤
+  function pickBye(hadBye) {
+    const evens = hadBye.map((_, i) => i).filter((i) => i % 2 === 0);
+    const fresh = evens.filter((i) => !hadBye[i]);
+    const pool = fresh.length ? fresh : evens;
+    return pool[pool.length - 1];
   }
 
-  // 0..m-1 을 비트를 뒤집은 순서로 (0,4,2,6,1,5,3,7 …) — 부전승을 양쪽 절반·4분의 1 에 고르게 퍼뜨린다
-  function spreadOrder(m) {
-    const bits = Math.log2(m);
-    const rev = (i) => {
-      let r = 0;
-      for (let b = 0; b < bits; b++) r = (r << 1) | ((i >> b) & 1);
-      return r;
-    };
-    return Array.from({ length: m }, (_, i) => rev(i));
+  // 인원 n 의 라운드 짜임: 라운드마다 [{ src: [자리, 자리] } 경기 | { src: [자리] } 부전승]
+  const planCache = new Map();
+  function plan(n) {
+    if (planCache.has(n)) return planCache.get(n);
+    const out = [];
+    let hadBye = Array.from({ length: n }, () => false);
+    while (hadBye.length > 1) {
+      const byeAt = hadBye.length % 2 ? pickBye(hadBye) : -1;
+      const entries = [];
+      for (let i = 0; i < hadBye.length; i += i === byeAt ? 1 : 2) {
+        entries.push({ src: i === byeAt ? [i] : [i, i + 1] });
+      }
+      const prev = hadBye;
+      hadBye = entries.map((e) => e.src.length === 1 || e.src.some((k) => prev[k]));
+      out.push(entries);
+    }
+    planCache.set(n, out);
+    return out;
   }
+
+  const roundCount = (t) => plan(t.order.length).length;
 
   function shuffled(list, rng) {
     const out = [...list];
@@ -48,22 +65,13 @@
     return out;
   }
 
-  // 선수 id 들을 1라운드 자리에 넣는다. 부전승 경기에는 위쪽 자리에만 한 명
-  function placeSlots(ids, size) {
-    const matches = size / 2;
-    const byes = new Set(spreadOrder(matches).slice(0, size - ids.length));
-    const queue = [...ids];
-    return Array.from({ length: matches }, (_, k) => (byes.has(k) ? [queue.shift(), null] : [queue.shift(), queue.shift()])).flat();
-  }
-
   function createBracket(names, { thirdPlace = true, rng = Math.random } = {}) {
     if (!Array.isArray(names) || names.length < MIN_PLAYERS || names.length > MAX_PLAYERS) {
       throw new Error(`참가 인원은 ${MIN_PLAYERS}~${MAX_PLAYERS}명이어야 해요`);
     }
     const players = names.map((name, id) => ({ id, name: String(name) }));
-    const size = bracketSize(players.length);
-    const ids = shuffled(players.map((p) => p.id), rng);
-    return { size, players, slots: placeSlots(ids, size), results: {}, thirdPlace: !!thirdPlace };
+    const order = shuffled(players.map((p) => p.id), rng);
+    return { format: FORMAT, players, order, results: {}, thirdPlace: !!thirdPlace };
   }
 
   // 첫 경기 전에만: 같은 참가자로 대진을 다시 뽑는다
@@ -72,30 +80,39 @@
     return createBracket(t.players.map((p) => p.name), { thirdPlace: t.thirdPlace, rng });
   }
 
-  function decide(t, id, a, b) {
-    if (a === null && b === null) return { winner: null, bye: true };
-    if (a === null || b === null) {
-      const only = a === null ? b : a;
-      return { winner: only, bye: true }; // 상대가 빈 자리면 부전승 (한쪽이 아직 모르면 winner 도 모름)
-    }
-    return { winner: t.results[id]?.winner, bye: false };
-  }
-
   // 라운드별 경기 목록. 앞 라운드 승자가 다음 라운드 자리로 올라간다
   function rounds(t) {
-    const out = [];
-    let seats = t.slots;
-    for (let r = 0; r < roundCount(t); r++) {
-      const list = [];
-      for (let k = 0; k < seats.length / 2; k++) {
-        const id = matchId(r, k);
-        const a = seats[2 * k], b = seats[2 * k + 1];
-        list.push({ id, round: r, index: k, a, b, ...decide(t, id, a, b) });
-      }
-      out.push(list);
+    let seats = t.order;
+    return plan(t.order.length).map((entries, r) => {
+      const list = entries.map((e, index) => {
+        const id = matchId(r, index);
+        const bye = e.src.length === 1;
+        const a = seats[e.src[0]];
+        const b = bye ? null : seats[e.src[1]];
+        const winner = bye ? a : t.results[id]?.winner;
+        return { id, round: r, index, a, b, winner, bye, src: [...e.src] };
+      });
       seats = list.map((m) => m.winner);
+      return list;
+    });
+  }
+
+  // 그 자리로 올라온 마지막 진짜 경기 (부전승을 거슬러 내려간다). 처음부터 쉬어 올라왔으면 null
+  function realMatchBehind(all, round, index) {
+    let i = index;
+    for (let r = round; r >= 0; r--) {
+      const m = all[r][i];
+      if (!m.bye) return m;
+      i = m.src[0];
     }
-    return out;
+    return null;
+  }
+
+  // 결승에 오른 두 사람이 마지막으로 이긴 경기 (진 사람이 3위 후보)
+  function semiMatches(all) {
+    if (all.length < 2) return [];
+    const final = all[all.length - 1][0];
+    return final.src.map((k) => realMatchBehind(all, all.length - 2, k));
   }
 
   function loserOf(m) {
@@ -103,11 +120,11 @@
     return m.winner === m.a ? m.b : m.a;
   }
 
-  // 3·4위전: 준결승 두 경기가 모두 진짜 경기일 때만 (3명이면 준결승 하나가 부전승이라 없음)
+  // 3·4위전: 결승 진출자 두 사람 모두 앞에서 진짜 경기를 이겼을 때만 (3명이면 한 명이 쉬고 올라와서 없음)
   function thirdPlaceMatch(t, all = rounds(t)) {
-    if (!t.thirdPlace || all.length < 2) return null;
-    const semis = all[all.length - 2];
-    if (semis.some((m) => m.bye)) return null;
+    if (!t.thirdPlace) return null;
+    const semis = semiMatches(all);
+    if (semis.length < 2 || semis.some((m) => !m)) return null;
     const a = loserOf(semis[0]), b = loserOf(semis[1]);
     return { id: THIRD_ID, round: all.length - 1, index: -1, a, b, winner: t.results[THIRD_ID]?.winner, bye: false };
   }
@@ -144,12 +161,12 @@
     return isPlayer(final.winner) && (!third || isPlayer(third.winner));
   }
 
-  // 순위: 3·4위전을 했으면 3위·4위 한 명씩, 아니면 준결승에서 진 사람이 공동 3위
+  // 순위: 3·4위전을 했으면 3위·4위 한 명씩, 아니면 결승 진출자에게 마지막으로 진 사람이 공동 3위
   function standings(t) {
     const all = rounds(t);
     const final = all[all.length - 1][0];
     const third = thirdPlaceMatch(t, all);
-    const semis = all.length >= 2 ? all[all.length - 2] : [];
+    const semis = semiMatches(all).filter(Boolean);
     const defined = (list) => list.filter(isPlayer);
     return {
       champion: final.winner,
@@ -159,9 +176,14 @@
     };
   }
 
+  // 라운드 이름: 남은 사람이 2의 거듭제곱이면 N강, 결승 바로 앞은 준결승, 나머지는 N라운드
   function roundName(t, r) {
-    const left = t.size / 2 ** r;
-    return left === 2 ? '결승' : `${left}강`;
+    const steps = plan(t.order.length);
+    const left = r === 0 ? t.order.length : (steps[r - 1] || []).length;
+    if (r >= steps.length - 1) return '결승';
+    if ((left & (left - 1)) === 0) return `${left}강`;
+    if (r === steps.length - 2) return '준결승';
+    return `${r + 1}라운드`;
   }
 
   function matchLabel(t, m) {
@@ -175,22 +197,20 @@
     return isPlayer(id) ? t.players[id]?.name ?? '' : '';
   }
 
-  // 저장해 둔 대진표(localStorage)가 망가지지 않았는지
+  // 저장해 둔 대진표(localStorage)가 망가지지 않았는지. 예전 방식 저장본은 이어 할 수 없다
   function isValid(t) {
-    if (!t || typeof t !== 'object') return false;
-    const { size, players, slots, results } = t;
-    if (![4, 8, 16, 32].includes(size) || !Array.isArray(players) || !Array.isArray(slots) || slots.length !== size) return false;
-    if (!results || typeof results !== 'object') return false;
-    if (players.length < MIN_PLAYERS || players.length > size) return false;
+    if (!t || typeof t !== 'object' || t.format !== FORMAT) return false;
+    const { players, order, results } = t;
+    if (!Array.isArray(players) || !Array.isArray(order) || !results || typeof results !== 'object') return false;
+    if (players.length < MIN_PLAYERS || players.length > MAX_PLAYERS || order.length !== players.length) return false;
     if (!players.every((p, i) => p && p.id === i && typeof p.name === 'string')) return false;
-    const placed = slots.filter((s) => s !== null);
-    if (placed.length !== players.length || new Set(placed).size !== placed.length) return false;
-    return placed.every((s) => isPlayer(s) && s >= 0 && s < players.length);
+    if (new Set(order).size !== order.length) return false;
+    return order.every((s) => isPlayer(s) && s >= 0 && s < players.length);
   }
 
   return {
     MIN_PLAYERS, MAX_PLAYERS,
-    createBracket, reshuffle, rounds, thirdPlaceMatch, nextMatch, findMatch, recordResult,
+    createBracket, reshuffle, rounds, roundCount, thirdPlaceMatch, nextMatch, findMatch, recordResult,
     isFinished, standings, loserOf, roundName, matchLabel, playerName, isValid,
   };
 });

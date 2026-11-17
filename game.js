@@ -37,6 +37,8 @@ const DEFAULTS = {
   diffLevel: 'normal', // 난이도 'easy' | 'normal' | 'hard' (닉네임 창에서 고르고, 다음 사람에게도 그대로)
   tournamentSeconds: 40, // 토너먼트 한 경기 시간 (보너스 시간 없이 고정)
   tournamentThird: true, // 토너먼트 3·4위전
+  contestKind: 'tournament', // 대회 모드에서 마지막으로 고른 방식 'tournament' | 'league'
+  leagueGames: 4,        // 리그전 한 사람당 판 수
   hitPadding: 15,      // 가스트 판정 범위를 몇 % 넓힐지
   ghastScale: 100,     // 가스트 크기 (%)
   quality: 'normal',   // 화질: 'normal' 보통(빠름) / 'light' 가볍게(저사양) / 'sharp' 선명하게(느릴 수 있음)
@@ -1665,8 +1667,14 @@ function onTap(x, y, who = 0, source = 'mouse') {
     const el = document.elementFromPoint(x, y);
     const btn = el?.closest('button');
     const input = el?.closest('input');
+    const select = el?.closest('select') || el?.closest('label')?.querySelector('select');
     if (btn && form.contains(btn)) btn.click();
-    else if (input && form.contains(input)) input.focus();
+    else if (select && form.contains(select)) {
+      // 고르기 상자(리그전 판 수 등)는 쏠 때마다 다음 값으로
+      select.selectedIndex = (select.selectedIndex + 1) % select.options.length;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      Sound.tick();
+    } else if (input && form.contains(input)) input.focus();
     return;
   }
 
@@ -2658,9 +2666,9 @@ function drawTitle(time) {
   button('랭킹', titleButtonX(-2), by, U * smallW, U * h, openRanking);
   button('1인 기록전', titleButtonX(-1), by, U * bigW, U * h, () => openNameEntry('solo'), true, true);
   button('2인 대결', titleButtonX(0), by, U * bigW, U * h, () => openNameEntry('versus'), true, true);
-  button(Tournament.inProgress() ? '토너먼트 이어하기' : '토너먼트', titleButtonX(1), by, U * bigW, U * h, () => Tournament.open(), true, true);
+  button(Tournament.titleLabel(), titleButtonX(1), by, U * bigW, U * h, () => Tournament.open(), true, true);
   button(aimLabel(), titleButtonX(2), by, U * smallW, U * h, toggleAim, true, aimOn());
-  text(`난이도 ${rules().label} (닉네임 창에서 변경)  ·  Space 1인 · 2 대결 · 3 토너먼트 · R 랭킹 · V 조준점 · G 총 연결 · S 설정`, cx, by + U * 9, U * 2.5, '#c9a89a');
+  text(`난이도 ${rules().label} (닉네임 창에서 변경)  ·  Space 1인 · 2 대결 · 3 대회 · R 랭킹 · V 조준점 · G 총 연결 · S 설정`, cx, by + U * 9, U * 2.5, '#c9a89a');
 
   drawTitleBottomBar(time);
 }
@@ -2825,7 +2833,7 @@ function drawGunSetup() {
 
   // 안내 문구: 지금 무엇을 해야 하는지. 두 총이 다 준비되면 바로 대결을 시작할 수 있는 버튼
   if (Guns.assigning === null && Guns.readyForVersus()) {
-    if (game.gunSetupFrom === 'bracket') button('대진표로 돌아가기 ▶', cx, py + ph - U * 33, U * 50, U * 8, closeGunSetup, true, true);
+    if (game.gunSetupFrom === 'bracket') button(`${Tournament.isLeague() ? '순위표' : '대진표'}로 돌아가기 ▶`, cx, py + ph - U * 33, U * 50, U * 8, closeGunSetup, true, true);
     else button('2인 대결 시작 ▶', cx, py + ph - U * 33, U * 50, U * 8, () => { closeGunSetup(); openNameEntry('versus'); }, true, true);
   } else {
     const ask = Guns.assigning !== null ? `${Guns.assigning + 1}P 총의 방아쇠를 당기세요` : Guns.message;
@@ -3352,6 +3360,7 @@ function update(dt) {
   if (game.state === 'initials') updateInitials(dt);
   // 결과 화면, 그리고 게임이 끝나 바로 뜬 랭킹 화면에서도 잠금 시간을 센다
   if (['result', 'bracket', 'champion'].includes(game.state) || (game.state === 'ranking' && game.rankFrom === 'result')) game.resultTime += dt;
+  if (game.state === 'result' && game.mode === 'tournament') Tournament.tickResult(); // 리그전: 잠깐 뒤 순위표로
   if (game.state === 'ranking' && rankAfterGame()) rankView.cycleT += dt;
   updateIdle(dt);
   // 잠긴 동안에는 오른쪽 위 버튼을 흐리게 (총으로는 안 눌림)

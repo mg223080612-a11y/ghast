@@ -254,6 +254,49 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
   #tournament-form .t-names { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
+#tournament-form [hidden] { display: none !important; }
+#tournament-form .kind-row { display: flex; justify-content: center; gap: 10px; margin-bottom: 6px; }
+#tournament-form .kind-btn { font-size: 20px; padding: 8px 24px; min-width: 170px; }
+#tournament-form .kind-btn.on { background: #a07a10; box-shadow: inset 2px 2px 0 #d8b030, inset -2px -2px 0 #5e4508; }
+#tournament-form #t-kind-hint { margin: 4px 0 12px; }
+#tournament-form .t-options select {
+  font-family: var(--font);
+  font-size: 22px;
+  padding: 6px 10px;
+  background: #000;
+  color: #fff;
+  border: 3px solid #888;
+}
+
+/* 대회 모드: 방식 고르기 창 */
+#contest-pick {
+  z-index: 3;
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+#contest-pick[hidden] { display: none; }
+#contest-pick .contest-pick-box {
+  width: min(900px, calc(100vw - 32px));
+  background: var(--panel);
+  border: 4px solid var(--line);
+  padding: 24px 28px;
+  box-sizing: border-box;
+  text-align: center;
+}
+#contest-pick h2 { margin: 0 0 18px; font-size: 30px; color: var(--accent); }
+#contest-pick .contest-options { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+#contest-pick .contest-opt { display: flex; flex-direction: column; gap: 10px; padding: 22px 18px; font-size: 18px; line-height: 1.4; }
+#contest-pick .contest-opt b { font-size: 30px; }
+#contest-pick .contest-opt span { opacity: 0.85; }
+#contest-pick .actions { display: flex; justify-content: center; margin-top: 18px; }
+#contest-pick .actions button { font-size: 20px; padding: 10px 28px; }
+@media (max-width: 700px) {
+  #contest-pick .contest-options { grid-template-columns: 1fr; }
+}
+
 /* 난이도 버튼 (닉네임 창·토너먼트 창): 고른 것만 색이 들어간다 */
 .diff-row { display: flex; justify-content: center; gap: 10px; margin-top: 18px; }
 .diff-row .diff-btn { font-size: 20px; padding: 8px 22px; min-width: 120px; }

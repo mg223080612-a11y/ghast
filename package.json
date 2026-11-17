@@ -29,9 +29,11 @@
       "style.css",
       "game.js",
       "tournament-core.js",
+      "league-core.js",
       "roster-core.js",
       "aim-cap.js",
       "tournament.js",
+      "league.js",
       "assets/**",
       "fonts/**",
       "package.json"
