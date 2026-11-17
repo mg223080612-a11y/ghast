@@ -3160,10 +3160,9 @@ function drawRanking(time) {
     text(win ? '가스트의 눈물 획득! 진행요원에게 받아가세요' : `${rewardScoreNow()}점 이상이면 가스트의 눈물을 받을 수 있어요`,
       cx, by - U * 6.2, U * 3, win ? '#9ff6ff' : '#c9a89a');
     const ready = game.resultTime > RESULT_LOCK; // 계속 쏘던 총알이 실수로 버튼을 누르지 않게 잠깐 잠금
-    button('다음 사람', cx - U * 43.5, by, U * 26, U * 8, nextPlayer, ready, true);
-    button('다시 하기', cx - U * 14.5, by, U * 26, U * 8, retrySolo, ready);
-    button('결과 보기', cx + U * 14.5, by, U * 26, U * 8, closeRanking, ready);
-    button('처음 화면', cx + U * 43.5, by, U * 26, U * 8, goTitle, ready);
+    button('다음 사람', cx - U * 30, by, U * 27, U * 8, nextPlayer, ready, true);
+    button('다시 하기', cx, by, U * 27, U * 8, retrySolo, ready);
+    button('결과 보기', cx + U * 30, by, U * 27, U * 8, closeRanking, ready);
     return;
   }
   if (today) {
@@ -3328,9 +3327,8 @@ function drawVersusResult(time) {
   const ready = game.resultTime > RESULT_LOCK;
   const by = py + ph - U * 8;
   if (tournament) { Tournament.drawResultButtons(cx, by, ready); return; }
-  button('새 대결', cx - U * 33, by, U * 29, U * 9, () => openNameEntry('versus'), ready, true);
-  button('다시 대결', cx, by, U * 29, U * 9, () => startGame(), ready);
-  button('처음 화면', cx + U * 33, by, U * 29, U * 9, goTitle, ready);
+  button('새 대결', cx - U * 17, by, U * 30, U * 9, () => openNameEntry('versus'), ready, true);
+  button('다시 대결', cx + U * 17, by, U * 30, U * 9, () => startGame(), ready);
 }
 
 function drawResult(time) {
@@ -3344,10 +3342,11 @@ function drawResult(time) {
   const me = game.players[0];
   const win = me.score >= rewardScoreNow();
   const st = me.stats;
-  text(`${me.name || '이름없음'} 님 · 미션 종료!`, cx, py + U * 7, U * 6.5, '#ffcf5a');
-  text(`${me.score}점`, cx, py + U * 20, U * 15, '#ffffff', 'center', { shadow: '#a3200c' });
-  const acc = st.shots ? Math.round(((st.kills + st.deflects) / st.shots) * 100) : 0;
-  text(`처치 ${st.kills}  ·  반사 ${st.deflects}  ·  빗나감 ${st.misses}  ·  놓침 ${st.escapes}  ·  피격 ${st.hitsTaken}  ·  명중률 ${acc}%  ·  ${rules().label} 레벨 ${game.level}`, cx, py + U * 31, U * 3.2, '#ffd9b0');
+  const title = `${me.name || '이름없음'} 님 · 미션 종료!`;
+  text(title, cx, py + U * 7, fitTextSize(title, U * 6.5, pw - U * 8), '#ffcf5a');
+  text(`${me.score}점`, cx, py + U * 19, U * 14, '#ffffff', 'center', { shadow: '#a3200c' });
+  text(`${rules().label}  ·  레벨 ${game.level}`, cx, py + U * 28.5, U * 3, rules().color);
+  drawResultStats(cx, py + U * 37, pw - U * 10, st);
 
   // 순위
   const ri = game.rankInfo;
@@ -3357,26 +3356,46 @@ function drawResult(time) {
   else if (ri?.status === 'rejected') rankLine = `랭킹에 올리지 못했어요: ${ri.reason}`;
   else if (ri?.status === 'saved' && ri.pending) rankLine = '인터넷 연결이 안 돼 이 PC에 보관했어요 (연결되면 자동으로 올라가요)';
   else if (ri?.status === 'saved') rankLine = `오늘 ${ri.rankToday}위  ·  전체 ${ri.rankAll}위`;
-  text(rankLine, cx, py + U * 38, fitTextSize(rankLine, U * 4.4, pw - U * 8), ri?.status === 'error' || ri?.status === 'rejected' ? '#ff8a7a' : '#ffe14a');
+  text(rankLine, cx, py + U * 49, fitTextSize(rankLine, U * 4.4, pw - U * 8), ri?.status === 'error' || ri?.status === 'rejected' ? '#ff8a7a' : '#ffe14a');
 
   if (win) {
-    const ts = U * 15, ty = py + U * 53 + Math.sin(time * 3) * U;
+    const ts = U * 14, ty = py + U * 59 + Math.sin(time * 3) * U * 0.6;
     drawGlow(cx, ty, ts * 1.4, '160,246,255', 0.55);
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(IMG.tear, cx - ts / 2, ty - ts / 2, ts, ts);
-    text('가스트의 눈물 획득!', cx, py + U * 66, U * 6, '#9ff6ff');
-    text('진행요원에게 가스트의 눈물을 받아가세요', cx, py + U * 73, U * 3.4, '#ffffff');
+    text('가스트의 눈물 획득!', cx, py + U * 69.5, U * 5.5, '#9ff6ff');
+    text('진행요원에게 가스트의 눈물을 받아가세요', cx, py + U * 75.2, U * 3.2, '#ffffff');
   } else {
-    text('아쉬워요!', cx, py + U * 53, U * 7, '#ff8a7a');
-    text(`${rewardScoreNow()}점 이상이면 가스트의 눈물을 받을 수 있어요`, cx, py + U * 63, U * 3.6, '#ffffff');
+    text('아쉬워요!', cx, py + U * 61, U * 7, '#ff8a7a');
+    text(`${rewardScoreNow()}점 이상이면 가스트의 눈물을 받을 수 있어요`, cx, py + U * 70, U * 3.4, '#ffffff');
   }
 
+  // 처음 화면은 오른쪽 위 운영 버튼으로 (같은 버튼을 두 번 두지 않는다)
   const ready = game.resultTime > RESULT_LOCK; // 계속 쏘던 총알이 실수로 버튼을 누르지 않게 잠깐 잠금
   const by = py + ph - U * 8;
-  button('다음 사람', cx - U * 39.75, by, U * 24, U * 9, nextPlayer, ready, true);
-  button('다시 하기', cx - U * 13.25, by, U * 24, U * 9, retrySolo, ready);
-  button('랭킹', cx + U * 13.25, by, U * 24, U * 9, openRanking, ready);
-  button('처음 화면', cx + U * 39.75, by, U * 24, U * 9, goTitle, ready);
+  button('다음 사람', cx - U * 31, by, U * 28, U * 9, nextPlayer, ready, true);
+  button('다시 하기', cx, by, U * 28, U * 9, retrySolo, ready);
+  button('랭킹', cx + U * 31, by, U * 28, U * 9, openRanking, ready);
+}
+
+// 결과 화면 기록 칸 6개: 위에 이름(작게), 아래에 숫자(크게)
+function drawResultStats(cx, y, width, st) {
+  const acc = st.shots ? Math.round(((st.kills + st.deflects) / st.shots) * 100) : 0;
+  const items = [
+    ['처치', st.kills, '#9fe870'], ['반사', st.deflects, '#ffb347'], ['빗나감', st.misses, '#ff9a8a'],
+    ['놓침', st.escapes, '#ff9a8a'], ['피격', st.hitsTaken, '#ff9a8a'], ['명중률', `${acc}%`, '#ffe14a'],
+  ];
+  const cw = width / items.length, h = U * 10.5;
+  items.forEach(([label, value, color], i) => {
+    const x = cx - width / 2 + cw * i;
+    ctx.fillStyle = 'rgba(255, 220, 190, 0.06)';
+    ctx.fillRect(x + U * 0.6, y - h / 2, cw - U * 1.2, h);
+    ctx.strokeStyle = 'rgba(255, 170, 120, 0.25)';
+    ctx.lineWidth = Math.max(1, U * 0.2);
+    ctx.strokeRect(x + U * 0.6, y - h / 2, cw - U * 1.2, h);
+    text(label, x + cw / 2, y - U * 2.4, U * 2.3, '#c9a89a');
+    text(String(value), x + cw / 2, y + U * 2, U * 4.2, color);
+  });
 }
 
 function drawBanner() {

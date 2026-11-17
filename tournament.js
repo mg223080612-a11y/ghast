@@ -732,7 +732,6 @@ function drawChampionScreen(tour, time) {
   text(`${t.players.length}명 참가  ·  난이도 ${d.label}  ·  총 ${Object.keys(t.results).length}경기`, cx, py + ph - U * 17, U * 2.8, '#c9a89a');
   const ready = game.resultTime > RESULT_LOCK;
   const by = py + ph - U * 8;
-  button('대진표 보기', cx - U * 33, by, U * 29, U * 9, () => tour.showBracket(), ready);
-  button('새 대회', cx, by, U * 29, U * 9, () => tour.openPick(), ready, true);
-  button('처음 화면', cx + U * 33, by, U * 29, U * 9, goTitle, ready);
+  button('대진표 보기', cx - U * 17, by, U * 30, U * 9, () => tour.showBracket(), ready);
+  button('새 대회', cx + U * 17, by, U * 30, U * 9, () => tour.openPick(), ready, true);
 }

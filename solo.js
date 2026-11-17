@@ -94,7 +94,7 @@ const speedWord = (v) => (v < 1 ? '느리게' : v > 1 ? '빠르게' : '보통 �
 const sizeWord = (v) => (v > 1 ? '크게' : v < 1 ? '작게' : '보통 크기');
 
 function drawSoloDifficulty(cx, y) {
-  const w = U * 26, h = U * 8, step = w + U * 4;
+  const w = U * 20, h = U * 6.5, step = w + U * 3;
   DIFF_KEYS.forEach((key, i) => {
     const d = DIFFICULTIES[key];
     const x = cx + (i - 1) * step;
