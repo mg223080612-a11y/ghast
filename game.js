@@ -2667,19 +2667,23 @@ const titleButtonX = (slot) => {          // slot: -2(왼쪽 작은) -1 0 1(가�
 const titleAimButtonPos = () => ({ x: titleButtonX(2), y: titleButtonRowY() });
 
 // 설명 카드에 보여 줄 것: 가스트 5종(크기 차이도 그대로) + 화염구
-const TITLE_CARDS = [
-  { type: 'normal' }, { type: 'small' }, { type: 'big' }, { type: 'angry' }, { type: 'gold' }, { fireball: true },
+// 처음 화면 카드: 가스트는 점수가 낮은 것부터 높은 것 순서 (점수는 설정을 따르므로 그릴 때 정렬), 화염구 반사는 맨 끝
+const TITLE_GHASTS = ['normal', 'small', 'big', 'angry', 'gold'];
+const titleCards = () => [
+  ...[...TITLE_GHASTS].sort((a, b) => GHAST_TYPES[a].points() - GHAST_TYPES[b].points()).map((type) => ({ type })),
+  { fireball: true },
 ];
 const CARD_IMG_H = 9;                     // 기본 가스트 그림 높이 (U)
 // 종류별 크기 차이는 보이되, 아기 가스트도 알아볼 만큼만 줄인다
 const cardScale = (size) => 0.55 + 0.45 * size;
 
 function drawTitleCards(cx, top, width) {
-  const n = TITLE_CARDS.length;
+  const cards = titleCards();
+  const n = cards.length;
   const cw = width / n;
   const base = top + U * 12.5;            // 그림 바닥선 (크기가 달라도 바닥을 맞춘다)
   ctx.imageSmoothingEnabled = false;
-  TITLE_CARDS.forEach((c, i) => {
+  cards.forEach((c, i) => {
     const x = cx - width / 2 + cw * (i + 0.5);
     // 카드 칸
     ctx.fillStyle = 'rgba(255, 220, 190, 0.05)';
@@ -2740,8 +2744,8 @@ function drawTitleSubtitle(cx, y) {
   }, cx - total / 2);
 }
 
-// 가스트 설명판 (처음 화면, 게임 직후 랭킹에서 번갈아): 목표 → 가스트·화염구 카드(점수) → 감점 → 시간·보너스 → 상품 → 안전
-const RULES_PANEL_H = 49; // U
+// 가스트 설명판 (처음 화면, 게임 직후 랭킹에서 번갈아): 목표 → 가스트·화염구 카드(점수 순) → 감점 → 시간·보너스 → 상품
+const RULES_PANEL_H = 46.5; // U
 function drawRulesPanel(cx, py, pw) {
   const ph = U * RULES_PANEL_H;
   panel(cx - pw / 2, py, pw, ph, 0.86);
@@ -2760,7 +2764,6 @@ function drawRulesPanel(cx, py, pw) {
   const rw = ctx.measureText(reward).width, ts = U * 4.2;
   ctx.drawImage(IMG.tear, cx - rw / 2 - U * 2 - ts, ry - ts / 2, ts, ts);
   ctx.drawImage(IMG.tear, cx + rw / 2 + U * 2, ry - ts / 2, ts, ts);
-  text('※ 화면만 쏘세요! 사람을 향해 쏘면 안 돼요', cx, py + U * 46.8, U * 2.7, '#ff8a7a');
 }
 
 // 1·2·3위 색 (금·은·동). 처음 화면 랭킹 띠·랭킹 화면에서 쓴다
