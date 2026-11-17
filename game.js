@@ -1408,6 +1408,7 @@ function spawnGhast(demo) {
 }
 
 function goTitle() {
+  if (confirmOpen()) closeConfirm(false);
   game.state = 'title';
   game.diff = settings.diffLevel; // 처음 화면의 설명·랭킹 띠는 고른 난이도로
   game.level = 1; // 처음 화면의 가스트는 천천히
@@ -1657,7 +1658,12 @@ function onTap(x, y, who = 0, source = 'mouse') {
   if (!allowShot(source, now)) return; // 연사: 조용히 무시 (점수·감점·소리·표시 없음)
   Sound.init();
   // 설정 창이 열려 있으면 총알은 창 안만 누른다 (창 뒤의 처음 화면 버튼 등은 누르지 않는다).
-  // 마우스는 창이 직접 받고, 조이스틱 모드 총만 여기로 온다
+  // 마우스는 창이 직접 받고, 조이스틱 모드 총만 여기로 온다. 확인 창이 떠 있으면 그 창의 버튼만
+  if (confirmOpen()) {
+    const btn = document.elementFromPoint(x, y)?.closest('button');
+    if (btn && confirmEl.contains(btn)) btn.click();
+    return;
+  }
   if (settingsOpen()) { clickSettingsByGun(x, y); return; }
 
   // 입력 창(닉네임·토너먼트)이 떠 있으면 게임 화면 대신 창 안의 버튼(시작! · 🎲 · 취소 …)을 누른다.
@@ -1968,6 +1974,16 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 
 window.addEventListener('keydown', (e) => {
+  // 확인 창이 떠 있으면 Enter = 선택된 버튼, Esc = 취소, 다른 키는 무시 (꾹 눌러 반복되는 키도 무시)
+  if (confirmOpen()) {
+    if (e.key === 'Escape') { e.preventDefault(); closeConfirm(false); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const focused = document.activeElement;
+      if (!e.repeat && focused && confirmEl.contains(focused) && focused.tagName === 'BUTTON') focused.click();
+    }
+    return;
+  }
   // 맥의 Cmd 조합(Cmd+Q 종료, Cmd+H 숨기기, Cmd+C 복사, Cmd+R 새로 고침 등)은 게임 단축키로 쓰지 않는다
   // (안 그러면 Cmd+R 이 랭킹을, Cmd+C 가 처음 화면을 연다)
   if (e.metaKey) return;
@@ -2124,8 +2140,8 @@ async function loadRankAdmin() {
     del.type = 'button';
     del.textContent = '삭제';
     del.addEventListener('click', async () => {
-      if (!confirm(`'${r.name}' (${r.score}점) 기록을 지울까요?`)) return;
-      await Ranking.remove(r.id).catch((err) => alert(`삭제 실패: ${err.message}`));
+      if (!(await askConfirm(`'${r.name}' (${r.score}점) 기록을 지울까요?`, { ok: '지우기', danger: true }))) return;
+      await Ranking.remove(r.id).catch((err) => showNotice(`삭제 실패: ${err.message}`));
       loadRankAdmin();
       refreshTitleTop();
     });
@@ -2134,9 +2150,9 @@ async function loadRankAdmin() {
   });
 }
 document.getElementById('rank-clear').addEventListener('click', async () => {
-  if (!confirm('랭킹 기록을 모두(Easy·Normal·Hard) 지울까요? 되돌릴 수 없습니다.')) return;
+  if (!(await askConfirm('랭킹 기록을 모두(Easy·Normal·Hard) 지울까요?\n되돌릴 수 없습니다.', { ok: '모두 지우기', danger: true }))) return;
   for (const key of DIFF_KEYS) {
-    await Ranking.clear(DIFFICULTIES[key].game).catch((err) => alert(`${DIFFICULTIES[key].label} 삭제 실패: ${err.message}`));
+    await Ranking.clear(DIFFICULTIES[key].game).catch((err) => showNotice(`${DIFFICULTIES[key].label} 삭제 실패: ${err.message}`));
   }
   loadRankAdmin();
   refreshTitleTop();
@@ -2151,7 +2167,39 @@ const nameHint = document.getElementById('name-hint');
 const nameTitle = document.getElementById('name-title');
 const nameOpen = () => !nameEl.hidden;
 // 화면 위에 떠 있는 입력 창(닉네임·토너먼트 참가자)의 form. 떠 있는 동안 총알은 창 안 버튼을 누른다
-const overlayForm = () => document.querySelector('.overlay:not([hidden]) form');
+// 떠 있는 입력 창의 form. 게임 모양 확인 창이 떠 있으면 그것이 먼저 (총알·조준점이 그 창으로)
+const overlayForm = () => document.querySelector('#confirm-overlay:not([hidden]) form') || document.querySelector('.overlay:not([hidden]) form');
+
+// ---------- 게임 모양 확인 창 (브라우저 기본 confirm·alert 대신) ----------
+// askConfirm(글) → Promise<boolean>. 마우스·총·Enter(확인)·Esc(취소)로 닫는다. notice: 확인 버튼만
+const confirmEl = document.getElementById('confirm-overlay');
+const confirmMsg = document.getElementById('confirm-msg');
+const confirmOk = document.getElementById('confirm-ok');
+const confirmCancel = document.getElementById('confirm-cancel');
+let confirmResolve = null;
+const confirmOpen = () => !confirmEl.hidden;
+function askConfirm(message, { ok = '확인', cancel = '취소', danger = false, notice = false } = {}) {
+  if (confirmResolve) closeConfirm(false); // 앞의 창은 취소로 닫는다
+  confirmMsg.textContent = message;
+  confirmOk.textContent = ok;
+  confirmCancel.textContent = cancel;
+  confirmCancel.hidden = notice;
+  confirmOk.classList.toggle('danger', danger);
+  confirmEl.hidden = false;
+  Sound.tick();
+  // 되돌릴 수 없는 일(danger)은 '취소'가 먼저 선택돼 있다 (Enter 로 실수하지 않게)
+  setTimeout(() => (danger && !notice ? confirmCancel : confirmOk).focus(), 0);
+  return new Promise((resolve) => { confirmResolve = resolve; });
+}
+const showNotice = (message) => askConfirm(message, { notice: true });
+function closeConfirm(result) {
+  const done = confirmResolve;
+  confirmResolve = null;
+  confirmEl.hidden = true;
+  if (done) done(result);
+}
+confirmOk.addEventListener('click', () => closeConfirm(true));
+confirmCancel.addEventListener('click', () => closeConfirm(false));
 const gunCursor = document.getElementById('gun-cursor');
 let nameMode = 'solo';
 

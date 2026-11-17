@@ -71,7 +71,6 @@ const Tournament = {
     return this.isLeague() ? League.isFinished(this.data.league) : Bracket.isFinished(this.data.bracket);
   },
   inProgress() { return !!this.data && !this.finished(); },
-  playerNames() { return (this.data?.league || this.data?.bracket)?.players.map((p) => p.name) ?? []; },
   nextMatch() {
     if (!this.data) return null;
     return this.isLeague() ? League.nextMatch(this.data.league) : Bracket.nextMatch(this.data.bracket);
@@ -109,11 +108,9 @@ const Tournament = {
     tForm.elements.seconds.value = settings.tournamentSeconds;
     tForm.elements.third.checked = settings.tournamentThird;
     tForm.elements.games.value = String(clamp(Math.round(Number(settings.leagueGames)) || League.DEFAULT_GAMES, 1, LEAGUE_FORM.maxGames));
-    // 지난 대회 참가자를 미리 채워 둔다 (같은 반이 한 번 더 할 때 편하게)
-    const names = this.playerNames();
+    // 새 대회는 빈 칸으로 시작한다 (같은 명단은 명단 목록에서 고르면 된다)
     tNames.replaceChildren();
-    setNameCount(names.length || TOURNAMENT.defaultCount);
-    nameInputs().forEach((input, i) => { input.value = names[i] ?? ''; });
+    setNameCount(TOURNAMENT.defaultCount);
     renderRosterList();
     setFormKind(settings.contestKind);
     showHint(T_HINT, false);
@@ -138,9 +135,12 @@ const Tournament = {
     Sound.tick();
   },
   // 진행 중인 대회를 버리고 새로 (진행요원 확인)
-  startOver() {
-    const what = this.isLeague() ? '리그' : '토너먼트';
-    if (this.inProgress() && !confirm(`진행 중인 ${what}를 끝내고 새로 만들까요? 지금 ${this.isLeague() ? '순위표' : '대진표'}는 사라집니다.`)) return;
+  async startOver() {
+    if (this.inProgress()) {
+      const what = this.isLeague() ? '리그전' : '토너먼트';
+      const ok = await askConfirm(`진행 중인 ${what}를 끝내고 새 대회를 만들까요?\n지금 ${this.isLeague() ? '순위표' : '대진표'}는 사라집니다.`, { ok: '새 대회 만들기', danger: true });
+      if (!ok) return;
+    }
     this.openPick();
   },
 
@@ -397,9 +397,10 @@ tRosterList.addEventListener('change', () => {
   tRosterDel.disabled = !roster;
   if (roster) fillNames(roster.names, `'${roster.title}'`);
 });
-tRosterDel.addEventListener('click', () => {
+tRosterDel.addEventListener('click', async () => {
   const title = tRosterList.value;
-  if (!title || !confirm(`'${title}' 명단을 이 PC 에서 지울까요? (명단 파일은 그대로 남아요)`)) return;
+  if (!title) return;
+  if (!(await askConfirm(`'${title}' 명단을 이 PC 에서 지울까요?\n(명단 파일은 그대로 남아요)`, { ok: '지우기', danger: true }))) return;
   writeJson(ROSTER_KEY, Roster.removeRoster(savedRosters(), title));
   renderRosterList();
   showHint(`'${title}' 명단을 이 PC 에서 지웠어요`, false);
@@ -450,6 +451,15 @@ document.getElementById('t-random').addEventListener('click', () => {
   Sound.tick();
 });
 document.getElementById('t-cancel').addEventListener('click', () => Tournament.closeForm());
+// 이름 칸을 모두 비운다 (인원 수는 그대로)
+document.getElementById('t-clear').addEventListener('click', () => {
+  nameInputs().forEach((input) => { input.value = ''; });
+  tRosterList.value = '';
+  tRosterDel.disabled = true;
+  showHint('이름 칸을 모두 비웠어요', false);
+  Sound.tick();
+  nameInputs()[0]?.focus();
+});
 tForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const seconds = clamp(Math.round(Number(tForm.elements.seconds.value)) || TOURNAMENT.defaultSeconds, TOURNAMENT.minSeconds, TOURNAMENT.maxSeconds);
@@ -585,9 +595,29 @@ function seatState(t, L, all, r, k, next) {
   return { id, name, state: m.winner === id ? 'won' : 'lost', score, who: -1 };
 }
 
+// 쉬고(부전승) 올라가는 자리: 앞 칸은 그리지 않고, 그 자리에서 다음 칸까지 곧은 선에 '부전승'
+function byeSourceSeats(all) {
+  return new Set(all.flatMap((round, r) => round.filter((m) => m.bye).map((m) => `${r}-${m.src[0]}`)));
+}
+// first: 1라운드에서 쉬는 사람 — 앞 라운드 선이 없으니 첫 칸 자리에 '부전승' 글자, 거기서 다음 칸까지 짧은 선
+function drawByeLine(L, from, to, first) {
+  const a = first ? from.x - from.side * L.boxW / 2 : from.x + from.side * L.boxW / 2; // 바깥 모서리(앞 선이 들어오는 곳)
+  const b = to.side === 0 ? to.x + from.side * L.champW / 2 : to.x + to.side * L.boxW / 2;
+  ctx.strokeStyle = 'rgba(255, 170, 120, 0.4)';
+  ctx.lineWidth = Math.max(2, U * 0.3);
+  ctx.beginPath();
+  ctx.moveTo(a, from.y);
+  ctx.lineTo(b, to.y);
+  ctx.stroke();
+  const size = Math.min(U * 2, L.boxH * 0.4);
+  if (first) text('부전승', from.x, from.y, Math.min(U * 2.4, L.boxH * 0.5), '#a08a80');
+  else text('부전승', (a + b) / 2, from.y - Math.max(U * 1.6, L.boxH * 0.42), size, '#a08a80');
+}
+
 function drawBracketLines(L, t, all) {
   all.forEach((round, r) => round.forEach((m, idx) => {
     const parent = seatPos(L, r + 1, idx);
+    if (m.bye) { drawByeLine(L, seatPos(L, r, m.src[0]), parent, r === 0); return; }
     m.src.forEach((k) => {
       const id = seatOccupant(t, all, r, k);
       drawConnector(L, seatPos(L, r, k), parent, !m.bye && typeof id === 'number' && m.winner === id);
@@ -596,8 +626,10 @@ function drawBracketLines(L, t, all) {
 }
 
 function drawBracketSeats(L, t, all, next, time) {
+  const hidden = byeSourceSeats(all);
   for (let r = 0; r < L.R; r++) {
     for (let k = 0; k < L.counts[r]; k++) {
+      if (hidden.has(`${r}-${k}`)) continue; // 쉬고 올라가는 자리는 다음 칸에만 그린다
       const p = seatPos(L, r, k);
       drawSeatBox(p.x, p.y, L.boxW, L.boxH, seatState(t, L, all, r, k, next), time);
     }

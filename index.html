@@ -175,8 +175,20 @@
       <p class="hint" id="t-hint">빈 칸은 랜덤 닉네임 · Enter 로 다음 칸 · 이름이 같으면 뒤에 숫자 · 엑셀에서 이름 칸을 복사해 붙여넣어도 돼요</p>
       <div class="actions">
         <button type="button" id="t-cancel">취소</button>
+        <button type="button" id="t-clear">🧹 이름 모두 지우기</button>
         <button type="button" id="t-random">🎲 빈 칸 채우기</button>
         <button type="submit" class="primary">대진표 만들기</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- 게임 모양 확인 창 (기본 confirm 대신, game.js askConfirm). form 이어야 총으로도 누른다 -->
+  <div id="confirm-overlay" hidden>
+    <form class="confirm-box" autocomplete="off" onsubmit="return false">
+      <p id="confirm-msg"></p>
+      <div class="actions">
+        <button type="button" id="confirm-cancel">취소</button>
+        <button type="button" id="confirm-ok" class="primary">확인</button>
       </div>
     </form>
   </div>
