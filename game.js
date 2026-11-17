@@ -1233,8 +1233,8 @@ const RESULT_LOCK = 3;
 // 처음 화면으로 돌아가 다음 사람이 바로 시작할 수 있게 한다. 토너먼트는 진행요원이 넘기므로 빼고, 마지막 10초는 알려 준다
 const IDLE_TO_TITLE = 60;
 const IDLE_WARN = 10;
-const idleWatched = () => !settingsOpen() && game.mode !== 'tournament'
-  && (game.state === 'result' || (game.state === 'ranking' && rankAfterGame()));
+const idleWatched = () => !settingsOpen() && (game.state === 'solo' || (game.mode !== 'tournament'
+  && (game.state === 'result' || (game.state === 'ranking' && rankAfterGame()))));
 function noteInput() { game.idleT = 0; }
 function updateIdle(dt) {
   if (!idleWatched()) { game.idleT = 0; return; }
@@ -1622,7 +1622,7 @@ function allowShot(source, now) {
 
 // 총으로 오른쪽 위 버튼을 누를 수 있는 화면. 게임 중(오른쪽 아래 '처음 화면')과 이름 쏘기 판은 빗나간 총알이
 // 판을 멈추지 않게 빼 둔다
-const CORNER_GUN_STATES = ['title', 'result', 'ranking', 'bracket', 'champion', 'gunsetup', 'aimtest'];
+const CORNER_GUN_STATES = ['title', 'solo', 'result', 'ranking', 'bracket', 'champion', 'gunsetup', 'aimtest'];
 function cornerButtonAt(x, y) {
   if (!CORNER_GUN_STATES.includes(game.state)) return null;
   return document.elementFromPoint(x, y)?.closest('#corner-buttons button') || null;
@@ -1705,7 +1705,7 @@ function onTap(x, y, who = 0, source = 'mouse') {
     recordAimShot(x, y);
     return;
   }
-  if (['title', 'result', 'ranking', 'gunsetup', 'initials', 'bracket', 'champion'].includes(game.state)) {
+  if (['title', 'solo', 'result', 'ranking', 'gunsetup', 'initials', 'bracket', 'champion'].includes(game.state)) {
     for (const b of buttons) {
       if (b.enabled && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { b.action(); return; }
     }
@@ -1999,6 +1999,14 @@ window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeNameEntry();
     return;
   }
+  // 1인 기록전 화면의 닉네임 칸에 글자를 치는 중: Enter = 시작, Esc = 처음 화면, 나머지는 글자 입력
+  if (game.state === 'solo' && SoloReady.isInput(e.target)) {
+    if ((e.key === 'Enter' && !e.isComposing) || SoloReady.gunStartKey(e)) {
+      e.preventDefault();
+      if (SoloReady.keyStartReady(e)) SoloReady.start();
+    } else if (e.key === 'Escape') goTitle();
+    return;
+  }
   if (Tournament.formOpen()) {
     if (e.key === 'Escape') Tournament.closeForm();
     return;
@@ -2016,7 +2024,8 @@ window.addEventListener('keydown', (e) => {
     case 'Digit1':   // 라이트건의 Start 버튼은 보통 키보드 '1' 로 들어온다
     case 'Numpad1':
       e.preventDefault();
-      if (game.state === 'title') openNameEntry('solo');
+      if (game.state === 'title') SoloReady.open();
+      else if (game.state === 'solo') { if (SoloReady.keyStartReady(e)) SoloReady.start(); }
       else if (game.state === 'result' && game.resultTime > RESULT_LOCK) nextPlayer();
       else if (game.state === 'ranking' && game.rankFrom === 'result') { if (game.resultTime > RESULT_LOCK) nextPlayer(); }
       else if (game.state === 'ranking') closeRanking();
@@ -2047,7 +2056,7 @@ window.addEventListener('keydown', (e) => {
       if (game.state === 'title') { e.preventDefault(); Tournament.open(); }
       break;
     case 'KeyV':     // 조준점 켜기/끄기 (처음 화면에서만. 엑스거너 총의 키 버튼과 겹치지 않는 글자)
-      if (game.state === 'title') toggleAim();
+      if (game.state === 'title' || game.state === 'solo') toggleAim();
       break;
     case 'KeyG':     // 총 연결 (2인 대결용 1P/2P 지정)
       if (game.state === 'title') openGunSetup();
@@ -2076,7 +2085,7 @@ window.addEventListener('keydown', (e) => {
     case 'Escape':
       if (game.state === 'ranking') closeRanking();
       else if (game.state === 'gunsetup') closeGunSetup();
-      else if (game.state === 'aimtest' || game.state === 'bracket' || game.state === 'champion' || e.code === 'KeyQ') goTitle();
+      else if (['aimtest', 'bracket', 'champion', 'solo'].includes(game.state) || e.code === 'KeyQ') goTitle();
       break;
     case 'KeyF':
       toggleFullscreen();
@@ -2226,8 +2235,8 @@ function toggleAim() {
   Sound.tick();
   if (game.state === 'title' && !nameOpen()) {
     const p = titleAimButtonPos();
-    // 버튼 바로 아래(설명판에 가리지 않는 자리)에 잠깐 띄운다
-    addPart({ kind: 'text', text: aimOn() ? '조준점 켜짐' : '조준점 꺼짐', x: p.x, y: p.y + U * 8.5, vy: -U * 0.8, size: U * 3.4, life: 1.4, color: aimOn() ? '#9fe870' : '#d8d8d8', shadow: '#1a1a1a' });
+    // 버튼 바로 위에 잠깐 띄운다 (위로 천천히 떠오르며 사라짐)
+    addPart({ kind: 'text', text: aimOn() ? '조준점 켜짐' : '조준점 꺼짐', x: p.x, y: p.y - U * (TITLE_BTN.h / 2 + 2.2), vy: -U * 0.8, size: U * 3.2, life: 1.4, color: aimOn() ? '#9fe870' : '#d8d8d8', shadow: '#1a1a1a' });
   }
 }
 // 이름 입력 창: 시작 직전에 확인하고 바꾼다 (총으로 쏴도 눌린다). 누른 뒤에도 Enter 로 바로 시작하도록 이름 칸으로 돌아간다
@@ -2241,7 +2250,8 @@ function setDiffLevel(key) {
   settings = { ...settings, diffLevel: diffKeyOf(key) };
   saveSettings();
   // 처음 화면 위에 창이 떠 있으면 뒤의 설명(감점·상품 점수)과 랭킹 띠도 바로 바꾼다
-  if (game.state === 'title') { game.diff = settings.diffLevel; refreshTitleTop(); }
+  if (game.state === 'title' || game.state === 'solo') { game.diff = settings.diffLevel; refreshTitleTop(); }
+  if (game.state === 'solo') SoloReady.onDiffChange();
   updateDiffButtons();
   Sound.tick();
 }
@@ -2327,6 +2337,7 @@ document.getElementById('name-random').addEventListener('click', () => {
 // 결과 화면 → 다음 사람/새 대결 (이름 새로 입력). 토너먼트는 대진표(또는 우승 발표)로
 function nextPlayer() {
   if (game.mode === 'tournament') { Tournament.afterResult(); return; }
+  if (game.mode === 'solo') { SoloReady.open(); return; } // 1인 기록전은 준비 화면(solo.js)으로
   openNameEntry(game.mode);
 }
 // 1인 기록전 '다시 하기': 새 랜덤 닉네임(방금 이름과 다르게)을 배정해 바로 다시 시작
@@ -2361,7 +2372,7 @@ document.getElementById('btn-aimtest').addEventListener('click', () => { Sound.i
 document.getElementById('btn-gunsetup').addEventListener('click', () => { Sound.init(); openGunSetup(); });
 const cornerEl = document.getElementById('corner-buttons');
 function updateCornerButtons() {
-  const menu = ['title', 'result', 'bracket', 'champion'].includes(game.state);
+  const menu = ['title', 'solo', 'result', 'bracket', 'champion'].includes(game.state);
   for (const id of ['btn-gunsetup', 'btn-aimtest', 'btn-fullscreen', 'btn-settings']) {
     document.getElementById(id).hidden = !menu;
   }
@@ -2375,9 +2386,11 @@ function updateCornerButtons() {
 // 오른쪽 위 운영 버튼의 아래 끝(px). 버튼 글자는 px 단위라 작은 화면(1280×720 등)에서는 상대적으로 커서,
 // 결과·우승 판을 그 아래부터 그려 겹치지 않게 한다. 버튼 줄이 바뀔 때와 창 크기가 바뀔 때만 잰다
 let cornerBottomPx = 0;
+let cornerLeftPx = Infinity; // 운영 버튼 줄의 왼쪽 끝 (화면 제목이 겹치지 않게)
 function measureCorner() {
   const r = cornerEl.getBoundingClientRect();
   cornerBottomPx = r.height ? r.bottom : 0;
+  cornerLeftPx = r.width ? r.left : Infinity;
 }
 window.addEventListener('resize', () => measureCorner());
 // 높이 ph 인 판의 위쪽 y: 운영 버튼 아래, 화면 가운데 쪽, 그러면서 화면 안
@@ -2702,7 +2715,7 @@ function drawTitleCards(cx, top, width) {
       ctx.drawImage(GV[T.img].normal, x - w / 2, base - h, w, h);
       name = T.name; pts = `+${T.points()}`; color = c.type === 'gold' ? '#ffd84a' : '#9fe870';
     }
-    text(name, x, base + U * 2.8, U * 2.5, '#ffd9b0');
+    text(name, x, base + U * 2.8, fitTextSize(name, U * 2.5, cw - U * 2.2), '#ffd9b0');
     text(`${pts}점`, x, base + U * 6.2, U * 3.4, color);
   });
 }
@@ -2718,11 +2731,11 @@ function drawTitle(time) {
   // 버튼 줄 (좌우 대칭, 높이 같음): 랭킹 · 1인 기록전 · 2인 대결 · 토너먼트 · 조준점
   const by = titleButtonRowY(), { bigW, smallW, h } = TITLE_BTN;
   button('랭킹', titleButtonX(-2), by, U * smallW, U * h, openRanking);
-  button('1인 기록전', titleButtonX(-1), by, U * bigW, U * h, () => openNameEntry('solo'), true, true);
+  button('1인 기록전', titleButtonX(-1), by, U * bigW, U * h, () => SoloReady.open(), true, true);
   button('2인 대결', titleButtonX(0), by, U * bigW, U * h, () => openNameEntry('versus'), true, true);
   button(Tournament.titleLabel(), titleButtonX(1), by, U * bigW, U * h, () => Tournament.open(), true, true);
   button(aimLabel(), titleButtonX(2), by, U * smallW, U * h, toggleAim, true, aimOn());
-  text(`난이도 ${rules().label} (닉네임 창에서 변경)  ·  Space 1인 · 2 대결 · 3 대회 · R 랭킹 · V 조준점 · G 총 연결 · S 설정`, cx, by + U * 9, U * 2.5, '#c9a89a');
+  text(`난이도 ${rules().label} (1인 기록전 화면에서 변경)  ·  Space 1인 · 2 대결 · 3 대회 · R 랭킹 · V 조준점 · G 총 연결 · S 설정`, cx, by + U * 9, U * 2.5, '#c9a89a');
 
   drawTitleBottomBar(time);
 }
@@ -2749,16 +2762,20 @@ const RULES_PANEL_H = 46.5; // U
 function drawRulesPanel(cx, py, pw) {
   const ph = U * RULES_PANEL_H;
   panel(cx - pw / 2, py, pw, ph, 0.86);
-  text('네더의 가스트가 화염구를 쏘기 전에 맞혀라!', cx, py + U * 5, U * 4.4, '#ffffff');
+  const goal = '네더의 가스트가 화염구를 쏘기 전에 맞혀라!';
+  text(goal, cx, py + U * 5, fitTextSize(goal, U * 4.4, pw - U * 6), '#ffffff');
   drawTitleCards(cx, py + U * 8.5, pw - U * 6);
   ctx.fillStyle = 'rgba(255, 170, 120, 0.25)';
   ctx.fillRect(cx - pw / 2 + U * 4, py + U * 30.5, pw - U * 8, Math.max(1, U * 0.25));
   const pen = (kind) => (penaltyOf(kind) > 0 ? `-${penaltyOf(kind)}점` : '감점 없음');
-  text(`배경을 맞히면 ${pen('miss')}  ·  가스트를 놓치면 ${pen('escape')}  ·  화염구에 맞으면 ${pen('hit')}`, cx, py + U * 33.6, U * 3.1, '#ff9a8a');
-  text(`제한 시간 ${timeLabel(settings.gameSeconds)}  ·  ${bonusSteps()}점마다 +${settings.bonusSeconds}초 & 레벨 UP!`, cx, py + U * 38.2, U * 3.2, '#ffe14a');
+  const fit = (str, size) => fitTextSize(str, size, pw - U * 6);
+  const penLine = `배경을 맞히면 ${pen('miss')}  ·  가스트를 놓치면 ${pen('escape')}  ·  화염구에 맞으면 ${pen('hit')}`;
+  text(penLine, cx, py + U * 33.6, fit(penLine, U * 3.1), '#ff9a8a');
+  const timeLine = `제한 시간 ${timeLabel(settings.gameSeconds)}  ·  ${bonusSteps()}점마다 +${settings.bonusSeconds}초 & 레벨 UP!`;
+  text(timeLine, cx, py + U * 38.2, fit(timeLine, U * 3.2), '#ffe14a');
   // 상품 줄: 글자 바로 양옆에 가스트의 눈물
   const reward = `${rewardScoreNow()}점 이상이면 '가스트의 눈물'을 드려요`;
-  const rs = U * 3.6, ry = py + U * 42.9;
+  const rs = fitTextSize(reward, U * 3.6, pw - U * 20), ry = py + U * 42.9;
   text(reward, cx, ry, rs, '#9ff6ff');
   ctx.font = `bold ${Math.round(rs)}px ${FONT}`;
   const rw = ctx.measureText(reward).width, ts = U * 4.2;
@@ -3380,7 +3397,7 @@ function update(dt) {
   Guns.poll(); // 화면 그리기 직전에도 한 번 더 (조준점 위치를 최신으로)
   updateEmbers(dt);
 
-  if (game.state === 'title') {
+  if (game.state === 'title' || game.state === 'solo') {
     if (ghasts.filter((g) => g.demo && g.state !== 'leave').length < 3 && Math.random() < dt) spawnGhast(true);
   }
 
@@ -3428,6 +3445,7 @@ function update(dt) {
     if (game.timeLeft <= 0) endGame();
   }
   if (game.state === 'initials') updateInitials(dt);
+  if (game.state === 'solo') SoloReady.tick(dt);
   // 결과 화면, 그리고 게임이 끝나 바로 뜬 랭킹 화면에서도 잠금 시간을 센다
   if (['result', 'bracket', 'champion'].includes(game.state) || (game.state === 'ranking' && game.rankFrom === 'result')) game.resultTime += dt;
   if (game.state === 'result' && game.mode === 'tournament') Tournament.tickResult(); // 리그전: 잠깐 뒤 순위표로
@@ -3475,6 +3493,8 @@ function draw(time) {
   }
 
   if (game.state === 'title') drawTitle(time);
+  if (game.state === 'solo') drawSoloReady(time);
+  syncSoloInput();
   if (game.state === 'countdown') { drawHUD(time); drawCountdown(); }
   if (game.state === 'play') drawHUD(time);
   if (game.state === 'result') drawResult(time);

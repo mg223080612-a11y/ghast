@@ -268,6 +268,23 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
   border: 3px solid #888;
 }
 
+/* 1인 기록전 화면의 닉네임 칸 (위치·크기는 solo.js 가 캔버스에 맞춰 정한다) */
+#solo-name {
+  position: fixed;
+  z-index: 2;
+  margin: 0;
+  padding: 0 0.6em;
+  box-sizing: border-box;
+  font-family: var(--font);
+  font-weight: bold;
+  background: #000;
+  color: #fff;
+  border: 3px solid #888;
+  outline: none;
+}
+#solo-name:focus { border-color: var(--accent); }
+#solo-name[hidden] { display: none; }
+
 /* 게임 모양 확인 창 (새 대회·명단 지우기·랭킹 삭제) — 다른 창보다 위, 조준점보다 아래 */
 #confirm-overlay {
   z-index: 15;
