@@ -10,6 +10,8 @@
 // 컴퓨터용 프로그램(exe·맥 앱)의 버전. package.json 의 version 을 앱(desktop/main.js → preload.js)이 넘겨준다.
 // 웹(브라우저)에는 없어서 빈 글자 → 처음 화면에 버전을 그리지 않는다
 const APP_VERSION = (window.ghastApp && typeof window.ghastApp.version === 'string') ? window.ghastApp.version : '';
+// 이 게임을 만든 학생 (본인 공개 동의, 처음 화면 제목 아래·아래 띠에 표시)
+const CREATOR = '정다희';
 
 // ---------- 설정 (설정 창에서 바꿀 수 있음, 브라우저에 저장됨) ----------
 const DEFAULTS = {
@@ -2705,7 +2707,7 @@ function drawTitle(time) {
   const cx = W / 2;
   const bobY = Math.sin(time * 2) * U * 0.8;
   text('가스트 사격', cx, H * 0.14 + bobY, U * 13, '#ffffff', 'center', { shadow: '#a3200c' });
-  text('GHAST SHOOTING', cx, H * 0.14 + U * 9.8, U * 4, '#ffcf5a');
+  drawTitleSubtitle(cx, H * 0.14 + U * 9.8);
 
   drawRulesPanel(cx, H * 0.275, Math.min(W - U * 8, U * 118));
 
@@ -2719,6 +2721,23 @@ function drawTitle(time) {
   text(`난이도 ${rules().label} (닉네임 창에서 변경)  ·  Space 1인 · 2 대결 · 3 대회 · R 랭킹 · V 조준점 · G 총 연결 · S 설정`, cx, by + U * 9, U * 2.5, '#c9a89a');
 
   drawTitleBottomBar(time);
+}
+
+// 제목 아래 줄: 'GHAST SHOOTING  |  만든 사람 정다희' 를 한 덩어리로 가운데 정렬
+function drawTitleSubtitle(cx, y) {
+  const parts = [
+    { str: 'GHAST SHOOTING', size: U * 4, color: '#ffcf5a' },
+    { str: '|', size: U * 3.4, color: 'rgba(255, 170, 120, 0.6)', gap: U * 2.4 },
+    { str: '만든 사람', size: U * 2.6, color: '#ffd9b0', gap: U * 2.4 },
+    { str: CREATOR, size: U * 4, color: '#ffffff', gap: U * 1.2, shadow: '#a3200c' },
+  ];
+  const widthOf = (p) => { ctx.font = `bold ${Math.round(p.size)}px ${FONT}`; return ctx.measureText(p.str).width; };
+  const total = parts.reduce((sum, p) => sum + (p.gap || 0) + widthOf(p), 0);
+  parts.reduce((x, p) => {
+    const left = x + (p.gap || 0);
+    text(p.str, left, y, p.size, p.color, 'left', p.shadow ? { shadow: p.shadow } : undefined);
+    return left + widthOf(p);
+  }, cx - total / 2);
 }
 
 // 가스트 설명판 (처음 화면, 게임 직후 랭킹에서 번갈아): 목표 → 가스트·화염구 카드(점수) → 감점 → 시간·보너스 → 상품 → 안전
@@ -2752,7 +2771,7 @@ function drawTitleBottomBar(time) {
   const bh = U * 4.6, y = H - bh, mid = y + bh / 2;
   ctx.fillStyle = 'rgba(10, 2, 2, 0.6)';
   ctx.fillRect(0, y, W, bh);
-  const right = `${APP_VERSION ? `v${APP_VERSION}  ·  ` : ''}© 2026 SYNC`;
+  const right = `${APP_VERSION ? `v${APP_VERSION}  ·  ` : ''}만든 사람 ${CREATOR}  ·  © 2026 SYNC`;
   text(right, W - U * 2, mid, U * 2.4, 'rgba(255,217,176,0.75)', 'right');
   const list = game.titleTop;
   if (!list.length) return;
