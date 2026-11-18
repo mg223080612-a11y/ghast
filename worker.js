@@ -7,7 +7,7 @@
 //   DELETE /api/scores/<id>                         기록 하나 삭제            (X-Admin-Key 필요)
 //   DELETE /api/scores?game=                        그 게임 기록 전체 삭제    (X-Admin-Key 필요)
 //
-// game: 'ghast'(가스트 사격 Normal, 기본값) | 'ghasteasy'·'ghasthard'(가스트 사격 Easy·Hard) | 'clay'(접시 사격).
+// game: 'ghast'(가스트 사격 Normal, 기본값) | 'ghasteasy'·'ghasthard'(가스트 사격 Easy·Hard) | 'clay'(접시 사격) | 'clay-space'(접시 사격 우주 무대).
 //   게임마다 랭킹·점수 상한·삭제가 따로다. 허용 목록은 limits.json 의 키.
 // game 을 안 보내면 모두 'ghast' 로 처리하므로 기존 가스트 웹 게임은 고치지 않아도 그대로 동작한다.
 //
@@ -80,9 +80,9 @@ async function makePlayToken(env, game) {
   const body = game === DEFAULT_GAME ? `${Date.now()}.${nonce}` : `${Date.now()}.${nonce}.${game}`;
   return `${body}.${await hmac(env.PLAY_SECRET, body)}`;
 }
-// 맞는 표면 { t: 시작 시각, nonce, game }, 아니면 null. 예전 형식(game 없음)은 'ghast'.
+// 맞는 표면 { t: 시작 시각, nonce, game }, 아니면 null. 예전 형식(game 없음)은 'ghast'. game 에는 '-' 가 들어갈 수 있다(clay-space).
 async function readPlayToken(env, token) {
-  const m = /^(\d{13})\.([A-Za-z0-9_-]{16})(?:\.([a-z]{1,16}))?\.([A-Za-z0-9_-]{43})$/.exec(String(token || ''));
+  const m = /^(\d{13})\.([A-Za-z0-9_-]{16})(?:\.([a-z][a-z-]{0,23}))?\.([A-Za-z0-9_-]{43})$/.exec(String(token || ''));
   if (!m) return null;
   const body = m[3] ? `${m[1]}.${m[2]}.${m[3]}` : `${m[1]}.${m[2]}`;
   const sig = await hmac(env.PLAY_SECRET, body);
