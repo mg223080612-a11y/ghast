@@ -134,10 +134,10 @@ function drawLeagueFooter(L, tour, next, revealed) {
   const cx = W / 2, fy = L.py + L.ph - U * 21.5, by = L.py + L.ph - U * 6.5;
   const ready = revealed && game.resultTime > TOURNAMENT.lock;
   if (!revealed) return;
+  // 버튼 줄(대진 다시 섞기 · 결과 취소 · 새 대회)은 토너먼트와 같다 (tournament.js)
   if (!next) {
     text('모든 경기가 끝났어요!', cx, fy + U * 3, U * 4.4, '#ffe14a');
-    button('최종 순위 발표 ▶', cx - U * 20, by, U * 36, U * 8.5, () => tour.showChampion(), ready, true);
-    button('새 대회', cx + U * 20, by, U * 36, U * 8.5, () => tour.startOver(), ready);
+    drawContestButtons(tour, { results: lg.results, by, ready, finished: true, main: ['최종 순위 발표 ▶', () => tour.showChampion()] });
     return;
   }
   text(`다음 경기  ·  ${League.matchLabel(lg, next)}`, cx, fy, U * 3.2, '#ffcf5a');
@@ -145,9 +145,7 @@ function drawLeagueFooter(L, tour, next, revealed) {
   text(a, cx - U * 6, fy + U * 5.5, fitTextSize(a, size, W * 0.4), PLAYER_COLORS[0], 'right');
   text('VS', cx, fy + U * 5.5, size, '#ff8a3a');
   text(b, cx + U * 6, fy + U * 5.5, fitTextSize(b, size, W * 0.4), PLAYER_COLORS[1], 'left');
-  if (Object.keys(lg.results).length === 0) button('대진 다시 섞기', cx - U * 40, by, U * 32, U * 8.5, () => tour.reshuffle(), ready);
-  button('경기 시작 ▶', cx, by, U * 40, U * 8.5, () => tour.startNext(), ready, true);
-  button('새 대회', cx + U * 40, by, U * 32, U * 8.5, () => tour.startOver(), ready);
+  drawContestButtons(tour, { results: lg.results, by, ready, finished: false, main: ['경기 시작 ▶', () => tour.startNext()] });
 }
 
 function leagueLayout() {

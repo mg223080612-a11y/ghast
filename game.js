@@ -268,7 +268,7 @@ const Sound = {
     this.tone(90, 0.7, { type: 'sine', freqEnd: 30, gain: 0.9 });
   },
   deflect() { this.tone(1400, 0.15, { type: 'triangle', freqEnd: 2200, gain: 0.3 }); this.noise(0.25, { freq: 3000, freqEnd: 300, gain: 0.5 }); },
-  charge()  { this.tone(500, 0.55, { type: 'sawtooth', freqEnd: 1300, gain: 0.06, attack: 0.1 }); },
+  charge()  { this.tone(500, 0.55, { type: 'sawtooth', freqEnd: 1300, gain: 0.2, attack: 0.1 }); },
   shoot()   { this.noise(0.5, { type: 'bandpass', freq: 400, freqEnd: 2500, q: 2, gain: 0.7 }); },
   spawn()   { this.tone(rand(260, 340), 0.6, { type: 'sine', freqEnd: 180, gain: 0.08, attack: 0.15 }); },
   escape()  { this.tone(420, 0.35, { type: 'triangle', freqEnd: 160, gain: 0.18 }); this.tone(300, 0.4, { type: 'sine', freqEnd: 120, gain: 0.12, delay: 0.08 }); },
@@ -671,6 +671,8 @@ const rules = () => DIFFICULTIES[diffKeyOf(game.diff)];
 // 감점: 'miss' 빈 곳 · 'escape' 놓침 · 'hit' 화염구 피격
 const penaltyOf = (kind) => Math.round(settings[`${kind}Penalty`] * rules().penalty[kind]);
 const rewardScoreNow = () => settings[rules().rewardKey] ?? settings.rewardScore;
+// 상품: 판 도중 한 번이라도 기준을 넘었으면(rewardShown) 끝 점수가 내려가도 받는다 (보너스 시간에 감점으로 잃는 일 없게)
+const gotReward = (p) => !!p && (p.rewardShown || p.score >= rewardScoreNow());
 const ghastScaleNow = () => settings.ghastScale * rules().size;
 const hitPaddingNow = () => Math.max(0, settings.hitPadding + rules().padding);
 // 토너먼트는 경기 시간이 늘 같게 보너스 시간이 없다 (레벨 UP 은 그대로)
@@ -704,7 +706,8 @@ class Ghast {
     this.dashCD = rand(0.6, 1.4);
     this.dashT = 0;
 
-    this.z = rand(0.65, 1.15);        // 클수록 가까이(크게) 보임
+    // 클수록 가까이(크게) 보임. 폭을 좁혀서 가까운 작은 가스트가 먼 보통 가스트만큼 커 보이지 않게 (종류가 크기로 구별됨)
+    this.z = rand(0.82, 0.98);        // 클수록 가까이(크게). 범위를 좁혀 아기<보통<큰 가스트 크기가 겹치지 않게 (평균 0.90 은 예전과 같음)
     this.flip = 1;
     this.x = W / 2; this.y = H / 2;
     this.tx = this.x; this.ty = this.y;
@@ -958,6 +961,7 @@ let fireballs = [];
 const game = {
   state: 'loading',     // loading → title → countdown → play → result
   paused: false,
+  pauseNote: null, // 저절로 멈춘 까닭 { title, sub } (2인 경기 중 총이 빠졌을 때)
   score: 0,
   timeLeft: 0,
   elapsed: 0,
@@ -992,7 +996,10 @@ const todayStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return 
 const dayStart = (day) => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + day); return d.getTime(); };
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
 const dayLabel = (day) => { const d = new Date(dayStart(day)); return `${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEKDAYS[d.getDay()]})`; };
-const cleanName = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 12);
+// 제어 문자와 눈에 안 보이는 글자(폭 없는 공백·글자 방향 표시·BOM)를 지운다 → 그런 글자로만 된 이름은 빈 이름
+const cleanName = (s) => String(s ?? '')
+  .replace(/[\u0000-\u001f\u007f​-‏‪-‮⁠-⁤⁦-⁩﻿]/g, '')
+  .trim().slice(0, 12);
 const byRank = (a, b) => b.score - a.score || a.created_at - b.created_at;
 const readJson = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
 const writeJson = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 저장 불가 */ } };
@@ -1003,6 +1010,13 @@ function rankApi(path) {
   return `${sameOrigin ? '' : RANK_API_ORIGIN}/api/scores${path}`;
 }
 
+// 와이파이가 죽어 응답이 안 오면 이 시간 뒤 끊는다 → 인터넷 끊김과 똑같이 처리 ('랭킹 저장 중…'에 멈추지 않게)
+const RANK_TIMEOUT_MS = 8000;
+// 게임 시작 표의 앞자리 = 서버가 표를 만든 시각(ms). 읽을 수 없으면 NaN
+const tokenIssuedAt = (t) => { const m = /^(\d{13})\./.exec(String(t ?? '')); return m ? Number(m[1]) : NaN; };
+// 서버는 7일 지난 표를 안 받는다 → 미리 받아 둔 표는 5일이 지나면 버리고 새로 받는다
+const SPARE_MAX_AGE = 5 * 86_400_000;
+
 const Ranking = {
   online: null, // 마지막 요청이 성공했는지 (설정 창 표시용)
 
@@ -1010,15 +1024,20 @@ const Ranking = {
     const headers = {};
     if (body) headers['Content-Type'] = 'application/json';
     if (method === 'DELETE') headers['X-Admin-Key'] = settings.adminKey || '';
-    let res;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), RANK_TIMEOUT_MS);
+    let res, data;
     try {
-      res = await fetch(rankApi(path), { method, headers, body: body ? JSON.stringify(body) : undefined });
+      res = await fetch(rankApi(path), { method, headers, body: body ? JSON.stringify(body) : undefined, signal: ctrl.signal });
+      data = await res.json().catch(() => ({}));
+      if (ctrl.signal.aborted) throw new Error('랭킹 서버가 응답하지 않아요'); // 받는 도중에 시간이 다 됨
     } catch (err) {
       this.online = false;
       throw err;
+    } finally {
+      clearTimeout(timer);
     }
     this.online = true;
-    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const err = new Error(data.error || `서버 오류 ${res.status}`);
       err.status = res.status;
@@ -1037,7 +1056,12 @@ const Ranking = {
   // 인터넷이 잠깐 끊겨도 기록을 올릴 수 있게 몇 장을 미리 받아 둔다 (예전에 받은 표일수록 시간 여유가 넉넉하다)
   // 표는 난이도(랭킹)마다 따로다. Normal 은 예전에 받아 둔 표를 그대로 쓰게 예전 이름으로 보관
   spareKey(gameId) { return gameId === RANK_GAME_DEFAULT ? PLAY_SPARE_KEY : `${PLAY_SPARE_KEY}-${gameId}`; },
-  spares(gameId = RANK_GAME_DEFAULT) { return readJson(this.spareKey(gameId), []); },
+  // 5일 넘은 표·읽을 수 없는 표는 빼고 돌려준다 → topUpSpares 가 새 표로 채운다 (보관 형식은 예전 그대로: 표 문자열 목록)
+  spares(gameId = RANK_GAME_DEFAULT) {
+    const list = readJson(this.spareKey(gameId), []);
+    const oldest = Date.now() - SPARE_MAX_AGE;
+    return Array.isArray(list) ? list.filter((t) => tokenIssuedAt(t) >= oldest) : [];
+  },
   async fetchToken(gameId = RANK_GAME_DEFAULT, timeoutMs = 2500) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -1085,19 +1109,22 @@ const Ranking = {
   async flush() {
     if (this.flushing) return;
     this.flushing = true;
-    const drop = (id) => writeJson(RANK_PENDING_KEY, this.pending().filter((p) => p.id !== id));
-    for (const row of this.pending()) {
-      try {
-        const r = await this.request('POST', '', { ...row, since: todayStart() });
-        drop(row.id);
-        if (game.lastEntryId === row.id) game.lastEntryId = r.id;
-      } catch (err) {
-        // 서버가 거절한 기록 하나 때문에 뒤의 기록까지 막히지 않도록 버리고 계속한다
-        if (this.isRejected(err)) { console.warn('서버가 거절한 보관 기록을 버립니다', row, err.message); drop(row.id); continue; }
-        break; // 아직 오프라인 등 — 다음에 다시 시도
+    try {
+      const drop = (id) => writeJson(RANK_PENDING_KEY, this.pending().filter((p) => p.id !== id));
+      for (const row of this.pending()) {
+        try {
+          const r = await this.request('POST', '', { ...row, since: todayStart() });
+          drop(row.id);
+          if (game.lastEntryId === row.id) game.lastEntryId = r.id;
+        } catch (err) {
+          // 서버가 거절한 기록 하나 때문에 뒤의 기록까지 막히지 않도록 버리고 계속한다
+          if (this.isRejected(err)) { console.warn('서버가 거절한 보관 기록을 버립니다', row, err.message); drop(row.id); continue; }
+          break; // 아직 오프라인 등 — 다음에 다시 시도
+        }
       }
+    } finally {
+      this.flushing = false; // 도중에 오류가 나도 다음 번에 다시 올릴 수 있게
     }
-    this.flushing = false;
   },
 
   // scope: 'today' 날짜별(day: 0 오늘, -1 어제 …) | 'all' 전체 — 아직 못 올린 기록도 함께 보여준다.
@@ -1415,6 +1442,7 @@ function goTitle() {
   game.diff = settings.diffLevel; // 처음 화면의 설명·랭킹 띠는 고른 난이도로
   game.level = 1; // 처음 화면의 가스트는 천천히
   game.paused = false;
+  game.pauseNote = null;
   game.confirmHome = false;
   fireballs = [];
   ghasts.forEach((g) => g.hittable() && g.leave(true));
@@ -1439,6 +1467,7 @@ function startGame(mode = game.mode, names = game.players.map((p) => p.name), op
   game.countdown = 3;
   game.lastTick = 4;
   game.paused = false;
+  game.pauseNote = null;
   game.baseSeconds = opts.seconds ?? settings.gameSeconds;
   game.timeLeft = game.baseSeconds;
   game.overtime = 0;
@@ -1462,11 +1491,12 @@ function endGame() {
   game.state = 'result';
   game.resultTime = 0;
   game.timeLeft = 0;
+  banner = null; // 끝나기 직전에 뜬 '레벨 UP!' 같은 안내가 결과 화면(1인·2인 모두) 위에 남지 않게
   // 남은 화염구는 공중에서 터뜨림
   fireballs.forEach((f) => burstFire(f.x, f.y, 0.6));
   fireballs = [];
   ghasts.forEach((g) => g.hittable() && g.leave(true));
-  const win = game.players.some((p) => p.score >= rewardScoreNow());
+  const win = game.players.some(gotReward);
   Sound.end(win || isTwoPlayer());
   updateCornerButtons();
   if (game.mode === 'tournament') Tournament.finishMatch();
@@ -1557,18 +1587,39 @@ function ghastEscaped(gh) {
   });
   if (pen > 0) {
     // 가스트가 사라진 쪽 화면 가장자리에 표시
-    const x = clamp(gh.x, U * 10, W - U * 10);
+    const x = clamp(gh.x, U * 14, W - U * 14); // '-1 놓침!' 글자가 화면 끝에 잘리지 않게
     popupScore(x, clamp(gh.y, U * 22, H - U * 10), `-${pen} 놓침!`, '#ff6a5a');
   }
 }
 
 // 화염구가 화면에 닿음 = 플레이어 피격
+// 방금 처치된 가스트 자리 (0.4초 동안). 같은 가스트를 한발 늦게 쏜 탄은 감점하지 않는다
+const LATE_SHOT_MS = 400;
+let recentKills = [];
+function rememberKill(g) {
+  const now = performance.now();
+  const { x, y } = g.center();
+  recentKills = [...recentKills.filter((k) => now - k.at < LATE_SHOT_MS), { x, y, hw: g.w * 0.6, hh: g.h * 0.6, at: now }];
+}
+function justKilledAt(px, py) {
+  const now = performance.now();
+  return recentKills.some((k) => now - k.at < LATE_SHOT_MS && Math.abs(px - k.x) <= k.hw && Math.abs(py - k.y) <= k.hh);
+}
+// 피격 번쩍임: 큰 화면 전체가 빨갛게 연달아 깜빡이지 않게 0.4초 안에는 다시 번쩍이지 않고, 세기도 낮춘다
+let lastHitFlashAt = -1e9;
+function hitFlashReady() {
+  const now = performance.now();
+  if (now - lastHitFlashAt < 400) return false;
+  lastHitFlashAt = now;
+  return true;
+}
+
 function playerHit(fb) {
   if (game.state !== 'play') return;
   Sound.explode();
   burstFire(fb.x, fb.y, 1.4);
-  shake = Math.max(shake, U * 2.5);
-  doFlash('#ff2a10', 0.5);
+  shake = Math.max(shake, settings.fewEffects ? 0 : U * 1.6);
+  if (hitFlashReady()) doFlash('#ff2a10', settings.fewEffects ? 0.15 : 0.3);
   // 화면에 닿은 화염구는 모두가 맞은 것: 2인 대결이면 두 사람 모두 감점
   const pen = penaltyOf('hit');
   game.players.forEach((p, i) => {
@@ -1663,6 +1714,8 @@ function onTap(x, y, who = 0, source = 'mouse') {
   // 마우스는 창이 직접 받고, 조이스틱 모드 총만 여기로 온다. 확인 창이 떠 있으면 그 창의 버튼만
   if (confirmOpen()) {
     const btn = document.elementFromPoint(x, y)?.closest('button');
+    // 되돌릴 수 없는 일(새 대회·지우기)은 총으로 '확인'을 못 누른다 (빗나간 한 발 방지). '취소'는 된다
+    if (btn === confirmOk && confirmDanger && String(source).startsWith('pad:')) return;
     if (btn && confirmEl.contains(btn)) btn.click();
     return;
   }
@@ -1756,9 +1809,13 @@ function onTap(x, y, who = 0, source = 'mouse') {
     doFlash('#ffffff', 0.12);
     const color = g.type === 'gold' ? '#ffd84a' : g.points > settings.killPoints ? '#ffb23a' : '#7dff6a';
     popupScore(c.x + g.w * 0.3, c.y - g.h * 0.5, tag(`+${g.points}`), tint(color));
+    rememberKill(g);
     addScore(g.points, who);
     return;
   }
+
+  // 2.5) 방금 터진 가스트 자리를 쏨 (상대가 한발 먼저 맞힘) → 늦었을 뿐이라 감점 없음
+  if (justKilledAt(x, y)) { popupScore(x, y - U * 4, '늦었어요', '#c9a89a'); return; }
 
   // 3) 빗나감 (배경을 맞힘) → 쏜 사람만 감점
   shooter.stats.misses++;
@@ -1911,8 +1968,18 @@ const Guns = {
     }
     // 뽑힌 총은 목록에서 뺀다
     for (const idx of Object.keys(this.pads)) {
-      if (!list.some((g) => String(g.index) === idx)) delete this.pads[idx];
+      if (list.some((g) => String(g.index) === idx)) continue;
+      this.onUnplug(this.pads[idx]);
+      delete this.pads[idx];
     }
+  },
+
+  // 2인 경기(대결·토너먼트·리그) 중 1P/2P 총이 빠지면 P 를 누른 것처럼 멈추고 일시정지 화면에 알린다
+  onUnplug(s) {
+    const who = this.playerOf(s);
+    if (who < 0 || !isTwoPlayer() || game.state !== 'play' || game.paused) return;
+    game.paused = true;
+    game.pauseNote = { title: `${who + 1}P 총 연결이 끊겼어요`, sub: '총을 다시 연결한 뒤 P 또는 Space 로 계속하세요' };
   },
 
   onButton(s, i) {
@@ -2085,6 +2152,8 @@ window.addEventListener('keydown', (e) => {
     case 'Escape':
       if (game.state === 'ranking') closeRanking();
       else if (game.state === 'gunsetup') closeGunSetup();
+      // 이름 쏘는 중: [건너뛰기]처럼 원래 닉네임으로 방금 기록은 남긴다 (그냥 처음 화면으로 가면 기록이 사라진다)
+      else if (game.state === 'initials') finishInitials(true);
       else if (['aimtest', 'bracket', 'champion', 'solo'].includes(game.state) || e.code === 'KeyQ') goTitle();
       break;
     case 'KeyF':
@@ -2094,7 +2163,7 @@ window.addEventListener('keydown', (e) => {
       showBanner(Sound.toggleMute() ? '소리 꺼짐' : '소리 켜짐', '', '#ffffff', 1.2);
       break;
     case 'KeyS':
-      openSettings();
+      if (game.state !== 'initials') openSettings(); // 이름 쏘기 판에서는 총의 S 버튼으로 설정 창이 뜨지 않게
       break;
   }
 });
@@ -2188,9 +2257,11 @@ const confirmMsg = document.getElementById('confirm-msg');
 const confirmOk = document.getElementById('confirm-ok');
 const confirmCancel = document.getElementById('confirm-cancel');
 let confirmResolve = null;
+let confirmDanger = false; // 지금 뜬 창이 되돌릴 수 없는 일인지 (총으로는 '확인'을 못 누른다)
 const confirmOpen = () => !confirmEl.hidden;
 function askConfirm(message, { ok = '확인', cancel = '취소', danger = false, notice = false } = {}) {
   if (confirmResolve) closeConfirm(false); // 앞의 창은 취소로 닫는다
+  confirmDanger = danger && !notice;
   confirmMsg.textContent = message;
   confirmOk.textContent = ok;
   confirmCancel.textContent = cancel;
@@ -2402,6 +2473,7 @@ function panelTopBelowCorner(ph) {
 function resumeGame() {
   game.paused = false;
   game.confirmHome = false;
+  game.pauseNote = null;
 }
 // 처음 화면으로. 게임 중이면 잘못 눌러도 판이 날아가지 않게 일시정지하고 한 번 더 묻는다
 // ---------- 게임 직후 이름 쏘기 (A-Z·0-9) ----------
@@ -2492,7 +2564,7 @@ function drawInitials(time) {
   }
 
   // 글자판: 실제 키보드처럼 1~0 / QWERTYUIOP / ASDFGHJKL / ZXCVBNM ← 지우기 (줄마다 오른쪽으로 조금씩 밀림)
-  const kw = U * 10, kh = U * 9, kg = U * 1.5, pitch = kw + kg;
+  const kw = U * 10, kh = U * 8, kg = U * 1.5, pitch = kw + kg;
   const lastRow = INITIALS.rows.length - 1;
   const span = Math.max(...INITIALS.rows.map((row, r) => row.offset + row.keys.length + (r === lastRow ? INITIALS.eraseWidth : 0)));
   const gx0 = cx - (span * pitch - kg) / 2, gy0 = py + U * 45;
@@ -2510,7 +2582,7 @@ function drawInitials(time) {
   const fy = py + ph - U * 9;
   button('건너뛰기', cx - U * 30, fy, U * 40, U * 9.5, () => finishInitials(true), ready);
   button('등록', cx + U * 30, fy, U * 40, U * 9.5, () => finishInitials(), ready, true);
-  text(`건너뛰면 '${me.name || '이름없음'}' 으로 남아요`, cx - U * 30, fy + U * 7.2, U * 2.4, '#c9a89a');
+  text(`건너뛰면 '${me.name || '이름없음'}' 이름으로 남아요`, cx - U * 30, fy + U * 7.2, U * 2.6, '#c9a89a');
 }
 
 function goHome() {
@@ -2882,7 +2954,9 @@ function drawGunSetup() {
   panel(px, py, pw, ph, 0.88);
 
   text('총 연결 (2인 대결)', cx, py + U * 7, U * 6.5, '#ffcf5a', 'center', { shadow: '#a3200c' });
-  text('두 총을 조이스틱 모드로 바꾸세요: 총에서 Space + 5 + 조이스틱 왼쪽  ·  방아쇠를 한 번 당기면 게임이 총을 알아봐요', cx, py + U * 14, U * 2.7, '#ffd9b0');
+  // 긴 안내 줄은 판 너비에 맞춰 글자를 줄인다 (1920×1080 에서 판 밖으로 넘쳤음)
+  const howTo = '두 총을 조이스틱 모드로 바꾸세요: 총에서 Space + 5 + 조이스틱 왼쪽  ·  방아쇠를 한 번 당기면 게임이 총을 알아봐요';
+  text(howTo, cx, py + U * 14, fitTextSize(howTo, U * 2.7, pw - U * 6), '#ffd9b0');
 
   const pads = Guns.list();
   let y = py + U * 22;
@@ -3150,7 +3224,7 @@ function drawRanking(time) {
     // 방금 끝난 판: 내 점수·순위·보상을 보여 주고, 다음 사람이 바로 시작할 수 있게
     const me = game.players[0];
     const ri = game.rankInfo;
-    const win = me.score >= rewardScoreNow();
+    const win = gotReward(me);
     let mine = `${me.name || '이름없음'} 님 ${me.score}점 (${rules().label})`;
     if (ri?.status === 'saving') mine += '  ·  랭킹 저장 중…';
     else if (ri?.status === 'saved' && !ri.pending) mine += `  ·  오늘 ${ri.rankToday}위 · 전체 ${ri.rankAll}위`;
@@ -3183,6 +3257,9 @@ function drawRanking(time) {
   }
 }
 
+// 게임 중 점수판·진행 막대 판의 진하기. 바로 뒤로 밝은 용암 폭포가 지나가도 글자가 읽히게 (예전 0.6)
+const HUD_PANEL_ALPHA = 0.75;
+
 // 2인 대결: 왼쪽 1P, 오른쪽 2P 점수판. 앞선 사람 점수 옆에 작은 왕관
 function drawVersusScores(time) {
   const [a, b] = game.players;
@@ -3192,7 +3269,7 @@ function drawVersusScores(time) {
     const left = i === 0 ? U * 2.5 : W - pw - U * 2.5;
     const align = i === 0 ? 'left' : 'right';
     const tx = i === 0 ? left + U * 3 : left + pw - U * 3;
-    panel(left, U * 2.5, pw, ph, 0.6);
+    panel(left, U * 2.5, pw, ph, HUD_PANEL_ALPHA);
     ctx.fillStyle = PLAYER_COLORS[i];
     ctx.fillRect(i === 0 ? left : left + pw - U * 0.8, U * 2.5, U * 0.8, ph); // 플레이어 색 띠
     const label = playerLabel(p, i);
@@ -3212,7 +3289,7 @@ function drawHUD(time) {
   if (isTwoPlayer()) {
     drawVersusScores(time);
   } else {
-    panel(U * 2.5, U * 2.5, U * 40, U * 13, 0.6);
+    panel(U * 2.5, U * 2.5, U * 40, U * 13, HUD_PANEL_ALPHA);
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(IMG.tear, U * 4.5, U * 4.5, U * 9, U * 9);
     text('점수', U * 16, U * 6, U * 3, '#ffd9b0', 'left');
@@ -3242,7 +3319,7 @@ function drawHUD(time) {
   const myScore = game.players[0].score;
   const bw = U * 52, bh = U * 3.4, bx = W - bw - U * 5, by = U * 9;
   const max = Math.max(rewardScoreNow(), bonusOn ? game.nextBonus : 0, myScore, 1) * 1.15;
-  panel(bx - U * 2.5, U * 2.5, bw + U * 5, U * 13, 0.6);
+  panel(bx - U * 2.5, U * 2.5, bw + U * 5, U * 13, HUD_PANEL_ALPHA);
   ctx.fillStyle = '#2a1010';
   ctx.fillRect(bx, by, bw, bh);
   const fill = clamp(myScore / max, 0, 1);
@@ -3309,7 +3386,7 @@ function drawVersusResult(time) {
     const acc = st.shots ? Math.round(((st.kills + st.deflects) / st.shots) * 100) : 0;
     const statLine = `처치 ${st.kills} · 반사 ${st.deflects} · 빗나감 ${st.misses} · 명중률 ${acc}%`;
     text(statLine, ccx, top + U * 29, fitTextSize(statLine, U * 2.8, colW - U * 6), '#ffd9b0');
-    if (p.score >= rewardScoreNow()) {
+    if (gotReward(p)) {
       // 눈물 아이콘 + 글자를 한 덩어리로 가운데 정렬
       const msg = '가스트의 눈물 획득!';
       const ts = U * 6, gap = U * 1.5;
@@ -3340,7 +3417,7 @@ function drawResult(time) {
   const py = panelTopBelowCorner(ph);
   panel(cx - pw / 2, py, pw, ph, 0.82);
   const me = game.players[0];
-  const win = me.score >= rewardScoreNow();
+  const win = gotReward(me);
   const st = me.stats;
   const title = `${me.name || '이름없음'} 님 · 미션 종료!`;
   text(title, cx, py + U * 7, fitTextSize(title, U * 6.5, pw - U * 8), '#ffcf5a');
@@ -3531,8 +3608,10 @@ function draw(time) {
     ctx.fillRect(0, 0, W, H);
     // 처음 화면 버튼으로 멈췄으면 한 번 더 묻는다 (이번 판 점수는 저장되지 않음)
     const asking = game.confirmHome;
-    text(asking ? '처음 화면으로 갈까요?' : '일시정지', W / 2, H * 0.38, U * (asking ? 9 : 12), '#ffffff');
-    text(asking ? '이번 판은 끝나고 점수는 저장되지 않아요' : 'P 또는 Space 를 누르면 계속합니다', W / 2, H * 0.38 + U * 10, U * 4, '#ffd9b0');
+    // 총이 빠져서 저절로 멈췄으면 그 까닭을 보여 준다 (Guns.onUnplug)
+    const note = !asking && game.pauseNote;
+    text(asking ? '처음 화면으로 갈까요?' : note ? note.title : '일시정지', W / 2, H * 0.38, U * (asking || note ? 9 : 12), note ? '#ff8a7a' : '#ffffff');
+    text(asking ? '이번 판은 끝나고 점수는 저장되지 않아요' : note ? note.sub : 'P 또는 Space 를 누르면 계속합니다', W / 2, H * 0.38 + U * 10, U * 4, '#ffd9b0');
     button('계속하기', W / 2 - U * 22, H * 0.62, U * 38, U * 11, resumeGame, true, true);
     button('처음 화면', W / 2 + U * 22, H * 0.62, U * 38, U * 11, goTitle);
   }
@@ -3603,7 +3682,7 @@ function lightenOneStep() {
   else if (settings.quality === 'normal') settings.quality = 'light';
   else if (!settings.fewEffects) settings.fewEffects = true;
   else return false; // 더 줄일 게 없음
-  saveSettings();
+  // 저장하지 않는다: 잠깐 버벅이거나 30Hz 프로젝터라서 낮춘 화질이 운영자가 고른 설정을 영영 바꾸지 않게 (이번에 켠 동안만)
   resize();
   clearTextCache();
   return true;
@@ -3618,7 +3697,7 @@ function checkAutoPerf(now) {
   if (autoPerf.lowSeconds >= 3 && now - autoPerf.lastChange > 10000) {
     autoPerf.lowSeconds = 0;
     autoPerf.lastChange = now;
-    if (lightenOneStep()) showBanner('렉 방지: 화면을 가볍게 바꿨어요', '⚙ 설정 → 화질에서 되돌릴 수 있어요', '#9ff6ff', 2.2);
+    if (lightenOneStep()) showBanner('렉 방지: 화면을 가볍게 바꿨어요', '설정 → 화질에서 되돌릴 수 있어요', '#9ff6ff', 2.2);
   }
 }
 

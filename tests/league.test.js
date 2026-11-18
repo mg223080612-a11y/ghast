@@ -159,6 +159,34 @@ test('JSON 저장 후 불러와도 이어지고, 망가진 데이터는 거절�
   assert.equal(L.isValid({ ...lg, format: 2 }), false);
 });
 
+test('결과 취소: 원래 리그는 그대로, 그 경기 결과만 빠지고 그 경기가 다시 다음 경기', () => {
+  const lg = L.createLeague(names(6), { games: 2, rng: fixedRng(4) });
+  const m1 = L.nextMatch(lg);
+  const lg1 = L.recordResult(lg, m1.id, [12, 7]);
+  const m2 = L.nextMatch(lg1);
+  const lg2 = L.recordResult(lg1, m2.id, [5, 9]);
+  const before = JSON.stringify(lg2);
+  const undone = L.undoResult(lg2, m2.id);
+  assert.equal(JSON.stringify(lg2), before);
+  assert.equal(undone.results[m2.id], undefined);
+  assert.deepEqual(undone, lg1);
+  assert.equal(L.nextMatch(undone).id, m2.id);
+  assert.deepEqual(L.standings(undone), L.standings(lg1));
+});
+
+test('결과 취소: 결과가 없는 경기는 거절하고, 끝난 리그도 마지막 경기를 되돌리면 다시 진행 중', () => {
+  const lg = L.createLeague(names(4), { games: 3, rng: fixedRng(2) });
+  assert.throws(() => L.undoResult(lg, L.nextMatch(lg).id), /결과가 없는 경기/);
+  assert.throws(() => L.undoResult(lg, 'NOPE'), /결과가 없는 경기/);
+  const done = playAll(lg);
+  const lastId = L.matches(done).at(-1).id;
+  const undone = L.undoResult(done, lastId);
+  assert.ok(L.isFinished(done));
+  assert.equal(L.isFinished(undone), false);
+  assert.equal(L.nextMatch(undone).id, lastId);
+  assert.ok(L.isValid(undone));
+});
+
 test('저장된 결과가 망가졌으면(점수 없음·없는 경기) 거절한다', () => {
   const lg = L.createLeague(names(6), { games: 2, rng: fixedRng(3) });
   assert.equal(L.isValid({ ...lg, results: { L0: {} } }), false);

@@ -16,7 +16,14 @@ const types = {
 const hidden = new Set(['data', '.git', '.wrangler', 'node_modules']);
 
 http.createServer((req, res) => {
-  const urlPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+  let urlPath;
+  try {
+    urlPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+  } catch {
+    // '%' 가 잘못 들어간 주소 때문에 서버가 꺼지지 않게
+    res.writeHead(400); res.end(); return;
+  }
+  if (urlPath.includes('\0')) { res.writeHead(400); res.end(); return; }
 
   // 이 노트북에서 연 게임에 관리자 키(data/admin-key.txt)를 알려 줘서 따로 입력하지 않아도 되게 한다.
   // 주소창의 호스트가 정확히 이 서버일 때만 응답한다 (다른 웹사이트가 몰래 읽어 가지 못하게).
@@ -32,8 +39,10 @@ http.createServer((req, res) => {
   }
 
   const file = path.join(root, urlPath === '/' ? 'index.html' : urlPath);
-  const first = path.relative(root, file).split(path.sep)[0];
-  if (!file.startsWith(root + path.sep) || hidden.has(first)) { res.writeHead(403); res.end(); return; }
+  const segments = path.relative(root, file).split(path.sep);
+  if (!file.startsWith(root + path.sep) || hidden.has(segments[0])) { res.writeHead(403); res.end(); return; }
+  // '.' 으로 시작하는 이름(.github·.dev.vars·.env 같은 숨김 파일·폴더)은 어디에 있든 없는 파일로 답한다
+  if (segments.some((seg) => seg.startsWith('.'))) { res.writeHead(404); res.end('not found'); return; }
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); res.end('not found'); return; }
     res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });

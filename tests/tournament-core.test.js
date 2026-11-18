@@ -209,6 +209,43 @@ test('망가진 저장 데이터는 올바르지 않다고 알려 준다', () =>
   assert.equal(B.isValid({ ...ok, format: undefined }), false); // 예전 방식(32강 칸) 저장본
 });
 
+test('결과 취소: 원래 대진표는 그대로, 그 경기 결과만 빠지고 그 경기가 다시 다음 경기', () => {
+  const t = B.createBracket(names(6), { rng: fixedRng(5) });
+  const m1 = B.nextMatch(t);
+  const t1 = B.recordResult(t, m1.id, m1.a, [7, 3]);
+  const m2 = B.nextMatch(t1);
+  const t2 = B.recordResult(t1, m2.id, m2.b, [2, 9]);
+  const before = JSON.stringify(t2);
+  const undone = B.undoResult(t2, m2.id);
+  assert.equal(JSON.stringify(t2), before);
+  assert.equal(undone.results[m2.id], undefined);
+  assert.deepEqual(undone, t1);
+  assert.equal(B.nextMatch(undone).id, m2.id);
+});
+
+test('결과 취소: 결과가 없는 경기는 거절한다', () => {
+  const t = B.createBracket(names(4), { rng: fixedRng(2) });
+  assert.throws(() => B.undoResult(t, B.nextMatch(t).id), /결과가 없는 경기/);
+  assert.throws(() => B.undoResult(t, 'NOPE'), /결과가 없는 경기/);
+});
+
+test('결과 취소를 최근 것부터 끝까지 하면 매번 그 경기가 다음 경기, 마지막엔 처음 대진표', () => {
+  const start = B.createBracket(names(7), { rng: fixedRng(4), thirdPlace: true });
+  let t = start;
+  const history = [];
+  while (!B.isFinished(t)) {
+    const m = B.nextMatch(t);
+    t = B.recordResult(t, m.id, m.a, [3, 1]);
+    history.push(m.id);
+  }
+  [...history].reverse().forEach((id) => {
+    t = B.undoResult(t, id);
+    assert.equal(B.isFinished(t), false);
+    assert.equal(B.nextMatch(t).id, id);
+  });
+  assert.deepEqual(t, start);
+});
+
 test('경기 id 로 경기를 찾는다 (3·4위전 포함), 없는 id 는 null', () => {
   let t = B.createBracket(names(4), { rng: fixedRng(3), thirdPlace: true });
   assert.equal(B.findMatch(t, 'R0-1').index, 1);

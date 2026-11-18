@@ -154,6 +154,13 @@
     return { ...t, results: { ...t.results, [id]: { winner, scores: [...scores] } } };
   }
 
+  // 결과 취소: 그 경기 결과만 뺀 새 대진표. 뒤 경기가 이 결과에 기대므로 가장 최근 결과에만 쓴다
+  function undoResult(t, id) {
+    if (!Object.hasOwn(t.results, id)) throw new Error('결과가 없는 경기라 취소할 수 없어요');
+    const { [id]: _removed, ...rest } = t.results;
+    return { ...t, results: rest };
+  }
+
   function isFinished(t) {
     const all = rounds(t);
     const final = all[all.length - 1][0];
@@ -210,7 +217,7 @@
 
   return {
     MIN_PLAYERS, MAX_PLAYERS,
-    createBracket, reshuffle, rounds, roundCount, thirdPlaceMatch, nextMatch, findMatch, recordResult,
+    createBracket, reshuffle, rounds, roundCount, thirdPlaceMatch, nextMatch, findMatch, recordResult, undoResult,
     isFinished, standings, loserOf, roundName, matchLabel, playerName, isValid,
   };
 });

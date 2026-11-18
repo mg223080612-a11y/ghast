@@ -6,6 +6,8 @@
 //   진행 상황은 이 PC(localStorage)에 저장되어, 프로그램을 껐다 켜도 처음 화면 [토너먼트 이어하기] 로 이어진다.
 // =============================================================
 const TOURNAMENT_KEY = 'ghast-shooting-tournament';
+// 새 대회를 만들기 직전의 지난 대회 한 벌 (덮어쓰기 대비. 되살리기 화면은 아직 없다)
+const TOURNAMENT_PREV_KEY = 'ghast-shooting-tournament-prev';
 const TOURNAMENT = {
   overtime: 15,      // 동점이면 이만큼 연장 (초)
   lock: 1.5,         // 대진표가 뜬 뒤 버튼 잠금 (경기 끝까지 쏘던 총알이 '경기 시작'을 누르지 않게)
@@ -34,16 +36,21 @@ const tPick = document.getElementById('contest-pick');
 const tTitle = document.getElementById('t-title');
 let formKind = 'tournament';
 
-// 저장 모양: 토너먼트 { bracket, seconds, diff, current: { id } | null, last: { id, winner, scores, overtime } | null }
-//          리그     { league, seconds, diff, current, last: { id, scores, prevRanks } | null }  (league-core.js)
+// 저장 모양: 토너먼트 { bracket, seconds, diff, current: { id } | null, last: { id, winner, scores, overtime } | null, history }
+//          리그     { league, seconds, diff, current, last: { id, scores, prevRanks } | null, history }  (league-core.js)
+//   history: 결과를 넣은 경기 id 를 넣은 순서대로 (결과 취소용)
 function loadTournament() {
   const d = readJson(TOURNAMENT_KEY, null);
   if (!d) return null;
   const seconds = clamp(Math.round(Number(d.seconds)) || TOURNAMENT.defaultSeconds, TOURNAMENT.minSeconds, TOURNAMENT.maxSeconds);
   const common = { seconds, diff: diffKeyOf(d.diff), current: d.current ?? null, last: d.last ?? null };
-  if (League.isValid(d.league)) return { league: d.league, ...common };
-  if (Bracket.isValid(d.bracket)) return { bracket: d.bracket, ...common };
+  if (League.isValid(d.league)) return { league: d.league, ...common, history: savedHistory(d.history, d.league.results) };
+  if (Bracket.isValid(d.bracket)) return { bracket: d.bracket, ...common, history: savedHistory(d.history, d.bracket.results) };
   return null;
+}
+// 예전 저장본에는 history 가 없어서 [] 로. 결과가 없는 경기 id 는 뺀다
+function savedHistory(list, results) {
+  return Array.isArray(list) ? list.filter((id) => typeof id === 'string' && Object.hasOwn(results, id)) : [];
 }
 
 // 경기장에 남은 가스트·화염구를 치우고 메뉴 화면으로
@@ -65,6 +72,7 @@ const Tournament = {
   },
   bracket() { return this.data?.bracket; },
   isLeague() { return !!this.data?.league; },
+  history() { return this.data?.history ?? []; },
   name(id) { return this.isLeague() ? League.playerName(this.data.league, id) : Bracket.playerName(this.bracket(), id); },
   finished() {
     if (!this.data) return false;
@@ -121,7 +129,10 @@ const Tournament = {
   closeForm() { tEntry.hidden = true; tPick.hidden = true; },
 
   create(names, opts) {
-    const common = { seconds: opts.seconds, diff: opts.diff, current: null, last: null };
+    // 덮어쓰기 전에 지난 대회를 TOURNAMENT_PREV_KEY 에 남긴다 (이번 버전이 못 읽는 저장본도 그대로)
+    const prev = this.data ?? readJson(TOURNAMENT_KEY, null);
+    if (prev) writeJson(TOURNAMENT_PREV_KEY, prev);
+    const common = { seconds: opts.seconds, diff: opts.diff, current: null, last: null, history: [] };
     if (opts.kind === 'league') this.set({ league: League.createLeague(names, { games: opts.games }), ...common });
     else this.set({ bracket: Bracket.createBracket(names, { thirdPlace: opts.third }), ...common });
     Sound.bonus();
@@ -206,7 +217,7 @@ const Tournament = {
     const winner = scores[0] > scores[1] ? m.a : m.b;
     try {
       const bracket = Bracket.recordResult(this.data.bracket, m.id, winner, scores);
-      this.set({ ...this.data, bracket, current: null, last: { id: m.id, winner, scores, overtime: game.overtime } });
+      this.set({ ...this.data, bracket, current: null, last: { id: m.id, winner, scores, overtime: game.overtime }, history: [...this.history(), m.id] });
     } catch (err) {
       reportError(err);
     }
@@ -218,10 +229,39 @@ const Tournament = {
       const before = League.standings(this.data.league);
       const prevRanks = Object.fromEntries(before.map((r) => [r.id, r.rank]));
       const league = League.recordResult(this.data.league, m.id, scores);
-      this.set({ ...this.data, league, current: null, last: { id: m.id, scores, prevRanks } });
+      this.set({ ...this.data, league, current: null, last: { id: m.id, scores, prevRanks }, history: [...this.history(), m.id] });
     } catch (err) {
       reportError(err);
     }
+  },
+
+  // ---------- 결과 취소 (잘못 넣은 결과를 진행요원이 되돌린다) ----------
+  // 가장 최근 결과만 지운다: 그 뒤에 넣은 결과가 없으니 그 결과에 기대는 경기도 없어서 늘 안전하다.
+  // 여러 번 누르면 최근 것부터 하나씩 되돌아간다
+  async undoLast() {
+    const id = this.history().at(-1);
+    if (!id) return;
+    const ok = await askConfirm(`마지막 경기 결과(${this.undoLabel(id)})를 취소할까요?\n그 경기를 다시 할 수 있어요.`, { ok: '결과 취소', danger: true });
+    // 창이 열린 사이에 화면이나 기록이 바뀌었으면 그만둔다
+    if (!ok || game.state !== 'bracket' || this.history().at(-1) !== id) return;
+    try {
+      const contest = this.isLeague()
+        ? { league: League.undoResult(this.data.league, id) }
+        : { bracket: Bracket.undoResult(this.data.bracket, id) };
+      this.set({ ...this.data, ...contest, history: this.history().slice(0, -1), last: null, current: null });
+    } catch (err) {
+      reportError(err);
+      return;
+    }
+    Sound.tick();
+    this.showBracket();
+  },
+  // 확인 창에 쓸 경기 이름: '8강 1경기 · 가 vs 나' / '리그전 3경기 · 가 vs 나'
+  undoLabel(id) {
+    const m = this.findMatch(id);
+    if (!m) return id;
+    const what = this.isLeague() ? `리그전 ${m.index + 1}경기` : Bracket.matchLabel(this.data.bracket, m);
+    return `${what} · ${this.name(m.a)} vs ${this.name(m.b)}`;
   },
 
   // ---------- 경기 결과 화면 (game.js 의 2인 대결 결과 화면 안에서 부른다) ----------
@@ -673,8 +713,7 @@ function drawBracketFooter(L, tour, next) {
   const ready = game.resultTime > TOURNAMENT.lock;
   if (!next) {
     text('모든 경기가 끝났어요!', cx, fy + U * 3, U * 4.4, '#ffe14a');
-    button('우승 발표 ▶', cx - U * 20, by, U * 36, U * 8.5, () => tour.showChampion(), ready, true);
-    button('새 대회', cx + U * 20, by, U * 36, U * 8.5, () => tour.startOver(), ready);
+    drawContestButtons(tour, { results: t.results, by, ready, finished: true, main: ['우승 발표 ▶', () => tour.showChampion()] });
     return;
   }
   text(`다음 경기  ·  ${Bracket.matchLabel(t, next)}`, cx, fy, U * 3.2, '#ffcf5a');
@@ -682,9 +721,24 @@ function drawBracketFooter(L, tour, next) {
   text(a, cx - U * 6, fy + U * 5.5, fitTextSize(a, size, W * 0.4), PLAYER_COLORS[0], 'right');
   text('VS', cx, fy + U * 5.5, size, '#ff8a3a');
   text(b, cx + U * 6, fy + U * 5.5, fitTextSize(b, size, W * 0.4), PLAYER_COLORS[1], 'left');
-  if (Object.keys(t.results).length === 0) button('대진 다시 섞기', cx - U * 40, by, U * 32, U * 8.5, () => tour.reshuffle(), ready);
-  button('경기 시작 ▶', cx, by, U * 40, U * 8.5, () => tour.startNext(), ready, true);
-  button('새 대회', cx + U * 40, by, U * 32, U * 8.5, () => tour.startOver(), ready);
+  drawContestButtons(tour, { results: t.results, by, ready, finished: false, main: ['경기 시작 ▶', () => tour.startNext()] });
+}
+
+// 대진표·순위표(league.js) 맨 아래 버튼 줄: [왼쪽 칸] [가운데 큰 버튼 main: [글자, 할 일]] [새 대회]
+//   왼쪽 칸: 첫 경기 전에는 '대진 다시 섞기', 결과를 넣은 뒤로는 '결과 취소' (둘이 함께 나오지 않는다)
+//   다 끝났는데 왼쪽 칸이 비면(취소 기록이 없는 예전 저장본) 두 버튼만 넓게
+function drawContestButtons(tour, { results, by, ready, finished, main }) {
+  const cx = W / 2, h = U * 8.5;
+  const left = Object.keys(results).length === 0 ? ['대진 다시 섞기', () => tour.reshuffle()]
+    : tour.history().length ? ['결과 취소', () => tour.undoLast()] : null;
+  if (finished && !left) {
+    button(main[0], cx - U * 20, by, U * 36, h, main[1], ready, true);
+    button('새 대회', cx + U * 20, by, U * 36, h, () => tour.startOver(), ready);
+    return;
+  }
+  if (left) button(left[0], cx - U * 40, by, U * 32, h, left[1], ready);
+  button(main[0], cx, by, U * 40, h, main[1], ready, true);
+  button('새 대회', cx + U * 40, by, U * 32, h, () => tour.startOver(), ready);
 }
 
 function drawBracketScreen(tour, time) {

@@ -19,14 +19,51 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
 ]);
 
-// 설정·총 보정은 앱 이름과 상관없이 늘 이 폴더에 저장한다 (예전 '조준점 있음/없음' 두 버전도 이 폴더를 써서 그대로 이어진다)
-app.setPath('userData', path.join(app.getPath('appData'), '가스트 사격'));
+// 설정·총 보정·명단은 앱 이름(윈도우 '가스트 사격 3', 맥 'Ghast Shooting 3')과 상관없이 늘 이 폴더에 저장한다.
+// v3 는 운영 중인 v2.2.7('가스트 사격' 폴더)과 따로 저장해서, 두 앱을 같이 깔아도 서로 설정을 덮어쓰지 않는다.
+// (같은 프로그램 두 번 켜기 막기도 이 폴더 기준이라 아래 requestSingleInstanceLock 보다 먼저 정해야 한다)
+app.setPath('userData', path.join(app.getPath('appData'), '가스트 사격 3'));
 
-// 같은 프로그램을 두 번 켜면 새 창 대신 이미 켜진 창을 앞으로
-if (!app.requestSingleInstanceLock()) app.quit();
+// 같은 프로그램을 두 번 켜면 새 창 대신 이미 켜진 창을 앞으로 (아래 'second-instance').
+// 두 번째로 켠 쪽은 app.quit() 만으로는 아래 코드(창 만들기 등)가 계속 돌아서 바로 끝낸다
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  process.exit(0);
+}
 
 const root = path.join(__dirname, '..');
 let win = null;
+
+const REFOCUS_DELAY_MS = 300;        // 전체화면에서 포커스를 뺏기면 이만큼 뒤에 게임 창으로 되돌린다
+const CRASH_RELOAD_LIMIT = 3;        // 화면이 죽어서 다시 여는 것은 1분에 이만큼까지 (계속 죽는 고장이면 멈춘다)
+const CRASH_RELOAD_WINDOW_MS = 60_000;
+let crashReloads = [];               // 최근에 다시 연 시각들
+
+// 화면(렌더러)이 죽으면(그래픽 고장·메모리 부족 등) 저절로 다시 연다.
+// 대회 진행 상황·설정은 localStorage 에 있어서 다시 열어도 이어진다
+function reloadAfterCrash(details) {
+  console.error('[가스트 사격] 화면 프로세스가 멈춤:', details.reason, details.exitCode);
+  if (!win || win.isDestroyed() || details.reason === 'clean-exit') return;
+  const now = Date.now();
+  crashReloads = [...crashReloads.filter((t) => now - t < CRASH_RELOAD_WINDOW_MS), now];
+  if (crashReloads.length > CRASH_RELOAD_LIMIT) {
+    console.error('[가스트 사격] 1분 안에 너무 자주 멈춰서 다시 열지 않습니다');
+    return;
+  }
+  win.reload();
+}
+
+// 전체화면일 때 운영체제 알림 창 등이 포커스를 가져가면 잠시 뒤 게임 창으로 되돌린다.
+// 게임 창이 포커스를 잃으면 게임패드(조이스틱 모드) 총 입력이 먹통이 되기 때문.
+// 게임이 직접 연 창(명단 파일 고르기·알림 창)이 떠 있는 동안은 창이 '사용 안 함'(isEnabled false)이라 건드리지 않는다
+function refocusIfFullScreen() {
+  setTimeout(() => {
+    if (!win || win.isDestroyed() || win.isFocused() || win.isMinimized()) return;
+    if (!win.isEnabled() || !isFull()) return;
+    if (isMac) app.focus({ steal: true });
+    win.focus();
+  }, REFOCUS_DELAY_MS);
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -35,7 +72,7 @@ function createWindow() {
     fullscreen: !isMac,        // 켜자마자 프로젝터에 꽉 차게 (맥은 아래에서 setFull 로)
     backgroundColor: '#140303',
     autoHideMenuBar: true,
-    title: '가스트 사격',
+    title: '가스트 사격 3',
     icon: path.join(__dirname, 'icon.png'),
     webPreferences: {
       backgroundThrottling: false,
@@ -54,6 +91,8 @@ function createWindow() {
   const openOutside = (url) => { if (/^https?:\/\//i.test(url)) shell.openExternal(url); };
   win.webContents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith('app://')) { e.preventDefault(); openOutside(url); } });
+  win.webContents.on('render-process-gone', (e, details) => reloadAfterCrash(details));
+  win.on('blur', refocusIfFullScreen);
 }
 
 // 맥은 '단순 전체화면'(simpleFullScreen)을 쓴다.
@@ -89,8 +128,15 @@ app.whenReady().then(() => {
   // (맥북은 배터리로 쓰면 기본 2분 만에 화면이 꺼진다)
   powerSaveBlocker.start('prevent-display-sleep');
   // app://ghast/… → 프로그램 안 게임 파일. 게임 폴더 밖은 열지 않는다
+  // '.' 으로 시작하는 이름(.git·.github·.env 같은 숨김 파일·폴더, '..')이 경로에 하나라도 있으면 없는 파일로 답한다
   protocol.handle('app', (req) => {
-    const rel = decodeURIComponent(new URL(req.url).pathname).replace(/^\/+/, '') || 'index.html';
+    let rel;
+    try {
+      rel = decodeURIComponent(new URL(req.url).pathname).replace(/^\/+/, '') || 'index.html';
+    } catch {
+      return new Response('bad request', { status: 400 });
+    }
+    if (rel.split(/[\\/]/).some((seg) => seg.startsWith('.'))) return new Response('not found', { status: 404 });
     const file = path.normalize(path.join(root, rel));
     if (!file.startsWith(root + path.sep)) return new Response('forbidden', { status: 403 });
     return net.fetch(pathToFileURL(file).toString());

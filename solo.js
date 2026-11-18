@@ -79,7 +79,7 @@ const SoloReady = {
 function soloLayout() {
   const cw = Math.min(W - U * 8, U * 150);
   const gap = U * 3;
-  const guideW = cw * 0.58;
+  const guideW = cw * 0.64; // 점수 안내 칸을 넓혀 가스트 이름이 줄어들지 않게
   const top = U * 27;
   const nameY = Math.min(H - U * 21, top + U * RULES_PANEL_H + U * 9);
   return {
@@ -133,7 +133,7 @@ function drawSoloRanking(x, y, w, h) {
     text('첫 기록의 주인공이 되어 보세요!', cx, listTop + rowH * 5, U * 3, '#ffe14a');
     return;
   }
-  const size = Math.min(rowH * 0.62, U * 3);
+  const size = Math.min(rowH * 0.8, U * 3.2); // 3m 거리에서도 읽히게 (예전 2.1U)
   v.rows.forEach((r, i) => {
     const ry = listTop + rowH * (i + 0.5);
     if (i % 2 === 0) { ctx.fillStyle = 'rgba(255, 220, 190, 0.05)'; ctx.fillRect(x + U * 2, ry - rowH / 2, w - U * 4, rowH); }
@@ -164,7 +164,7 @@ function drawSoloName(cx, y) {
   const ix = x0 + labelW + gap;
   placeSoloInput(ix, y - h / 2, inputW, h);
   button('다른 이름', ix + inputW + gap + btnW / 2, y, btnW, h, () => SoloReady.reroll());
-  text('게임이 끝나면 랭킹에 남길 이름을 총으로 다시 고를 수 있어요', cx, y + h / 2 + U * 2.4, U * 2.2, '#c9a89a');
+  text('게임이 끝나면 랭킹에 남길 이름을 총으로 다시 고를 수 있어요', cx, y + h / 2 + U * 2.6, U * 2.8, '#c9a89a');
 }
 
 function drawSoloButtons(cx, y, time) {

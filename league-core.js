@@ -131,6 +131,13 @@
     return { ...lg, results: { ...lg.results, [id]: { scores: clean } } };
   }
 
+  // 결과 취소: 그 경기 결과만 뺀 새 리그 (그 경기를 다시 할 수 있다)
+  function undoResult(lg, id) {
+    if (!Object.hasOwn(lg.results, id)) throw new Error('결과가 없는 경기라 취소할 수 없어요');
+    const { [id]: _removed, ...rest } = lg.results;
+    return { ...lg, results: rest };
+  }
+
   // 순위표: 점수 합계 → 최고 한 판 → 공동 순위. 아직 경기 안 한 사람도 0점으로 넣는다
   function standings(lg) {
     const empty = lg.players.map((p) => ({ id: p.id, name: p.name, played: 0, total: 0, best: 0, wins: 0, draws: 0, losses: 0 }));
@@ -183,7 +190,7 @@
 
   return {
     MIN_PLAYERS, MAX_PLAYERS, DEFAULT_GAMES,
-    checkGames, createLeague, reshuffle, matches, nextMatch, findMatch, recordResult,
+    checkGames, createLeague, reshuffle, matches, nextMatch, findMatch, recordResult, undoResult,
     isFinished, standings, matchLabel, playerName, isValid,
   };
 });

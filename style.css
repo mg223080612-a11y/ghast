@@ -36,6 +36,7 @@ html, body {
   display: block;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
 }
 #bg { z-index: 0; pointer-events: none; }
 #game {
@@ -166,9 +167,9 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
 #name-form.versus input[name="nickname2"] { border-color: #ff7ad9; }
 #name-form .hint { margin: 12px 0 0; font-size: 16px; opacity: 0.8; }
 #name-form .hint.error { color: #ff8a7a; opacity: 1; }
-#name-form .actions { display: flex; justify-content: center; gap: 12px; margin-top: 18px; }
+#name-form .actions { display: flex; justify-content: center; gap: clamp(16px, 2vw, 40px); margin-top: 18px; }
 #name-form button { font-size: 22px; padding: 12px 28px; white-space: nowrap; }
-#name-form .actions button { font-size: 18px; padding: 8px 22px; }
+#name-form .actions button { font-size: clamp(18px, 1.5vw, 32px); padding: 0.45em 1.2em; }
 #name-form .field-label { margin: 16px 0 -8px; font-size: 15px; opacity: 0.75; }
 /* 게임 시작: 창 너비 가득, 글자 크게, 천천히 빛남 */
 #name-form .start-btn {
@@ -296,16 +297,17 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
 }
 #confirm-overlay[hidden] { display: none; }
 #confirm-overlay .confirm-box {
-  width: min(640px, calc(100vw - 32px));
+  width: min(max(640px, 46vw), calc(100vw - 32px));
   background: var(--panel);
   border: 4px solid var(--line);
   padding: 28px 30px 24px;
   box-sizing: border-box;
   text-align: center;
 }
-#confirm-overlay #confirm-msg { margin: 0 0 22px; font-size: 24px; line-height: 1.5; white-space: pre-line; color: #ffe9d0; }
-#confirm-overlay .actions { display: flex; justify-content: center; gap: 14px; }
-#confirm-overlay .actions button { font-size: 22px; padding: 12px 30px; min-width: 150px; }
+#confirm-overlay #confirm-msg { margin: 0 0 22px; font-size: clamp(24px, 1.8vw, 38px); line-height: 1.5; white-space: pre-line; color: #ffe9d0; }
+#confirm-overlay .actions { display: flex; justify-content: center; gap: clamp(28px, 4vw, 80px); }
+#confirm-overlay .actions button { font-size: clamp(22px, 1.9vw, 40px); padding: 0.55em 1.3em; min-width: 7.5em; }
+#confirm-overlay .actions button:focus-visible { outline: 4px solid #ffe14a; outline-offset: 4px; }
 #confirm-overlay .actions button[hidden] { display: none; }
 #confirm-overlay #confirm-ok.danger { background: #9a2a1e; box-shadow: inset 2px 2px 0 #d0503e, inset -2px -2px 0 #561510; }
 
@@ -339,8 +341,8 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
 }
 
 /* 난이도 버튼 (닉네임 창·토너먼트 창): 고른 것만 색이 들어간다 */
-.diff-row { display: flex; justify-content: center; gap: 10px; margin-top: 18px; }
-.diff-row .diff-btn { font-size: 20px; padding: 8px 22px; min-width: 120px; }
+.diff-row { display: flex; justify-content: center; gap: clamp(12px, 1.4vw, 28px); margin-top: 18px; }
+.diff-row .diff-btn { font-size: clamp(20px, 1.6vw, 34px); padding: 0.4em 1.1em; min-width: 6em; }
 .diff-row .diff-btn.on[data-diff="easy"] { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset -2px -2px 0 #24461a; }
 .diff-row .diff-btn.on[data-diff="normal"] { background: #a07a10; box-shadow: inset 2px 2px 0 #d8b030, inset -2px -2px 0 #5e4508; }
 .diff-row .diff-btn.on[data-diff="hard"] { background: #9a2a1e; box-shadow: inset 2px 2px 0 #d0503e, inset -2px -2px 0 #561510; }
@@ -367,3 +369,9 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
 #gun-cursor::before { left: 50%; top: 8px; bottom: 8px; width: 4px; margin-left: -2px; }
 #gun-cursor::after { top: 50%; left: 8px; right: 8px; height: 4px; margin-top: -2px; }
 #gun-cursor[hidden] { display: none; }
+
+/* 선택된 버튼은 색뿐 아니라 금색 테두리로도 (밝은 교실 프로젝터에서 초록·회색 밝기가 거의 같아 구분이 어려움) */
+.diff-btn.on, .kind-btn.on, #name-aim.on {
+  outline: 3px solid #ffe14a;
+  outline-offset: 2px;
+}

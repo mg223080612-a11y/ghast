@@ -8,6 +8,16 @@ test('한 줄에 한 이름: 빈 줄·앞뒤 공백은 버린다', () => {
   assert.deepEqual(R.parseRoster('판다\n\n  여우 \r\n토끼\n'), ['판다', '여우', '토끼']);
 });
 
+test('안 보이는 글자(폭 없는 공백·글자 방향 표시·BOM)는 지우고, 그것만 있는 이름은 버린다', () => {
+  const invisible = '​‍‏‪‮⁠⁤⁦⁩﻿';
+  assert.deepEqual(R.parseRoster(`판​다\n${invisible}\n‮여우⁩\n`), ['판다', '여우']);
+  assert.throws(() => R.parseRoster(`${invisible}\n​`), /이름이 없어요/);
+  assert.deepEqual(
+    R.sanitizeRosters([{ title: '​', names: ['판다'] }, { title: '반', names: [invisible, '토﻿끼'] }]),
+    [{ title: '반', names: ['토끼'] }],
+  );
+});
+
 test('엑셀 CSV: 첫 줄의 "이름" 칸만 읽고, 맨 앞 BOM 도 지운다', () => {
   const csv = '﻿번호,학년,이름,성별\r\n1,초6,판다,여\r\n2,중2,여우,남\r\n';
   assert.deepEqual(R.parseRoster(csv), ['판다', '여우']);

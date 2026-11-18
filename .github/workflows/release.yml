@@ -58,6 +58,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # 테스트가 하나라도 실패하면 프로그램을 만들지 않는다
+      - run: npm test
       - run: npm run ${{ matrix.script }}
       - uses: actions/upload-artifact@v4
         with:

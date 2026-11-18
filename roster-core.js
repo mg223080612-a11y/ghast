@@ -15,7 +15,9 @@
   // '이름', '학생 이름', '이름(한글)', '성명', 'name', '닉네임'
   const NAME_HEADER = /이름|성명|^name$|^닉네임$/i;
 
-  const cleanCell = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  // 제어문자와 안 보이는 글자(폭 없는 공백·글자 방향 표시·BOM 등)를 지운다 → 이것만으로 된 이름은 빈 이름이 되어 빠진다
+  const INVISIBLE = /[\u0000-\u001f\u007f​-‏‪-‮⁠-⁤⁦-⁩﻿]/g;
+  const cleanCell = (s) => String(s ?? '').replace(INVISIBLE, '').trim();
   const cleanName = (s) => cleanCell(s).slice(0, MAX_NAME);
 
   // 글 → 줄마다 칸 배열. 탭이 있으면 탭(엑셀 복사), 아니면 쉼표(CSV)로 나눈다.

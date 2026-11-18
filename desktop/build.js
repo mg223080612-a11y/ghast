@@ -9,7 +9,8 @@ const base = require('../package.json').build;
 //   electron-builder 는 Helper 앱 파일 이름의 한글을 NFD(자모를 풀어 쓴 형태)로 만드는데,
 //   Electron 은 Helper 를 Info.plist 의 앱 이름(NFC 한글)으로 찾아서 둘이 어긋난다.
 //   게임 안 이름(메뉴의 '…종료' 등)은 package.json 의 한글 이름(productName)이 그대로 쓰인다.
-const MAC_NAME = 'Ghast Shooting';
+// v3 는 'Ghast Shooting 3' — 운영 중인 v2.2.7 의 'Ghast Shooting.app' 을 덮어쓰지 않고 옆에 따로 설치된다
+const MAC_NAME = 'Ghast Shooting 3';
 
 (async () => {
   const mac = process.argv.includes('mac');

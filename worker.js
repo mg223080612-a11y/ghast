@@ -37,8 +37,10 @@ const json = (status, body) => new Response(JSON.stringify(body), {
   headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...CORS },
 });
 
-// 닉네임 정리: 앞뒤 공백·제어문자 제거, 최대 12자
-const cleanName = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 12);
+// 닉네임 정리: 앞뒤 공백·제어문자·안 보이는 글자(폭 없는 공백·글자 방향 표시·BOM 등) 제거, 최대 12자
+// (안 보이는 글자만으로 된 닉네임은 빈 이름이 되어 거절된다. roster-core.js 의 cleanCell 과 같은 글자)
+const INVISIBLE = /[\u0000-\u001f\u007f​-‏‪-‮⁠-⁤⁦-⁩﻿]/g;
+const cleanName = (s) => String(s ?? '').replace(INVISIBLE, '').trim().slice(0, 12);
 const toInt = (v, min, max, fallback = min) => {
   // 값이 없으면(null·빈 문자열) 기본값. Number(null) 은 0 이라 예전에는 limit·until 을 안 보내면 1 이 되었다.
   if (v == null || v === '') return fallback;
