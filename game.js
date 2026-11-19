@@ -1666,35 +1666,8 @@ function isDuplicateTap(x, y, now) {
   return dup;
 }
 
-// ---------- 연사 차단 ----------
-// 엑스거너의 연사(Rapid Fire)는 방아쇠 한 번에 클릭을 사람 손으로는 불가능한 속도로 여러 번 보낸다.
-// 총(입력)마다 클릭 간격을 보고, 기계처럼 빠른 클릭은 아무 표시 없이 조용히 버린다.
-//  · 0.08초 안에 또 들어온 클릭 → 연사
-//  · 0.14초 안쪽 간격으로 세 번째가 들어오면 → 연사
-//  연사가 감지되면 그 총은 1.5초 동안 잠긴다. 잠긴 동안 또 기계처럼 빠른 클릭이 오면(연사를 계속 당김)
-//  잠금이 계속 늘어나 한 발도 들어가지 않는다. 연사를 끄고 보통 속도로 쏘면 잠금이 늘지 않아 곧 다시 쏠 수 있다.
-//  사람이 빠르게 연타하는 정도(0.15초 이상 간격)는 처음부터 연사로 보지 않는다.
-const RAPID_MIN_GAP = 80, RAPID_STREAK_GAP = 140, RAPID_LOCK = 1500;
-const fireGate = new Map(); // 입력 장치(마우스·총마다) → { last, quick, lockUntil }
-function allowShot(source, now) {
-  let s = fireGate.get(source);
-  if (!s) { s = { last: -1e9, quick: 0, lockUntil: 0 }; fireGate.set(source, s); }
-  const gap = now - s.last;
-  s.last = now;
-  const machineFast = gap < RAPID_STREAK_GAP;
-  if (now < s.lockUntil) {
-    if (machineFast) s.lockUntil = now + RAPID_LOCK; // 연사를 계속 쓰는 중 → 잠금 연장
-    return false;
-  }
-  if (gap < RAPID_MIN_GAP) { s.lockUntil = now + RAPID_LOCK; s.quick = 0; return false; }
-  if (machineFast) {
-    s.quick++;
-    if (s.quick >= 2) { s.lockUntil = now + RAPID_LOCK; s.quick = 0; return false; }
-  } else {
-    s.quick = 0;
-  }
-  return true;
-}
+// 연사: 방아쇠 간격으로 연사를 판정해 잠그던 차단은 삭제했다 (교사 결정). 들어온 발은 모두 인정한다.
+//   연사는 총에서 끈다 (총의 연사 스위치·단축키)
 
 // 총으로 오른쪽 위 버튼을 누를 수 있는 화면. 게임 중(오른쪽 아래 '처음 화면')과 이름 쏘기 판은 빗나간 총알이
 // 판을 멈추지 않게 빼 둔다
@@ -1726,14 +1699,13 @@ function clickSettingsByGun(x, y) {
 
 let buttons = [];
 // who: 쏜 사람 (0 = 1P, 1 = 2P). 마우스·1인 기록전은 항상 1P
-// source: 어느 입력 장치에서 왔는지 (연사 차단을 장치마다 따로 하려고)
+// source: 어느 입력 장치에서 왔는지 ('mouse' · 'pad:…' 조이스틱 모드 총 · 터치)
 function onTap(x, y, who = 0, source = 'mouse') {
   // 설정 창이 열려 있으면 총알이 창 뒤의 화면(처음 화면 버튼 등)을 누르지 않게 한다.
   // 마우스는 창이 막아 주지만, 조이스틱 모드 총은 창과 상관없이 여기로 들어온다
   noteInput();
   const now = performance.now();
   if (isDuplicateTap(x, y, now)) return;
-  if (!allowShot(source, now)) return; // 연사: 조용히 무시 (점수·감점·소리·표시 없음)
   Sound.init();
   // 설정 창이 열려 있으면 총알은 창 안만 누른다 (창 뒤의 처음 화면 버튼 등은 누르지 않는다).
   // 마우스는 창이 직접 받고, 조이스틱 모드 총만 여기로 온다. 확인 창이 떠 있으면 그 창의 버튼만
@@ -2048,7 +2020,7 @@ const Guns = {
     Sound.init();
     // 조준 보정 중: 보정하는 총의 방아쇠만 받는다 (다른 총·다른 버튼은 무시)
     if (this.calib) {
-      if (s.key === this.calib.key && i === this.triggerOf(s) && allowShot(`pad:${s.key}`, performance.now())) recordCalibShot(s);
+      if (s.key === this.calib.key && i === this.triggerOf(s)) recordCalibShot(s);
       return;
     }
     // 총 연결 화면: 방아쇠를 당긴 총을 지금 자리(1P/2P)에, 그 버튼을 방아쇠로 기억
