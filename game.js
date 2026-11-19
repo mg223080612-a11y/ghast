@@ -1535,9 +1535,15 @@ function saveSoloRecord() {
   // 1인 기록전은 끝나자마자 오늘 랭킹을 보여 준다 (저장이 끝나면 내 기록이 들어간 순위로 다시 불러온다)
   rankView.scope = 'today';
   openRanking();
+  // 공개 웹판에서 점수에 영향을 주는 설정(제한 시간·보너스·감점 등)을 바꾼 판은 랭킹에 올리지 않는다
+  const changed = isPublicWeb() ? RankRules.changedRules(settings, DEFAULTS) : [];
+  if (changed.length) {
+    game.rankInfo = { status: 'rejected', reason: '설정(규칙)을 바꾼 판은 올리지 않아요 — 설정 창 [기본값]으로 되돌리면 올라가요' };
+    return;
+  }
   const gameId = rules().game; // 난이도마다 랭킹이 따로
   Promise.resolve(game.playToken)
-    .then((token) => Ranking.add({ name: me.name || '이름없음', score: me.score, kills: me.stats.kills, token, game: gameId }))
+    .then((token) => Ranking.add({ name: me.name || '이름없음', score: me.score, kills: me.stats.kills, token, game: gameId, stats: soloStats(me) }))
     .then((r) => {
       if (r.rejected) { game.rankInfo = { status: 'rejected', reason: r.rejected }; return; }
       game.rankInfo = { status: 'saved', ...r };
@@ -1545,6 +1551,24 @@ function saveSoloRecord() {
     })
     .catch((err) => { console.error(err); game.rankInfo = { status: 'error' }; })
     .finally(() => { if (game.state === 'ranking' && game.rankFrom === 'result') setRankScope(rankView.scope); });
+}
+
+// 공개 웹판(사이트에서 연 게임). 앱·이 PC 의 로컬 서버(serve.cjs)·파일로 연 게임은 행사용이라 아니다
+const isPublicWeb = () => !APP_VERSION && location.protocol.startsWith('http') && !['localhost', '127.0.0.1'].includes(location.hostname);
+// 랭킹과 함께 보내는 익명 경기 기록 (밸런스 조정용, 이름 없음 — 서버 rank-rules.js cleanStats 가 정리)
+function soloStats(me) {
+  return {
+    seconds: game.elapsed,
+    shots: me.stats.shots,
+    kills: me.stats.kills,
+    deflects: me.stats.deflects,
+    hitsTaken: me.stats.hitsTaken,
+    misses: me.stats.misses,
+    escapes: me.stats.escapes,
+    level: game.level,
+    input: settings.inputMode === 'touch' ? 'touch' : 'gun',
+    client: APP_VERSION ? `app ${APP_VERSION}` : 'web',
+  };
 }
 
 // 2인 대결에서 각 플레이어를 구분하는 색 (조준점·점수판·점수 팝업)

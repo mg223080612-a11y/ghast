@@ -37,10 +37,10 @@ const json = (status, body) => new Response(JSON.stringify(body), {
   headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...CORS },
 });
 
-// 닉네임 정리: 앞뒤 공백·제어문자·안 보이는 글자(폭 없는 공백·글자 방향 표시·BOM 등) 제거, 최대 12자
-// (안 보이는 글자만으로 된 닉네임은 빈 이름이 되어 거절된다. roster-core.js 의 cleanCell 과 같은 글자)
-const INVISIBLE = /[\u0000-\u001f\u007f​-‏‪-‮⁠-⁤⁦-⁩﻿]/g;
-const cleanName = (s) => String(s ?? '').replace(INVISIBLE, '').trim().slice(0, 12);
+// 닉네임 정리·점수 상한·익명 경기 기록 정리는 rank-rules.js (게임과 같은 파일, 테스트 있음).
+// 안 보이는 글자만으로 된 닉네임은 빈 이름이 되어 거절된다
+import RankRules from './rank-rules.js';
+const { cleanName } = RankRules;
 const toInt = (v, min, max, fallback = min) => {
   // 값이 없으면(null·빈 문자열) 기본값. Number(null) 은 0 이라 예전에는 limit·until 을 안 보내면 1 이 되었다.
   if (v == null || v === '') return fallback;
@@ -93,10 +93,19 @@ async function readPlayToken(env, token) {
   for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ m[4].charCodeAt(i);
   return diff === 0 ? { t: Number(m[1]), nonce: m[2], game: m[3] || DEFAULT_GAME } : null;
 }
-async function limited(env, key) {
-  if (!env.SAVE_LIMITER) return false;
-  const { success } = await env.SAVE_LIMITER.limit({ key });
+async function limited(env, key, limiter = env.SAVE_LIMITER) {
+  if (!limiter) return false;
+  const { success } = await limiter.limit({ key });
   return !success;
+}
+
+// 1인 기록전 익명 경기 기록 (밸런스 조정용, migrations/0003_plays.sql). 이름·IP 는 남기지 않고,
+// 시각은 1시간 단위로 내려 랭킹 기록(scores)과 바로 이어지지 않게 한다
+function playInsert(db, game, createdAt, score, s) {
+  return db
+    .prepare(`INSERT INTO plays (game, created_at, score, seconds, shots, kills, deflects, hits_taken, misses, escapes, level, input, client)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(game, RankRules.playHour(createdAt), score, s.seconds, s.shots, s.kills, s.deflects, s.hits_taken, s.misses, s.escapes, s.level, s.input, s.client);
 }
 
 async function handle(request, env, url) {
@@ -156,24 +165,38 @@ async function handle(request, env, url) {
 
     // 게임 시작 표 확인: 서명 → 시간 → 점수가 말이 되는지 → 한 번만
     // (PLAY_SECRET 시크릿을 넣기 전에는 검사하지 않고 예전처럼 받는다. 넣는 순간부터 가짜 기록이 막힌다)
+    // 점수 상한은 '표를 받은 뒤 걸린 시간'이지만 한 판 최대 길이(limits.json maxPlaySec)를 넘지 않는다
+    //   (미리 받아 둔 표를 며칠 묵혀 큰 점수를 올리지 못하게)
+    let nonce = null;
+    let maxSeconds; // 표를 받은 뒤 지난 시간(초) — 익명 기록의 판 길이 상한
     if (env.PLAY_SECRET) {
       const play = await readPlayToken(env, body.token);
       if (!play) return json(403, { error: '게임에서 나온 기록이 아니에요' });
       if (play.game !== game) return json(403, { error: '다른 게임의 표예요' });
       const playedMs = Math.min(createdAt, now) - play.t;
       if (playedMs < PLAY_MIN_MS || play.t < now - PLAY_MAX_AGE) return json(403, { error: '게임 시간이 맞지 않아요' });
-      const sec = lim.maxPlaySec ? Math.min(playedMs / 1000, lim.maxPlaySec) : playedMs / 1000;
-      if (score > lim.baseAllow + sec * lim.pointsPerSec || kills > lim.baseKills + sec * lim.killsPerSec) {
-        return json(403, { error: '게임 시간에 비해 점수가 너무 높아요' });
-      }
-      const used = await db.prepare('INSERT OR IGNORE INTO used_tokens (nonce, used_at) VALUES (?, ?)').bind(play.nonce, now).run();
-      if (!used.meta.changes) return json(409, { error: '이미 올린 기록이에요' });
+      const cap = RankRules.scoreLimit(lim, playedMs);
+      if (score > cap.maxScore || kills > cap.maxKills) return json(403, { error: '게임 시간에 비해 점수가 너무 높아요' });
+      nonce = play.nonce;
+      maxSeconds = playedMs / 1000;
     }
 
-    const { meta } = await db
-      .prepare('INSERT INTO scores (name, score, kills, created_at, game) VALUES (?, ?, ?, ?, ?)')
-      .bind(name, score, kills, createdAt, game)
-      .run();
+    // 표 사용 · 기록 · 익명 경기 기록을 한 번에 (batch = 하나의 트랜잭션).
+    // 이미 쓴 표면 첫 줄이 PRIMARY KEY 충돌로 실패하고 전체가 되돌아간다 → 표만 쓰이고 기록이 사라지는 일이 없다
+    const stats = RankRules.cleanStats(body.stats, { kills, maxSeconds });
+    const steps = [
+      ...(nonce ? [db.prepare('INSERT INTO used_tokens (nonce, used_at) VALUES (?, ?)').bind(nonce, now)] : []),
+      db.prepare('INSERT INTO scores (name, score, kills, created_at, game) VALUES (?, ?, ?, ?, ?)').bind(name, score, kills, createdAt, game),
+      ...(stats ? [playInsert(db, game, createdAt, score, stats)] : []),
+    ];
+    let saved;
+    try {
+      saved = await db.batch(steps);
+    } catch (err) {
+      if (nonce && /UNIQUE constraint failed: used_tokens/i.test(String(err?.message))) return json(409, { error: '이미 올린 기록이에요' });
+      throw err;
+    }
+    const meta = saved[nonce ? 1 : 0].meta;
     // 같은 게임에서 나보다 점수가 높은 기록 수 + 1 = 내 순위
     const rankStmt = db.prepare('SELECT COUNT(*) AS n FROM scores WHERE game = ? AND created_at >= ? AND score > ?');
     const [today, all] = await db.batch([rankStmt.bind(game, since, score), rankStmt.bind(game, 0, score)]);
@@ -185,6 +208,8 @@ async function handle(request, env, url) {
   }
 
   if (request.method === 'DELETE' && url.pathname.startsWith('/api/scores')) {
+    // 관리자 키 맞히기 시도를 막는다: 같은 곳(IP)에서 1분에 20번까지 (관리자가 기록을 하나씩 지우는 정도는 충분)
+    if (await limited(env, `admin:${ip}`, env.ADMIN_LIMITER)) return json(429, { error: '너무 자주 시도하고 있어요. 1분 뒤 다시 하세요' });
     if (!isAdmin(request, env)) return json(403, { error: '관리자 키가 맞지 않습니다' });
     const m = url.pathname.match(/^\/api\/scores\/(\d+)$/);
     if (m) {

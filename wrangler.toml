@@ -26,6 +26,15 @@ namespace_id = "1001"
   limit = 10
   period = 60
 
+# 관리자 키(기록 삭제) 시도: 같은 IP 에서 1분에 20번까지 (키 맞히기 막기)
+[[ratelimits]]
+name = "ADMIN_LIMITER"
+namespace_id = "1002"
+
+  [ratelimits.simple]
+  limit = 20
+  period = 60
+
 [[d1_databases]]
 binding = "DB"
 database_name = "ghast-db"

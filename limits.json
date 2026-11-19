@@ -1,7 +1,7 @@
 {
-  "ghast":     { "pointsPerSec": 40,  "killsPerSec": 12, "baseAllow": 100, "baseKills": 20, "maxPlaySec": null },
-  "ghasteasy": { "pointsPerSec": 40,  "killsPerSec": 12, "baseAllow": 100, "baseKills": 20, "maxPlaySec": null },
-  "ghasthard": { "pointsPerSec": 40,  "killsPerSec": 12, "baseAllow": 100, "baseKills": 20, "maxPlaySec": null },
+  "ghast":     { "pointsPerSec": 40,  "killsPerSec": 12, "baseAllow": 100, "baseKills": 20, "maxPlaySec": 600 },
+  "ghasteasy": { "pointsPerSec": 40,  "killsPerSec": 12, "baseAllow": 100, "baseKills": 20, "maxPlaySec": 600 },
+  "ghasthard": { "pointsPerSec": 40,  "killsPerSec": 12, "baseAllow": 100, "baseKills": 20, "maxPlaySec": 600 },
   "clay":      { "pointsPerSec": 900, "killsPerSec": 3,  "baseAllow": 100, "baseKills": 20, "maxPlaySec": 90 },
   "clay-space":{ "pointsPerSec": 900, "killsPerSec": 3,  "baseAllow": 100, "baseKills": 20, "maxPlaySec": 90 }
 }
