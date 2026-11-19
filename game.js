@@ -46,6 +46,7 @@ const DEFAULTS = {
   quality: 'normal',   // 화질: 'normal' 보통(빠름) / 'light' 가볍게(저사양) / 'sharp' 선명하게(느릴 수 있음)
   showFps: false,      // 왼쪽 아래에 FPS(화면 갱신 속도) 표시
   autoQuality: true,   // 버벅이면 자동으로 화질·효과를 한 단계씩 낮춤
+  gunAutoMode: true,   // 총 모드 자동 전환 (앱만): 마우스 모드로 켜진 엑스거너 총을 게임패드 모드로 (desktop/gun-mode.js)
   fewEffects: false,   // 효과 줄이기: 터지는 조각 적게, 빛 번짐·불티 끄기
   volume: 0.8,         // 효과음 크기
   inputMode: 'gun',    // 'gun' = 라이트건(마우스로 인식) / 'touch' = 프로젝터 터치 센서
@@ -57,6 +58,21 @@ const DEFAULTS = {
 // 기본 규칙이 바뀌면 이름 뒤 숫자를 올려 예전에 저장된 설정을 무시한다
 const SETTINGS_KEY = 'ghast-shooting-settings-v10';
 let settings = loadSettings();
+setTimeout(tellGunAutoMode, 0);
+// 앱이 총에 게임패드 모드 전환을 보냈을 때: 게임 중이 아니면 잠깐 알린다
+// 앱이 알려 주는 수신기·총 상태 (시리얼로 확인 — 꺼진 총은 게임패드로 보이지 않아 게임만으로는 알 수 없다)
+window.ghastApp?.onGunStatus?.((list) => {
+  Guns.serial = { at: performance.now(), list };
+  // 게임패드 신호가 실제로 들어오는 엑스거너 자리(최근 60초 안에 값이 들어옴)를 앱에 알린다 → 앱은 그 총에 모드 전환을 다시 보내지 않는다
+  // (가만히 든 총은 값이 잠깐 안 바뀔 수 있어 넉넉히. 총을 껐다 켜면 앱이 '켜짐'을 보고 바로 다시 바꾼다)
+  const now = performance.now();
+  const ok = Guns.list().filter((s) => s.moved && now - s.lastReport < 60000).map((s) => Guns.receiverSlot(s.id) + 1).filter((n) => n > 0);
+  window.ghastApp?.reportGunsConfirmed?.(ok);
+});
+window.ghastApp?.onGunModeSwitched?.((player) => {
+  if (game.state === 'play' || game.state === 'countdown') return;
+  showBanner(`${player}P 총을 게임패드 모드로 바꾸는 중`, '총이 켜져 있으면 곧 조준점이 나타나요 (안 나타나면 총 전원 확인)', '#9ff6ff', 2.2);
+});
 
 function loadSettings() {
   try {
@@ -71,7 +87,10 @@ function loadSettings() {
 }
 function saveSettings() {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* 저장 불가 환경 */ }
+  tellGunAutoMode();
 }
+// 앱에 '총 모드 자동 전환' 켬/끔을 알린다 (웹 버전에는 없는 기능이라 그냥 지나감)
+function tellGunAutoMode() { window.ghastApp?.setGunAutoMode?.(settings.gunAutoMode !== false); }
 
 // ---------- 작은 도구들 ----------
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -1877,6 +1896,8 @@ const Guns = {
   saved: readJson(GUN_SAVE_KEY, { p1: null, p2: null, trigger: {} }),
   assigning: null, // 총 연결 화면에서 지금 지정 중인 자리 (0 = 1P, 1 = 2P)
   seen: {},        // 이번 실행에서 한 번이라도 잡힌 총(수신기) — 빠졌는지 알리려고
+  serial: null,    // 앱(desktop/gun-mode.js)이 3초마다 알려 주는 수신기 상태 { at, list: [{ player, state }] }
+  serialSeen: {},  // 앱이 한 번이라도 수신기를 본 자리 (빠짐 안내용)
   calib: null,     // 조준 보정 중: { who, key, raw[] }
   message: '',
 
@@ -1909,7 +1930,23 @@ const Guns = {
     if (!s) return this.seen[key] ? 'missing' : 'none';
     return !s.moved && performance.now() - s.connectedAt > 3000 ? 'silent' : 'ok';
   },
+  // 앱이 시리얼로 확인한 상태 (최근 10초 안의 것만). 웹 버전이거나 아직 소식이 없으면 null
+  serialStateOf(who) {
+    const info = this.serial;
+    if (!info || performance.now() - info.at > 10000) return null;
+    const row = info.list.find((r) => r.player === who + 1);
+    if (row) { this.serialSeen[who] = true; return row.state; }
+    return this.serialSeen[who] ? 'missing' : 'none';
+  },
   statusMessage(players = [0, 1]) {
+    const serial = players.map((i) => [i, this.serialStateOf(i)]);
+    if (serial.some(([, st]) => st !== null)) {
+      const pickS = (kind) => serial.filter(([, st]) => st === kind).map(([i]) => `${i + 1}P`).join('·');
+      if (pickS('missing')) return `${pickS('missing')} 총 수신기가 빠졌어요 — 수신기를 다시 꽂으세요`;
+      if (pickS('off')) return `${pickS('off')} 총이 꺼져 있어요 — 총 전원을 켜세요 (켜면 게임패드 모드로 자동 전환)`;
+      if (pickS('mouse')) return `${pickS('mouse')} 총이 게임패드 모드가 아니에요 — 총에서 Space + 5 + 조이스틱 왼쪽을 누르세요`;
+      if (pickS('switching')) return `${pickS('switching')} 총을 게임패드 모드로 바꾸는 중… (총을 한 번 흔들어 주세요)`;
+    }
     const pick = (kind) => players.filter((i) => this.statusOf(i) === kind).map((i) => `${i + 1}P`).join('·');
     const missing = pick('missing'), silent = pick('silent');
     if (missing) return `${missing} 총 수신기가 빠졌어요 — 수신기를 다시 꽂으세요`;
@@ -1980,7 +2017,7 @@ const Guns = {
       if (s.rx !== undefined && Math.hypot(nx - s.rx, ny - s.ry) > 2) { s.lastActive = now; s.moved = true; }
       // 총 상태 확인용: 1초에 위치가 몇 번 바뀌는지 (총이 화면·센서를 잘 보면 움직일 때 50 이상, 못 보면 한 자리 수)
       const axKey = gp.axes[ix] + ',' + gp.axes[iy];
-      if (axKey !== s.axKey) { s.axKey = axKey; s.moves = (s.moves || 0) + 1; }
+      if (axKey !== s.axKey) { s.axKey = axKey; s.moves = (s.moves || 0) + 1; s.lastReport = now; }
       if (!s.rateAt || now - s.rateAt >= 1000) {
         s.rate = s.moves || 0; s.moves = 0; s.rateAt = now;
         s.capRate = s.capMoves || 0; s.capMoves = 0;

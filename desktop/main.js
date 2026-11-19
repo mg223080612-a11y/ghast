@@ -7,6 +7,11 @@
 const { app, BrowserWindow, protocol, net, shell, Menu, ipcMain, session, powerSaveBlocker } = require('electron');
 const path = require('path');
 const { pathToFileURL } = require('url');
+// 엑스거너 총 모드 자동 전환 (시리얼 부품을 못 불러와도 게임은 그대로 켜지게)
+let gunMode = null;
+try { gunMode = require('./gun-mode'); } catch (err) { console.error('[가스트 사격] 총 모드 자동 전환을 쓸 수 없습니다:', err.message); }
+let gunAutoMode = true; // 게임 설정 '총 모드 자동 전환' (game.js 가 알려 줌)
+let gunsConfirmed = new Set(); // 게임에 게임패드 신호가 들어오고 있는 자리 (1·2, game.js 가 알려 줌)
 
 const isMac = process.platform === 'darwin';
 
@@ -100,6 +105,8 @@ function toggleFullScreen() {
 ipcMain.on('toggle-fullscreen', (e) => { if (win && e.sender === win.webContents) toggleFullScreen(); });
 // 앱 버전 (package.json 의 version) → preload.js → 게임 처음 화면 구석의 'v2.0.0'
 ipcMain.on('app-version', (e) => { e.returnValue = app.getVersion(); });
+ipcMain.on('gun-auto-mode', (e, on) => { if (win && e.sender === win.webContents) gunAutoMode = !!on; });
+ipcMain.on('guns-confirmed', (e, list) => { if (win && e.sender === win.webContents && Array.isArray(list)) gunsConfirmed = new Set(list.map(Number)); });
 
 app.whenReady().then(() => {
   // 메뉴 막대는 숨긴다. 맥은 메뉴가 없으면 Cmd+Q(종료)·복사/붙여넣기가 안 돼서 기본 메뉴만 남긴다
@@ -128,6 +135,14 @@ app.whenReady().then(() => {
     return net.fetch(pathToFileURL(file).toString());
   });
   createWindow();
+  // 3초마다 수신기를 확인해 마우스 모드인 총을 게임패드 모드로 (desktop/gun-mode.js)
+  gunMode?.startGunModeWatch({
+    isEnabled: () => gunAutoMode && !!win && !win.isDestroyed(),
+    isConfirmed: (player) => gunsConfirmed.has(player),
+    onSwitch: (player) => { if (win && !win.isDestroyed()) win.webContents.send('gun-mode-switched', player); },
+    onStatus: (list) => { if (win && !win.isDestroyed()) win.webContents.send('gun-status', list); },
+    log: (msg) => console.log(`[가스트 사격] ${msg}`),
+  });
 });
 
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
