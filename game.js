@@ -77,6 +77,7 @@ const DEFAULTS = {
   showFps: false,      // 왼쪽 아래에 FPS(화면 갱신 속도) 표시
   autoQuality: true,   // 버벅이면 자동으로 화질·효과를 한 단계씩 낮춤
   gunAutoMode: true,   // 총 모드 자동 전환 (앱만): 마우스 모드로 켜진 엑스거너 총을 게임패드 모드로 (desktop/gun-mode.js)
+  rapidAutoOff: true,  // 연사 자동 끄기 (앱만, v3.5.0): 켜진 총의 연사를 수신기 COM 포트 명령(XA:0;)으로 끈다 (desktop/gun-mode.js)
   fewEffects: false,   // 효과 줄이기: 터지는 조각 적게, 빛 번짐·불티 끄기
   volume: 0.8,         // 효과음 크기
   inputMode: 'gun',    // 'gun' = 라이트건(마우스로 인식) / 'touch' = 프로젝터 터치 센서
@@ -94,6 +95,7 @@ setTimeout(tellGunAutoMode, 0);
 window.ghastApp?.onGunStatus?.((list) => {
   // 게임 파일(game-guns.js)을 아직 다 읽기 전에 신호가 오면 이번 한 번은 건너뛴다 (3초마다 다시 온다)
   if (typeof Guns === 'undefined') return;
+  noticeRapidStuckOn(list);
   Guns.serial = { at: performance.now(), list };
   // 게임패드 신호가 실제로 들어오는 엑스거너 자리(최근 60초 안에 값이 들어옴)를 앱에 알린다 → 앱은 그 총에 모드 전환을 다시 보내지 않는다
   // (가만히 든 총은 값이 잠깐 안 바뀔 수 있어 넉넉히. 총을 껐다 켜면 앱이 '켜짐'을 보고 바로 다시 바꾼다)
@@ -106,6 +108,30 @@ window.ghastApp?.onGunModeSwitched?.((player) => {
   if (game.state === 'play' || game.state === 'countdown') return;
   showBanner(`${player}P 총을 게임패드 모드로 바꾸는 중`, '총이 켜져 있으면 곧 조준점이 나타나요 (안 나타나면 총 전원 확인)', '#9ff6ff', 2.2);
 });
+// 연사 자동 끄기 알림 (v3.5.0). 경기 중에는 화면을 가리지 않게 작은 글자로, 그 밖에는 안내 띠로
+function noticeRapid(player, title, sub, color) {
+  if (typeof game === 'undefined' || typeof showBanner === 'undefined') return; // 게임 파일을 다 읽기 전 (알림만 건너뜀)
+  const playing = (game.state === 'play' || game.state === 'countdown') && !game.paused;
+  const tint = (typeof PLAYER_COLORS !== 'undefined' && PLAYER_COLORS[player - 1]) || color;
+  if (playing) popupScore(W / 2, H * 0.2, title, tint);
+  else showBanner(title, sub, color, 2.6);
+}
+// 앱이 켜져 있던 총의 연사를 껐을 때
+window.ghastApp?.onRapidOff?.((player) => {
+  noticeRapid(player, `${player}P 총의 연사를 껐어요`, '연사가 켜져 있어 앱이 총에 명령을 보내 껐어요 (한 번 당기면 한 발)', '#9ff6ff');
+});
+// 연사가 켜져 있는데 앱이 끄지 못함 (총이 끄기 명령에 답하지 않음) — '켜짐' 이 처음 보일 때 한 번 알린다
+const rapidLast = {};
+function noticeRapidStuckOn(list) {
+  for (const row of list) {
+    // 잠깐 확인하지 못한 회차(다른 프로그램이 사용 중·멈춤)는 이전 값을 그대로 둔다. 총을 끄면(off) 처음부터
+    if (row.rapid === undefined && row.state !== 'off') continue;
+    if (row.rapid === 'on' && rapidLast[row.player] !== 'on') {
+      noticeRapid(row.player, `${row.player}P 총의 연사가 켜져 있어요`, '앱이 끄지 못했어요 — 총 위쪽 Rapid Fire 스위치를 끄세요', '#ff8a7a');
+    }
+    rapidLast[row.player] = row.rapid;
+  }
+}
 
 function loadSettings() {
   try {
@@ -123,7 +149,11 @@ function saveSettings() {
   tellGunAutoMode();
 }
 // 앱에 '총 모드 자동 전환' 켬/끔을 알린다 (웹 버전에는 없는 기능이라 그냥 지나감)
-function tellGunAutoMode() { window.ghastApp?.setGunAutoMode?.(settings.gunAutoMode !== false); }
+// 같은 때 '연사 자동 끄기' 켬/끔도 알린다
+function tellGunAutoMode() {
+  window.ghastApp?.setGunAutoMode?.(settings.gunAutoMode !== false);
+  window.ghastApp?.setRapidAutoOff?.(settings.rapidAutoOff !== false);
+}
 
 // ---------- 작은 도구들 ----------
 const rand = (a, b) => a + Math.random() * (b - a);

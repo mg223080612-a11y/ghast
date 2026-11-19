@@ -132,6 +132,12 @@ function drawGunSetup() {
     }
   }
 
+  // 연사 점검 (v3.5.0, 앱이 수신기 COM 포트로 확인 — desktop/gun-mode.js).
+  //   총이 잡혀 있으면 총 목록 바로 아래 (아래쪽은 '2인 대결 시작' 버튼 자리), 없으면 안내 글 아래
+  const rapid = Guns.rapidNote();
+  const rapidY = pads.length ? Math.min(y + U * 6, py + ph - U * 39) : py + ph - U * 37;
+  if (rapid) text(rapid.text, cx, rapidY, fitTextSize(rapid.text, U * 2.6, pw - U * 8), rapid.color);
+
   // 안내 문구: 지금 무엇을 해야 하는지. 두 총이 다 준비되면 바로 대결을 시작할 수 있는 버튼
   if (Guns.assigning === null && Guns.readyForVersus()) {
     if (game.gunSetupFrom === 'bracket') button(`${Tournament.isLeague() ? '순위표' : '대진표'}로 돌아가기 ▶`, cx, py + ph - U * 33, U * 50, U * 8, closeGunSetup, true, true);

@@ -14,7 +14,10 @@ let playLog = null;
 function logApp(event, data) { playLog?.write('앱', event, data); }
 // 앱이 시리얼로 확인한 수신기·총 상태를 사람이 읽는 말로 (기록 파일용)
 const GUN_STATE_WORDS = { ok: '게임패드 정상', switching: '전환 중', mouse: '마우스 모드(직접 바꿔야 함)', off: '총 꺼짐', busy: '다른 프로그램이 사용 중', stuck: '수신기 응답 없음' };
-const gunStatusText = (list) => (Array.isArray(list) ? list : []).map((r) => `${r.player}P ${GUN_STATE_WORDS[r.state] || r.state}`).join(', ') || '수신기 없음';
+const RAPID_WORDS = { off: '연사 꺼짐', on: '연사 켜짐(끄지 못함)', noReply: '연사 확인 불가', disabled: '연사 자동 끄기 꺼짐' };
+const gunStatusText = (list) => (Array.isArray(list) ? list : [])
+  .map((r) => `${r.player}P ${GUN_STATE_WORDS[r.state] || r.state}${r.rapid ? `·${RAPID_WORDS[r.rapid] || r.rapid}` : ''}`)
+  .join(', ') || '수신기 없음';
 // 엑스거너 총 모드 자동 전환: 게임과 따로 도는 작은 프로세스(desktop/gun-mode-worker.js)에서.
 // 시리얼 부품 오류로 그 프로세스가 죽어도 게임은 그대로이고, 3초 뒤 다시 띄운다 (1분에 5번까지)
 let gunWorker = null;
@@ -45,6 +48,7 @@ function startGunWorker() {
     return;
   }
   gunWorker.send({ type: 'enabled', on: gunAutoMode });
+  gunWorker.send({ type: 'rapid-enabled', on: rapidAutoOff });
   gunWorker.send({ type: 'confirmed', list: [...gunsConfirmed] });
   gunWorker.on('message', (msg) => {
     if (msg?.type === 'status') {
@@ -56,6 +60,7 @@ function startGunWorker() {
     }
     else if (msg?.type === 'restart-later') gunWorkerDelay = GUN_WORKER_STUCK_RESTART_MS;
     else if (msg?.type === 'switch') { logApp('총 모드 전환 보냄', { 자리: `${msg.player}P` }); sendToGame('gun-mode-switched', msg.player); }
+    else if (msg?.type === 'rapid-off') { logApp('연사 켜져 있어 끔', { 자리: `${msg.player}P` }); sendToGame('gun-rapid-off', msg.player); }
     else if (msg?.type === 'log') { console.log(`[가스트 사격] ${msg.msg}`); logApp('총 모드 알림', { 내용: msg.msg }); }
   });
   gunWorker.on('error', (err) => {
@@ -82,6 +87,7 @@ app.on('before-quit', () => {
   gunWorker?.kill();
 });
 let gunAutoMode = true; // 게임 설정 '총 모드 자동 전환' (game.js 가 알려 줌)
+let rapidAutoOff = true; // 게임 설정 '연사 자동 끄기' (v3.5.0, game.js 가 알려 줌)
 let gunsConfirmed = new Set(); // 게임에 게임패드 신호가 들어오고 있는 자리 (1·2, game.js 가 알려 줌)
 
 const isMac = process.platform === 'darwin';
@@ -189,6 +195,12 @@ ipcMain.on('gun-auto-mode', (e, on) => {
   if (gunAutoMode !== !!on) logApp('총 모드 자동 전환 설정', { 켬: !!on });
   gunAutoMode = !!on;
   if (gunWorker?.connected) gunWorker.send({ type: 'enabled', on: gunAutoMode });
+});
+ipcMain.on('rapid-auto-off', (e, on) => {
+  if (!win || e.sender !== win.webContents) return;
+  if (rapidAutoOff !== !!on) logApp('연사 자동 끄기 설정', { 켬: !!on });
+  rapidAutoOff = !!on;
+  if (gunWorker?.connected) gunWorker.send({ type: 'rapid-enabled', on: rapidAutoOff });
 });
 // 게임 화면이 남기는 기록 (preload.js 의 ghastApp.log). 사건 이름·자료는 field-log.js 가 한 줄로 정리한다
 ipcMain.on('field-log', (e, event, data) => {

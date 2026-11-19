@@ -11,6 +11,9 @@ contextBridge.exposeInMainWorld('ghastApp', {
   onGunModeSwitched: (fn) => ipcRenderer.on('gun-mode-switched', (_e, player) => fn(Number(player))),
   // 꽂힌 수신기마다 총 상태 [{ player, state: 'ok'|'switching'|'mouse'|'off'|'busy' }] (3초마다)
   onGunStatus: (fn) => ipcRenderer.on('gun-status', (_e, list) => fn(Array.isArray(list) ? list : [])),
+  // 연사 자동 끄기 켜기/끄기 알리기, 켜져 있던 총의 연사를 껐을 때 알림 받기 (v3.5.0, desktop/gun-mode.js)
+  setRapidAutoOff: (on) => ipcRenderer.send('rapid-auto-off', !!on),
+  onRapidOff: (fn) => ipcRenderer.on('gun-rapid-off', (_e, player) => fn(Number(player))),
   // 실기용 기록 파일에 한 줄 (desktop/field-log.js). 이름은 넘기지 않는다
   log: (event, data) => ipcRenderer.send('field-log', String(event), data && typeof data === 'object' ? data : {}),
 });

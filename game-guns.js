@@ -96,6 +96,20 @@ const Guns = {
     if (silent) return `${silent} 총 신호 없음 — 총 전원을 켜고 조이스틱 모드(Space + 5 + 왼쪽)로 바꾼 뒤 한 번 흔들어 주세요`;
     return this.noReceiverMessage(players);
   },
+  // 총 연결 화면의 연사 점검 한 줄 (v3.5.0, 앱이 수신기 COM 포트로 확인한 최근 10초 안의 결과). 웹 버전이거나 소식이 없으면 null
+  //   → { text, color }. 확인 불가(총이 연사 명령에 답하지 않음)는 이 화면에서만 알린다
+  rapidNote() {
+    const info = this.serial;
+    if (!info || performance.now() - info.at > 10000) return null;
+    const rows = info.list.filter((r) => r.rapid);
+    if (!rows.length) return null;
+    const words = { off: '꺼짐 ✓', on: '켜짐 — 총의 Rapid Fire 스위치를 끄세요', noReply: '확인 불가', disabled: '자동 끄기 꺼짐(설정)' };
+    const has = (kind) => rows.some((r) => r.rapid === kind);
+    const hint = has('noReply') ? '  —  확인 불가인 총은 총 테스트(T)에서 한 번 당겨 한 발만 들어가는지 보세요' : '';
+    const text = `연사: ${rows.map((r) => `${r.player}P ${words[r.rapid] || r.rapid}`).join('  ·  ')}${hint}`;
+    const color = has('on') ? '#ff8a7a' : has('noReply') ? '#ffe14a' : has('disabled') ? '#c9a89a' : '#7dff7a';
+    return { text, color };
+  },
   // 수신기가 처음부터 안 꽂힘 (앱이 시리얼로 확인한 목록에 없고, 이번 실행에서 본 적도 없음. 빠진 경우는 위의 '빠졌어요').
   //   1인 기록전 화면([0])은 아무 수신기도 없을 때만 (2P 수신기만 있어도 1인 기록전은 할 수 있다).
   //   웹 버전은 수신기를 알 수 없어서 알리지 않는다
