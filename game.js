@@ -35,6 +35,7 @@ const DEFAULTS = {
   gunInvertX: false,   // 조준이 좌우 반대로 움직이면 켜기
   gunInvertY: false,   // 조준이 위아래 반대로 움직이면 켜기
   versusAimHz: 40,     // 2인 대결·토너먼트 중 총마다 조준 위치를 1초에 약 몇 번까지 새로 받는지 (빠른 총이 유리하지 않게, 0 = 제한 없음)
+  versusFireDelayMs: 25, // 2인 대결·대회 중 1P(Pro) 총 방아쇠를 '다음 25ms 칸 + 이 값' 에 처리 (2P 보통 총이 25~50ms 늦어서, 0 = 끔)
   difficulty: 1,       // 기본 빠르기 (Normal 기준). 0.5 느리게 ~ 2 빠르게. Easy·Hard 는 여기에 배율을 곱한다
   diffLevel: 'normal', // 난이도 'easy' | 'normal' | 'hard' (닉네임 창에서 고르고, 다음 사람에게도 그대로)
   tournamentSeconds: 40, // 토너먼트 한 경기 시간 (보너스 시간 없이 고정)
@@ -1661,33 +1662,19 @@ function isDuplicateTap(x, y, now) {
 }
 
 // ---------- 연사 차단 ----------
-// 엑스거너의 연사(Rapid Fire)는 방아쇠 한 번에 클릭을 사람 손으로는 불가능한 속도로 여러 번 보낸다.
-// 총(입력)마다 클릭 간격을 보고, 기계처럼 빠른 클릭은 아무 표시 없이 조용히 버린다.
-//  · 0.08초 안에 또 들어온 클릭 → 연사
-//  · 0.14초 안쪽 간격으로 세 번째가 들어오면 → 연사
-//  연사가 감지되면 그 총은 1.5초 동안 잠긴다. 잠긴 동안 또 기계처럼 빠른 클릭이 오면(연사를 계속 당김)
-//  잠금이 계속 늘어나 한 발도 들어가지 않는다. 연사를 끄고 보통 속도로 쏘면 잠금이 늘지 않아 곧 다시 쏠 수 있다.
-//  사람이 빠르게 연타하는 정도(0.15초 이상 간격)는 처음부터 연사로 보지 않는다.
-const RAPID_MIN_GAP = 80, RAPID_STREAK_GAP = 140, RAPID_LOCK = 1500;
-const fireGate = new Map(); // 입력 장치(마우스·총마다) → { last, quick, lockUntil }
+// 규칙은 fire-gate.js (총·마우스마다 따로). 막힌 발은 점수·감점·소리 없이 버리고,
+// 잠금이 새로 시작될 때만 그 자리에 '연사 금지' 를 띄우고 잠깐 알린다 (연사 스위치를 끄도록)
+const fireGate = new Map(); // 입력 장치(마우스·총마다) → FireGate 상태
 function allowShot(source, now) {
-  let s = fireGate.get(source);
-  if (!s) { s = { last: -1e9, quick: 0, lockUntil: 0 }; fireGate.set(source, s); }
-  const gap = now - s.last;
-  s.last = now;
-  const machineFast = gap < RAPID_STREAK_GAP;
-  if (now < s.lockUntil) {
-    if (machineFast) s.lockUntil = now + RAPID_LOCK; // 연사를 계속 쓰는 중 → 잠금 연장
-    return false;
-  }
-  if (gap < RAPID_MIN_GAP) { s.lockUntil = now + RAPID_LOCK; s.quick = 0; return false; }
-  if (machineFast) {
-    s.quick++;
-    if (s.quick >= 2) { s.lockUntil = now + RAPID_LOCK; s.quick = 0; return false; }
-  } else {
-    s.quick = 0;
-  }
-  return true;
+  const r = FireGate.next(fireGate.get(source) || FireGate.initial(), now);
+  fireGate.set(source, r.state);
+  return r;
+}
+function noticeRapidFire(x, y, who) {
+  const tag = isTwoPlayer() ? `${who + 1}P ` : '';
+  const color = isTwoPlayer() ? PLAYER_COLORS[who] : '#ff6a5a';
+  popupScore(x, y - U * 4, `${tag}연사 금지!`, color);
+  showBanner(`${tag}연사(Rapid Fire)가 감지됐어요`, `${(FireGate.LOCK_MS / 1000).toFixed(1)}초 동안 쏠 수 없어요 — 총의 연사 스위치를 끄고 한 발씩 쏘세요`, color, 2.2);
 }
 
 // 총으로 오른쪽 위 버튼을 누를 수 있는 화면. 게임 중(오른쪽 아래 '처음 화면')과 이름 쏘기 판은 빗나간 총알이
@@ -1727,7 +1714,11 @@ function onTap(x, y, who = 0, source = 'mouse') {
   noteInput();
   const now = performance.now();
   if (isDuplicateTap(x, y, now)) return;
-  if (!allowShot(source, now)) return; // 연사: 조용히 무시 (점수·감점·소리·표시 없음)
+  const gate = allowShot(source, now);
+  if (!gate.allowed) { // 연사: 점수·감점·소리 없이 버린다. 잠금이 막 시작됐을 때만 알림
+    if (gate.lockStarted) noticeRapidFire(x, y, who);
+    return;
+  }
   Sound.init();
   // 설정 창이 열려 있으면 총알은 창 안만 누른다 (창 뒤의 처음 화면 버튼 등은 누르지 않는다).
   // 마우스는 창이 직접 받고, 조이스틱 모드 총만 여기로 온다. 확인 창이 떠 있으면 그 창의 버튼만
@@ -1890,8 +1881,9 @@ function screenOffset() {
   };
 }
 
+const PARITY_GRID_MS = 25; // 2P 보통 총의 방아쇠가 들어오는 단위 (접시 사격 M0 실측: 25ms 배수)
 const Guns = {
-  pads: {},        // gamepad.index → { key, id, x, y, pressed[], min[], max[], lastActive }
+  pads: {},       // gamepad.index → { key, id, x, y, pressed[], min[], max[], lastActive }
   // 저장되는 지정 정보: 어떤 총(key)이 1P/2P 인지, 총마다 방아쇠 버튼 번호
   saved: readJson(GUN_SAVE_KEY, { p1: null, p2: null, trigger: {} }),
   assigning: null, // 총 연결 화면에서 지금 지정 중인 자리 (0 = 1P, 1 = 2P)
@@ -1958,7 +1950,21 @@ const Guns = {
     const missing = pick('missing'), silent = pick('silent');
     if (missing) return `${missing} 총 수신기가 빠졌어요 — 수신기를 다시 꽂으세요`;
     if (silent) return `${silent} 총 신호 없음 — 총 전원을 켜고 조이스틱 모드(Space + 5 + 왼쪽)로 바꾼 뒤 한 번 흔들어 주세요`;
-    return '';
+    return this.noReceiverMessage(players);
+  },
+  // 수신기가 처음부터 안 꽂힘 (앱이 시리얼로 확인한 목록에 없고, 이번 실행에서 본 적도 없음. 빠진 경우는 위의 '빠졌어요').
+  //   1인 기록전 화면([0])은 아무 수신기도 없을 때만 (2P 수신기만 있어도 1인 기록전은 할 수 있다).
+  //   웹 버전은 수신기를 알 수 없어서 알리지 않는다
+  noReceiverMessage(players) {
+    const info = this.serial;
+    if (!info || performance.now() - info.at > 10000 || settings.inputMode !== 'gun') return '';
+    const plugged = (i) => this.serialSeen[i] || info.list.some((r) => r.player === i + 1)
+      || this.list().some((s) => this.receiverSlot(s.id) === i);
+    if (players.length === 1) {
+      return info.list.length === 0 && this.list().length === 0 ? '총 수신기가 꽂혀 있지 않아요 — 수신기를 USB 에 꽂으세요' : '';
+    }
+    const absent = players.filter((i) => !plugged(i)).map((i) => `${i + 1}P`).join('·');
+    return absent ? `${absent} 총 수신기가 꽂혀 있지 않아요 — 수신기를 USB 에 꽂으세요` : '';
   },
   // 2인 대결 준비 완료: 1P·2P 로 지정된 총 2대가 지금 게임패드로 연결돼 있음
   readyForVersus() {
@@ -2051,6 +2057,7 @@ const Guns = {
       this.onUnplug(this.pads[idx]);
       delete this.pads[idx];
     }
+    this.flushPendingShots(now);
   },
 
   // 2인 경기(대결·토너먼트·리그) 중 1P/2P 총이 빠지면 P 를 누른 것처럼 멈추고 일시정지 화면에 알린다
@@ -2065,7 +2072,7 @@ const Guns = {
     Sound.init();
     // 조준 보정 중: 보정하는 총의 방아쇠만 받는다 (다른 총·다른 버튼은 무시)
     if (this.calib) {
-      if (s.key === this.calib.key && i === this.triggerOf(s) && allowShot(`pad:${s.key}`, performance.now())) recordCalibShot(s);
+      if (s.key === this.calib.key && i === this.triggerOf(s) && allowShot(`pad:${s.key}`, performance.now()).allowed) recordCalibShot(s);
       return;
     }
     // 총 연결 화면: 방아쇠를 당긴 총을 지금 자리(1P/2P)에, 그 버튼을 방아쇠로 기억
@@ -2091,7 +2098,33 @@ const Guns = {
       who = this.playerOf(s);
       if (who < 0) return; // 지정 안 된 총은 대결 중 무시
     }
+    if (this.fireParity(s)) {
+      const at = AimCap.parityFireAt(performance.now(), PARITY_GRID_MS, settings.versusFireDelayMs);
+      this.pendingShots = [...this.pendingShots, { at, key: s.key, who, source: `pad:${s.key}` }];
+      return;
+    }
     onTap(s.x, s.y, who, `pad:${s.key}`);
+  },
+
+  // 2인 대결·대회 경기 중 방아쇠 공정성 보정 (접시 사격과 같은 규칙, aim-cap.js 의 parityFireAt):
+  //   2P 보통 총은 방아쇠가 25~50ms 늦게 들어온다 → 1P(Pro, 수신기 XGUNNER-P1) 방아쇠도 25~50ms 뒤에 처리한다.
+  //   처리할 때의 (속도 제한된) 조준 위치로 판정한다. 1인 기록전·메뉴에서는 바로 처리
+  pendingShots: [],
+  fireParity(s) {
+    return isTwoPlayer() && (game.state === 'play' || game.state === 'countdown')
+      && Number(settings.versusFireDelayMs) > 0 && this.receiverSlot(s.id) === 0;
+  },
+  // 때가 된 1P 방아쇠를 처리한다. 경기가 끝났거나 멈췄으면 보류 중인 사격은 버린다
+  flushPendingShots(now) {
+    if (!this.pendingShots.length) return;
+    const live = isTwoPlayer() && (game.state === 'play' || game.state === 'countdown') && !game.paused;
+    const due = this.pendingShots.filter((p) => p.at <= now);
+    this.pendingShots = live ? this.pendingShots.filter((p) => p.at > now) : [];
+    if (!live) return;
+    for (const p of due) {
+      const s = this.list().find((g) => g.key === p.key);
+      if (s) onTap(s.x, s.y, p.who, p.source);
+    }
   },
 
   // 화면에 총 조준점 그리기 (최근에 쓴 총만). 지정된 총은 1P/2P 색과 이름표
@@ -3086,7 +3119,8 @@ function drawGunSetup() {
       y += U * 9.5;
     });
     if (AimCap.gapForHz(settings.versusAimHz) > 0) {
-      const fair = `대결 중에는 두 총 모두 1초에 약 ${settings.versusAimHz}번만 새 위치를 받아요: 빠른 총(Pro, 약 130번)은 줄이고 보통 총(약 40번)은 그대로`;
+      const trigger = Number(settings.versusFireDelayMs) > 0 ? ' · 1P 방아쇠도 2P 처럼 25~50ms 뒤에 처리' : '';
+      const fair = `대결·대회 중에는 두 총 모두 1초에 약 ${settings.versusAimHz}번만 새 위치를 받아요 (Pro 약 130번은 줄이고 보통 총 약 40번은 그대로)${trigger}`;
       text(fair, cx, y + U * 1.5, fitTextSize(fair, U * 2.4, pw - U * 8), '#c9a89a');
     }
   }
