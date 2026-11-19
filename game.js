@@ -63,6 +63,8 @@ setTimeout(tellGunAutoMode, 0);
 // 앱이 총에 게임패드 모드 전환을 보냈을 때: 게임 중이 아니면 잠깐 알린다
 // 앱이 알려 주는 수신기·총 상태 (시리얼로 확인 — 꺼진 총은 게임패드로 보이지 않아 게임만으로는 알 수 없다)
 window.ghastApp?.onGunStatus?.((list) => {
+  // 게임 파일(game-guns.js)을 아직 다 읽기 전에 신호가 오면 이번 한 번은 건너뛴다 (3초마다 다시 온다)
+  if (typeof Guns === 'undefined') return;
   Guns.serial = { at: performance.now(), list };
   // 게임패드 신호가 실제로 들어오는 엑스거너 자리(최근 60초 안에 값이 들어옴)를 앱에 알린다 → 앱은 그 총에 모드 전환을 다시 보내지 않는다
   // (가만히 든 총은 값이 잠깐 안 바뀔 수 있어 넉넉히. 총을 껐다 켜면 앱이 '켜짐'을 보고 바로 다시 바꾼다)
@@ -71,6 +73,7 @@ window.ghastApp?.onGunStatus?.((list) => {
   window.ghastApp?.reportGunsConfirmed?.(ok);
 });
 window.ghastApp?.onGunModeSwitched?.((player) => {
+  if (typeof game === 'undefined' || typeof showBanner === 'undefined') return; // 게임 파일을 다 읽기 전 (알림만 건너뜀)
   if (game.state === 'play' || game.state === 'countdown') return;
   showBanner(`${player}P 총을 게임패드 모드로 바꾸는 중`, '총이 켜져 있으면 곧 조준점이 나타나요 (안 나타나면 총 전원 확인)', '#9ff6ff', 2.2);
 });

@@ -45,7 +45,7 @@ jobs:
       # 맥 고정 서명 인증서가 비밀값에 있는지 (if 에서 secrets 를 직접 못 쓰므로)
       HAS_MAC_CERT: ${{ secrets.MAC_CERT_P12 != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # 맥 고정 서명: 비밀값의 자체 인증서(GVCS Ghast Shooting Local)를 이번 실행에만 쓰는 임시 키체인에 넣는다.
       # desktop/build.js 가 MAC_SIGN_HASH 로 앱을 다시 서명 → 새로 설치해도 맥 입력 모니터링 권한이 이어진다
       - name: 맥 고정 서명 인증서 준비
@@ -79,7 +79,7 @@ jobs:
             echo "::error::태그 ${GITHUB_REF_NAME} 와 package.json 버전 ${pkg} 이 다릅니다"
             exit 1
           fi
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -87,7 +87,38 @@ jobs:
       # 테스트가 하나라도 실패하면 프로그램을 만들지 않는다
       - run: npm test
       - run: npm run ${{ matrix.script }}
-      - uses: actions/upload-artifact@v4
+      # 앱 켜 보기: 만든 앱을 실제로 켜서 처음 화면까지 뜨는지 확인 (desktop/smoke-check.js).
+      # 빌드는 성공했는데 앱이 켜지자마자 꺼지던 일(제작 기록 6.1)을 다시 놓치지 않으려고. 실패하면 올리지 않는다
+      - name: 앱 켜 보기 (맥, 애플 실리콘)
+        if: matrix.name == 'mac'
+        shell: bash
+        run: |
+          OUT="$RUNNER_TEMP/smoke.json"
+          mkdir -p "$RUNNER_TEMP/smoke"
+          ditto -x -k "$(ls release/*-mac-arm64.zip)" "$RUNNER_TEMP/smoke"
+          APP="$(ls -d "$RUNNER_TEMP"/smoke/*.app)"
+          GHAST_SMOKE_OUT="$OUT" "$APP/Contents/MacOS/$(basename "$APP" .app)" &
+          PID=$!
+          for i in $(seq 1 60); do [ -f "$OUT" ] && break; sleep 1; done
+          sleep 2; kill "$PID" 2>/dev/null || true
+          [ -f "$OUT" ] || { echo "::error::앱이 60초 안에 처음 화면을 띄우지 못했습니다"; exit 1; }
+          cat "$OUT"; echo
+          node -e 'const r=require(process.argv[1]); if(!r.ok){console.log("::error::앱 켜 보기 실패 " + JSON.stringify(r)); process.exit(1)}' "$OUT"
+      - name: 앱 켜 보기 (윈도우)
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'smoke.json'
+          $exe = Get-ChildItem release/win-unpacked -Filter *.exe | Where-Object { $_.Name -notmatch 'Uninstall' } | Select-Object -First 1
+          if (-not $exe) { Write-Output '::error::release/win-unpacked 에 실행 파일이 없습니다'; exit 1 }
+          $env:GHAST_SMOKE_OUT = $out
+          $p = Start-Process -FilePath $exe.FullName -PassThru
+          if (-not $p.WaitForExit(60000)) { $p.Kill() }
+          if (-not (Test-Path $out)) { Write-Output '::error::앱이 60초 안에 처음 화면을 띄우지 못했습니다'; exit 1 }
+          Get-Content $out
+          $r = Get-Content $out -Raw | ConvertFrom-Json
+          if (-not $r.ok) { Write-Output '::error::앱 켜 보기 실패'; exit 1 }
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
           path: ${{ matrix.files }}
@@ -100,13 +131,13 @@ jobs:
     permissions:
       contents: write   # Releases 에 파일을 올리기 위해
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
       - run: ls -l dist
       - name: Releases 에 올리고 'Latest' 로 표시
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: 가스트 사격 ${{ github.ref_name }}

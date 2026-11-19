@@ -183,6 +183,10 @@ app.whenReady().then(() => {
     return net.fetch(pathToFileURL(file).toString());
   });
   createWindow();
+  // 빌드 확인용 '앱 켜 보기' (GHAST_SMOKE_OUT 이 있을 때만 — desktop/smoke-check.js)
+  if (process.env.GHAST_SMOKE_OUT) {
+    require('./smoke-check.js').startSmokeCheck(win, app, process.env.GHAST_SMOKE_OUT, () => gunWorker?.kill());
+  }
   // 3초마다 수신기를 확인해 마우스 모드인 총을 게임패드 모드로 (게임과 따로 도는 프로세스)
   startGunWorker();
 });

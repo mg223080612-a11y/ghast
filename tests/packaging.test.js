@@ -49,7 +49,7 @@ test('build.files 에 적은 파일(글롭 제외)은 모두 실제로 있다', 
 
 test('프로그램 시작 파일(desktop/main.js·preload.js)이 묶음에 들어가고 아이콘이 있다', () => {
   assert.equal(pkg.main, 'desktop/main.js');
-  for (const rel of ['desktop/main.js', 'desktop/preload.js', 'desktop/gun-mode.js', 'desktop/gun-mode-worker.js']) {
+  for (const rel of ['desktop/main.js', 'desktop/preload.js', 'desktop/gun-mode.js', 'desktop/gun-mode-worker.js', 'desktop/smoke-check.js']) {
     assert.ok(files.includes(rel), `${rel} 이 build.files 에 없습니다`);
     assert.ok(exists(rel), `${rel} 파일이 없습니다`);
   }
@@ -66,4 +66,23 @@ test('v3 는 운영 중인 v2.2.7 과 이름·appId·설정 폴더가 겹치지 
   assert.ok(macName && macName !== OLD.macName, `맥 앱 이름(desktop/build.js 의 MAC_NAME)이 옛 앱과 같습니다: ${macName}`);
   const userData = (read('desktop/main.js').match(/setPath\('userData',\s*path\.join\(app\.getPath\('appData'\),\s*'([^']+)'\)\)/) || [])[1];
   assert.ok(userData && userData !== OLD.name, `설정 폴더(desktop/main.js 의 userData)가 옛 앱과 같습니다: ${userData}`);
+});
+
+test('앱 켜 보기(smoke-check): 처음 화면·그림 5종·오류 0·버전이 있어야 정상', () => {
+  const { judge } = require('../desktop/smoke-check.js');
+  const good = { state: 'title', errors: 0, art: true, version: '3.2.1' };
+  assert.equal(judge(good), true);
+  assert.equal(judge({ ...good, state: 'play' }), false);
+  assert.equal(judge({ ...good, errors: 1 }), false);
+  assert.equal(judge({ ...good, art: false }), false);
+  assert.equal(judge({ ...good, version: '' }), false);
+  assert.equal(judge(null), false);
+});
+
+test('워크플로: 빌드 뒤 맥·윈도우에서 앱을 켜 보고, Node 20 액션(@v4 등)을 쓰지 않는다', () => {
+  const yml = read('.github/workflows/release.yml');
+  assert.match(yml, /앱 켜 보기 \(맥/);
+  assert.match(yml, /앱 켜 보기 \(윈도우\)/);
+  assert.match(yml, /GHAST_SMOKE_OUT/);
+  assert.doesNotMatch(yml, /actions\/(checkout|setup-node|upload-artifact|download-artifact)@v4\b/);
 });
