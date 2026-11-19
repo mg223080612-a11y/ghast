@@ -238,17 +238,19 @@ const Tournament = {
   // ---------- 결과 취소 (잘못 넣은 결과를 진행요원이 되돌린다) ----------
   // 가장 최근 결과만 지운다: 그 뒤에 넣은 결과가 없으니 그 결과에 기대는 경기도 없어서 늘 안전하다.
   // 여러 번 누르면 최근 것부터 하나씩 되돌아간다
+  //   리그 기권은 한 사람의 남은 경기가 한꺼번에 들어가므로 함께 되돌린다 (undoGroup — contest-manage.js)
   async undoLast() {
-    const id = this.history().at(-1);
+    const ids = undoGroup(this);
+    const id = ids.at(-1);
     if (!id) return;
-    const ok = await askConfirm(`마지막 경기 결과(${this.undoLabel(id)})를 취소할까요?\n그 경기를 다시 할 수 있어요.`, { ok: '결과 취소', danger: true });
+    const ok = await askConfirm(`마지막 결과(${undoGroupLabel(this, ids)})를 취소할까요?\n그 경기를 다시 할 수 있어요.`, { ok: '결과 취소', danger: true });
     // 창이 열린 사이에 화면이나 기록이 바뀌었으면 그만둔다
     if (!ok || game.state !== 'bracket' || this.history().at(-1) !== id) return;
     try {
       const contest = this.isLeague()
-        ? { league: League.undoResult(this.data.league, id) }
+        ? { league: ids.reduce((lg, x) => League.undoResult(lg, x), this.data.league) }
         : { bracket: Bracket.undoResult(this.data.bracket, id) };
-      this.set({ ...this.data, ...contest, history: this.history().slice(0, -1), last: null, current: null });
+      this.set({ ...this.data, ...contest, history: this.history().slice(0, -ids.length), last: null, current: null });
     } catch (err) {
       reportError(err);
       return;
@@ -623,6 +625,14 @@ function drawSeatBox(x, y, w, h, seat, time) {
   if (score != null) text(String(score), x + w / 2 - U, y, size * 0.9, state === 'lost' ? '#7a6a66' : '#ffe14a', 'right');
 }
 
+// 끝난 경기의 그 자리 점수. 기권 경기는 기권한 쪽에 '기권', 이긴 쪽은 빈칸
+function seatScore(t, m, id, pos) {
+  const r = t.results[m.id];
+  const quit = r?.forfeit ?? m.autoForfeit; // autoForfeit: 준결승 기권자가 나온 3·4위전 (저장 없이 계산)
+  if (quit !== undefined) return quit === id ? '기권' : null;
+  return r?.scores?.[pos] ?? null;
+}
+
 // 자리 상태: 그 자리에서 치른(치를) 경기를 보고 정한다
 function seatState(t, L, all, r, k, next) {
   const id = seatOccupant(t, all, r, k);
@@ -631,8 +641,7 @@ function seatState(t, L, all, r, k, next) {
   const { m, pos } = L.consumers[r][k];
   if (next && m.id === next.id) return { id, name, state: 'next', score: null, who: pos };
   if (m.bye || typeof m.winner !== 'number') return { id, name, state: 'plain', score: null, who: -1 };
-  const score = t.results[m.id]?.scores?.[pos] ?? null;
-  return { id, name, state: m.winner === id ? 'won' : 'lost', score, who: -1 };
+  return { id, name, state: m.winner === id ? 'won' : 'lost', score: seatScore(t, m, id, pos), who: -1 };
 }
 
 // 쉬고(부전승) 올라가는 자리: 앞 칸은 그리지 않고, 그 자리에서 다음 칸까지 곧은 선에 '부전승'
@@ -694,7 +703,7 @@ function drawThirdPlace(L, t, next, time) {
   text('3·4위전', c.x, y0 - h, U * 2.8, '#e09a5a');
   [m.a, m.b].forEach((id, i) => {
     const state = typeof id !== 'number' ? 'tbd' : next?.id === m.id ? 'next' : decided ? (m.winner === id ? 'won' : 'lost') : 'plain';
-    const score = decided ? t.results[m.id]?.scores?.[i] ?? null : null;
+    const score = decided ? seatScore(t, m, id, i) : null;
     drawSeatBox(c.x, y0 + i * (h + U), L.champW, h, { name: Bracket.playerName(t, id), score, state, who: i }, time);
   });
 }

@@ -77,7 +77,8 @@ function drawLeagueRow(x, y, w, h, row, games, info, time) {
   text(String(row.rank), x + w * LEAGUE_COLS.rank, y, size, rankColor);
   if (info.move) text(info.move > 0 ? `▲${info.move}` : `▼${-info.move}`, x + w * LEAGUE_COLS.move, y, size * 0.62, info.move > 0 ? RANK_UP : RANK_DOWN);
   const nameColor = hot ? PLAYER_COLORS[info.justPlayed] : '#ffffff';
-  text(row.name, x + w * LEAGUE_COLS.name, y, fitTextSize(row.name, size, w * (LEAGUE_COLS.played - LEAGUE_COLS.name - 0.05)), nameColor, 'left');
+  const shownName = row.withdrawn ? `${row.name} (기권)` : row.name;
+  text(shownName, x + w * LEAGUE_COLS.name, y, fitTextSize(shownName, size, w * (LEAGUE_COLS.played - LEAGUE_COLS.name - 0.05)), row.withdrawn ? '#9a8a86' : nameColor, 'left');
   text(`${row.played}/${games}`, x + w * LEAGUE_COLS.played, y, size * 0.85, row.played === games ? '#c9a89a' : '#ffd9b0');
   if (hot) text(`${info.now}점`, x + w * LEAGUE_COLS.now, y, size, '#ffe14a');
   else if (info.next >= 0) text('다음', x + w * LEAGUE_COLS.now, y, size * 0.8, PLAYER_COLORS[info.next]);

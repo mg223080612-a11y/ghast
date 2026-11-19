@@ -21,6 +21,9 @@
 
   const matchId = (index) => `L${index}`;
   const isPlayer = (v, n) => Number.isInteger(v) && v >= 0 && v < n;
+  const NAME_MAX = 12;
+  // 제어문자·안 보이는 글자 제거 (tournament-core.js · worker.js 와 같은 글자)
+  const INVISIBLE = /[\u0000-\u001f\u007f​-‏‪-‮⁠-⁤⁦-⁩﻿]/g;
 
   function shuffled(list, rng) {
     const out = [...list];
@@ -116,7 +119,7 @@
     return lg.matches.map(([a, b], index) => {
       const id = matchId(index);
       const res = lg.results[id];
-      return { id, index, a, b, scores: res ? [...res.scores] : null, done: !!res };
+      return { id, index, a, b, scores: res ? [...res.scores] : null, done: !!res, forfeit: res?.forfeit };
     });
   }
 
@@ -131,6 +134,29 @@
     return { ...lg, results: { ...lg.results, [id]: { scores: clean } } };
   }
 
+  // 기권: 그 선수의 남은 경기를 모두 끝난 것으로. 기권자 0점, 상대는 그때까지 실제로 한 경기의 한 판 평균 점수
+  //   (상대가 경기를 못 해서 합계에서 손해 보지 않게. 아직 한 경기도 없으면 0). 결과에 forfeit: 기권자 id
+  //   돌려주는 값: { league: 새 리그, ids: 기권으로 끝낸 경기 id (진행 순서) }
+  function withdraw(lg, playerId) {
+    if (!isPlayer(playerId, lg.players.length)) throw new Error('없는 선수예요');
+    const left = matches(lg).filter((m) => !m.done && (m.a === playerId || m.b === playerId));
+    if (!left.length) throw new Error('남은 경기가 없어요');
+    const real = Object.values(lg.results).filter((r) => r.forfeit === undefined).flatMap((r) => r.scores);
+    const avg = real.length ? Math.round(real.reduce((s, v) => s + v, 0) / real.length) : 0;
+    const added = Object.fromEntries(left.map((m) => [m.id, {
+      scores: m.a === playerId ? [0, avg] : [avg, 0],
+      forfeit: playerId,
+    }]));
+    return { league: { ...lg, results: { ...lg.results, ...added } }, ids: left.map((m) => m.id) };
+  }
+  // 이름 고치기 (대회 중 오타 등). 빈 이름·다른 사람과 같은 이름은 거절, 12자까지 (tournament-core.js 와 같은 규칙)
+  function renamePlayer(lg, id, name) {
+    if (!isPlayer(id, lg.players.length)) throw new Error('없는 선수예요');
+    const clean = String(name ?? '').replace(INVISIBLE, '').trim().slice(0, NAME_MAX);
+    if (!clean) throw new Error('이름을 입력해 주세요');
+    if (lg.players.some((p) => p.id !== id && p.name === clean)) throw new Error(`'${clean}' 와 같은 이름이 이미 있어요`);
+    return { ...lg, players: lg.players.map((p) => (p.id === id ? { ...p, name: clean } : p)) };
+  }
   // 결과 취소: 그 경기 결과만 뺀 새 리그 (그 경기를 다시 할 수 있다)
   function undoResult(lg, id) {
     if (!Object.hasOwn(lg.results, id)) throw new Error('결과가 없는 경기라 취소할 수 없어요');
@@ -140,14 +166,16 @@
 
   // 순위표: 점수 합계 → 최고 한 판 → 공동 순위. 아직 경기 안 한 사람도 0점으로 넣는다
   function standings(lg) {
-    const empty = lg.players.map((p) => ({ id: p.id, name: p.name, played: 0, total: 0, best: 0, wins: 0, draws: 0, losses: 0 }));
+    const empty = lg.players.map((p) => ({ id: p.id, name: p.name, played: 0, total: 0, best: 0, wins: 0, draws: 0, losses: 0, withdrawn: false }));
     const rows = matches(lg).filter((m) => m.done).reduce((acc, m) => {
       const [sa, sb] = m.scores;
+      // 기권 경기: 합계·승패에는 넣고, 받은 평균 점수는 '최고 한 판'(동점 가르기)에 넣지 않는다
       const add = (row, mine, theirs) => ({
         ...row,
         played: row.played + 1,
         total: row.total + mine,
-        best: Math.max(row.best, mine),
+        best: m.forfeit === undefined ? Math.max(row.best, mine) : row.best,
+        withdrawn: row.withdrawn || m.forfeit === row.id,
         wins: row.wins + (mine > theirs ? 1 : 0),
         draws: row.draws + (mine === theirs ? 1 : 0),
         losses: row.losses + (mine < theirs ? 1 : 0),
@@ -190,7 +218,7 @@
 
   return {
     MIN_PLAYERS, MAX_PLAYERS, DEFAULT_GAMES,
-    checkGames, createLeague, reshuffle, matches, nextMatch, findMatch, recordResult, undoResult,
+    checkGames, createLeague, reshuffle, matches, nextMatch, findMatch, recordResult, undoResult, withdraw, renamePlayer,
     isFinished, standings, matchLabel, playerName, isValid,
   };
 });

@@ -25,6 +25,18 @@
 
   const matchId = (round, index) => `R${round}-${index}`;
   const isPlayer = (v) => typeof v === 'number';
+  const NAME_MAX = 12;
+  // 제어문자·안 보이는 글자(폭 없는 공백·글자 방향 표시·BOM) 제거 (league-core.js · worker.js 와 같은 글자)
+  const INVISIBLE = /[\u0000-\u001f\u007f​-‏‪-‮⁠-⁤⁦-⁩﻿]/g;
+
+  // players 에서 id 선수의 이름만 바꾼 새 배열 (league-core.js 도 같은 규칙)
+  function renamedPlayers(players, id, name) {
+    if (!players.some((p) => p.id === id)) throw new Error('없는 선수예요');
+    const clean = String(name ?? '').replace(INVISIBLE, '').trim().slice(0, NAME_MAX);
+    if (!clean) throw new Error('이름을 입력해 주세요');
+    if (players.some((p) => p.id !== id && p.name === clean)) throw new Error(`'${clean}' 와 같은 이름이 이미 있어요`);
+    return players.map((p) => (p.id === id ? { ...p, name: clean } : p));
+  }
 
   // 홀수 라운드에서 쉴 자리: 짝을 깨지 않게 짝수 번째 자리 중, 아직 안 쉰 쪽의 맨 뒤
   function pickBye(hadBye) {
@@ -121,12 +133,23 @@
   }
 
   // 3·4위전: 결승 진출자 두 사람 모두 앞에서 진짜 경기를 이겼을 때만 (3명이면 한 명이 쉬고 올라와서 없음)
+  //   준결승에서 기권한 선수가 나오면 경기 없이 상대가 이긴다 (autoForfeit = 기권한 선수). 저장하지 않고 계산하므로
+  //   그 준결승 결과를 취소하면 함께 되돌아간다
   function thirdPlaceMatch(t, all = rounds(t)) {
     if (!t.thirdPlace) return null;
     const semis = semiMatches(all);
     if (semis.length < 2 || semis.some((m) => !m)) return null;
     const a = loserOf(semis[0]), b = loserOf(semis[1]);
-    return { id: THIRD_ID, round: all.length - 1, index: -1, a, b, winner: t.results[THIRD_ID]?.winner, bye: false };
+    const quit = forfeitedPlayers(t);
+    const autoForfeit = !isPlayer(a) || !isPlayer(b) ? undefined : quit.has(a) ? a : quit.has(b) ? b : undefined;
+    const auto = autoForfeit === undefined ? undefined : autoForfeit === a ? b : a;
+    const winner = t.results[THIRD_ID]?.winner ?? auto;
+    return { id: THIRD_ID, round: all.length - 1, index: -1, a, b, winner, bye: false, autoForfeit };
+  }
+
+  // 기권한 적이 있는 선수 id
+  function forfeitedPlayers(t) {
+    return new Set(Object.values(t.results).map((r) => r.forfeit).filter(isPlayer));
   }
 
   const playable = (m) => !!m && isPlayer(m.a) && isPlayer(m.b) && m.winner === undefined;
@@ -152,6 +175,25 @@
     if (!playable(m)) throw new Error('지금 할 수 없는 경기예요');
     if (winner !== m.a && winner !== m.b) throw new Error('이 경기의 선수가 아니에요');
     return { ...t, results: { ...t.results, [id]: { winner, scores: [...scores] } } };
+  }
+
+  // 기권: 경기 없이 상대가 이긴다. 결과 = { winner, scores: null, forfeit: 기권한 선수 id } (결과 취소로 되돌릴 수 있다)
+  function recordForfeit(t, id, loser) {
+    const m = findMatch(t, id);
+    if (!playable(m)) throw new Error('지금 할 수 없는 경기예요');
+    if (loser !== m.a && loser !== m.b) throw new Error('이 경기의 선수가 아니에요');
+    const winner = loser === m.a ? m.b : m.a;
+    return { ...t, results: { ...t.results, [id]: { winner, scores: null, forfeit: loser } } };
+  }
+
+  // 그 선수가 지금 기권할 수 있는 경기 (상대가 정해졌고 아직 안 한 경기). 없으면 null
+  function forfeitableMatch(t, playerId) {
+    return playOrder(t).find((m) => playable(m) && (m.a === playerId || m.b === playerId)) || null;
+  }
+
+  // 이름 고치기 (대회 중 오타 등). 빈 이름·다른 사람과 같은 이름은 거절, 12자까지
+  function renamePlayer(t, id, name) {
+    return { ...t, players: renamedPlayers(t.players, id, name) };
   }
 
   // 결과 취소: 그 경기 결과만 뺀 새 대진표. 뒤 경기가 이 결과에 기대므로 가장 최근 결과에만 쓴다
@@ -218,6 +260,7 @@
   return {
     MIN_PLAYERS, MAX_PLAYERS,
     createBracket, reshuffle, rounds, roundCount, thirdPlaceMatch, nextMatch, findMatch, recordResult, undoResult,
+    recordForfeit, forfeitableMatch, renamePlayer, renamedPlayers,
     isFinished, standings, loserOf, roundName, matchLabel, playerName, isValid,
   };
 });

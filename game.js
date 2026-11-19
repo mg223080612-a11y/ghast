@@ -1682,7 +1682,9 @@ function noticeRapidFire(x, y, who) {
 const CORNER_GUN_STATES = ['title', 'solo', 'result', 'ranking', 'bracket', 'champion', 'gunsetup', 'aimtest'];
 function cornerButtonAt(x, y) {
   if (!CORNER_GUN_STATES.includes(game.state)) return null;
-  return document.elementFromPoint(x, y)?.closest('#corner-buttons button') || null;
+  const btn = document.elementFromPoint(x, y)?.closest('#corner-buttons button') || null;
+  // [대회 관리]는 진행요원용 (마우스·K 키). 총으로 열리면 창이 총알을 막아 총만으로는 닫을 수 없다
+  return btn?.id === 'btn-manage' ? null : btn;
 }
 // 게임이 끝난 직후에는 다른 버튼처럼 잠깐 잠근다 (계속 쏘던 총알이 설정·전체화면을 누르지 않게). 마우스는 바로 된다
 function cornerLocked() {
@@ -1730,6 +1732,8 @@ function onTap(x, y, who = 0, source = 'mouse') {
     return;
   }
   if (settingsOpen()) { clickSettingsByGun(x, y); return; }
+  // 대회 관리 창(이름 고치기·기권)은 진행요원이 마우스·키보드로만 — 총알은 창도, 창 뒤 화면도 누르지 않는다
+  if (ContestManage.isOpen()) return;
 
   // 입력 창(닉네임·토너먼트)이 떠 있으면 게임 화면 대신 창 안의 버튼(시작! · 🎲 · 취소 …)을 누른다.
   // 조이스틱 모드 총은 마우스 클릭이 아니라서 직접 그 자리의 버튼을 찾아 누른다. 창 밖을 쏘면 아무 일도 없다
@@ -2190,6 +2194,11 @@ window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') Tournament.closeForm();
     return;
   }
+  // 대회 관리 창: Esc = 닫기, 나머지는 이름 칸 글자 입력 (게임 단축키 안 씀)
+  if (ContestManage.isOpen()) {
+    if (e.key === 'Escape') ContestManage.close();
+    return;
+  }
   Sound.init();
   // 엑스거너 총에는 q·s·w·a·d·5 같은 키보드 버튼이 달려 있다.
   // 게임 중에 학생이 잘못 눌러 판이 끝나거나(Q) 설정 창이 뜨지(S) 않도록 막는다.
@@ -2225,6 +2234,9 @@ window.addEventListener('keydown', (e) => {
     }
     case 'KeyC':     // 처음 화면 버튼과 같음 (게임 중이면 일시정지하고 한 번 더 묻는다)
       goHome();
+      break;
+    case 'KeyK':     // 대진표·순위표·우승 화면에서 대회 관리 (이름 고치기·기권·결과 저장). M 은 소리 끄기
+      ContestManage.open();
       break;
     case 'Digit2':   // 처음 화면에서 2 = 2인 대결
     case 'Numpad2':
@@ -2561,6 +2573,8 @@ function updateCornerButtons() {
   }
   // 처음 화면 버튼: 처음 화면이 아닌 곳 어디서나
   document.getElementById('btn-home').hidden = game.state === 'title';
+  document.getElementById('btn-manage').hidden = !ContestManage.canOpen();
+  if (!ContestManage.canOpen()) ContestManage.close();
   const corner = document.getElementById('corner-buttons');
   corner.classList.remove('hidden');
   corner.classList.toggle('in-game', game.state === 'play' || game.state === 'countdown');
@@ -3868,7 +3882,12 @@ function frame(now) {
 // ---------- 시작 ----------
 window.addEventListener('resize', resize);
 resize();
-loadImages()
+// 그림과 함께 '뒤에 불러오는 스크립트(tournament.js · contest-manage.js 등)'까지 다 읽은 뒤 시작한다.
+// 그림이 먼저 끝나면 처음 화면을 그리다 아직 없는 Tournament·ContestManage 를 찾아 시작이 멈춘다 (2026-11-19 확인)
+const scriptsReady = document.readyState === 'loading'
+  ? new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
+  : Promise.resolve();
+Promise.all([loadImages(), scriptsReady])
   .then(() => {
     buildGhastVariants();
     goTitle();
