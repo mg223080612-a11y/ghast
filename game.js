@@ -1815,7 +1815,7 @@ function onTap(x, y, who = 0, source = 'mouse') {
   }
 
   // 2.5) 방금 터진 가스트 자리를 쏨 (상대가 한발 먼저 맞힘) → 늦었을 뿐이라 감점 없음
-  if (justKilledAt(x, y)) { popupScore(x, y - U * 4, '늦었어요', '#c9a89a'); return; }
+  if (isTwoPlayer() && justKilledAt(x, y)) { popupScore(x, y - U * 4, '늦었어요', '#c9a89a'); return; }
 
   // 3) 빗나감 (배경을 맞힘) → 쏜 사람만 감점
   shooter.stats.misses++;
@@ -1876,6 +1876,7 @@ const Guns = {
   // 저장되는 지정 정보: 어떤 총(key)이 1P/2P 인지, 총마다 방아쇠 버튼 번호
   saved: readJson(GUN_SAVE_KEY, { p1: null, p2: null, trigger: {} }),
   assigning: null, // 총 연결 화면에서 지금 지정 중인 자리 (0 = 1P, 1 = 2P)
+  seen: {},        // 이번 실행에서 한 번이라도 잡힌 총(수신기) — 빠졌는지 알리려고
   calib: null,     // 조준 보정 중: { who, key, raw[] }
   message: '',
 
@@ -1884,6 +1885,37 @@ const Guns = {
   // 최근 몇 초 안에 움직이거나 버튼을 누른 총이 있는지
   active(ms = 5000) { const now = performance.now(); return this.list().some((s) => now - s.lastActive < ms); },
   playerOf(s) { return this.saved.p1 === s.key ? 0 : this.saved.p2 === s.key ? 1 : -1; },
+  // X-GUNNER 수신기는 번호가 정해져 있다: 이름 'XGUNNER-P1' · Product 0001 = 1P, P2 · 0002 = 2P (접시 사격과 같은 규칙).
+  // 그런 총은 방아쇠를 당긴 순서와 상관없이 그 자리에 자동으로 지정한다 → 1P·2P 가 뒤바뀌지 않는다
+  receiverSlot(id) {
+    const m = /XGUNNER-P(\d)/i.exec(id) || /Vendor:\s*1209\s+Product:\s*000(\d)/i.exec(id);
+    const n = m ? Number(m[1]) : 0;
+    return n === 1 || n === 2 ? n - 1 : -1;
+  },
+  autoAssign(s) {
+    const who = this.receiverSlot(s.id);
+    if (who < 0 || s.key.includes('#')) return; // 같은 이름의 수신기가 둘이면 자동으로 정할 수 없다
+    const slot = who === 0 ? 'p1' : 'p2', other = who === 0 ? 'p2' : 'p1';
+    if (this.saved[slot] === s.key && this.saved[other] !== s.key) return;
+    this.saved = { ...this.saved, [slot]: s.key, [other]: this.saved[other] === s.key ? null : this.saved[other] };
+    this.save();
+  },
+  // 총 상태 (접시 사격의 총 상태 배너와 같은 생각). 꺼진 총도 수신기는 마지막 위치를 계속 보내서(실측) 켜짐·꺼짐은 구분할 수 없다.
+  // 'missing' 이번 실행에서 잡혔던 1P/2P 수신기가 빠짐 · 'silent' 수신기는 있는데 3초 넘게 움직임·방아쇠가 한 번도 없음 · 'ok' · 'none'
+  statusOf(who) {
+    const key = who === 0 ? this.saved.p1 : this.saved.p2;
+    if (!key) return 'none';
+    const s = this.list().find((p) => p.key === key);
+    if (!s) return this.seen[key] ? 'missing' : 'none';
+    return !s.moved && performance.now() - s.connectedAt > 3000 ? 'silent' : 'ok';
+  },
+  statusMessage(players = [0, 1]) {
+    const pick = (kind) => players.filter((i) => this.statusOf(i) === kind).map((i) => `${i + 1}P`).join('·');
+    const missing = pick('missing'), silent = pick('silent');
+    if (missing) return `${missing} 총 수신기가 빠졌어요 — 수신기를 다시 꽂으세요`;
+    if (silent) return `${silent} 총 신호 없음 — 총 전원을 켜고 조이스틱 모드(Space + 5 + 왼쪽)로 바꾼 뒤 한 번 흔들어 주세요`;
+    return '';
+  },
   // 2인 대결 준비 완료: 1P·2P 로 지정된 총 2대가 지금 게임패드로 연결돼 있음
   readyForVersus() {
     const keys = this.list().map((s) => s.key);
@@ -1925,7 +1957,9 @@ const Guns = {
       const key = sameId(gp.id) ? `${gp.id}#${gp.index}` : gp.id;
       let s = this.pads[gp.index];
       if (!s || s.key !== key) {
-        s = this.pads[gp.index] = { key, id: gp.id, index: gp.index, x: W / 2, y: H / 2, pressed: [], min: [], max: [], lastActive: 0 };
+        s = this.pads[gp.index] = { key, id: gp.id, index: gp.index, x: W / 2, y: H / 2, pressed: [], min: [], max: [], lastActive: -1e9, moved: false, connectedAt: now };
+        this.seen[key] = true;
+        this.autoAssign(s);
       }
       gp.axes.forEach((v, i) => { s.min[i] = Math.min(s.min[i] ?? v, v); s.max[i] = Math.max(s.max[i] ?? v, v); });
       const [ix, iy] = this.aimAxes(s, gp);
@@ -1942,7 +1976,8 @@ const Guns = {
       const o = screenOffset();
       const nx = clamp(u * screen.width - o.x, 0, W);
       const ny = clamp(v * screen.height - o.y, 0, H);
-      if (Math.hypot(nx - (s.rx ?? s.x), ny - (s.ry ?? s.y)) > 2) s.lastActive = now;
+      // 처음 읽은 값은 '움직임'이 아니다: 꺼진 총의 수신기도 마지막 위치를 계속 보내므로, 실제로 움직여야 조준점을 그린다
+      if (s.rx !== undefined && Math.hypot(nx - s.rx, ny - s.ry) > 2) { s.lastActive = now; s.moved = true; }
       // 총 상태 확인용: 1초에 위치가 몇 번 바뀌는지 (총이 화면·센서를 잘 보면 움직일 때 50 이상, 못 보면 한 자리 수)
       const axKey = gp.axes[ix] + ',' + gp.axes[iy];
       if (axKey !== s.axKey) { s.axKey = axKey; s.moves = (s.moves || 0) + 1; }
@@ -1962,7 +1997,7 @@ const Guns = {
       s.axes = [...gp.axes];
       gp.buttons.forEach((b, i) => {
         const down = b.pressed || b.value > 0.5;
-        if (down && !s.pressed[i]) { s.lastActive = now; this.onButton(s, i); }
+        if (down && !s.pressed[i]) { s.lastActive = now; s.moved = true; this.onButton(s, i); }
         s.pressed[i] = down;
       });
     }
@@ -2026,7 +2061,7 @@ const Guns = {
     const inGame = (game.state === 'play' || game.state === 'countdown') && !game.paused;
     if (inGame && settings.aimMode !== 'big') return;
     for (const s of this.list()) {
-      if (now - s.lastActive > 10000 || this.hiddenInSolo(s)) continue;
+      if (!s.moved || now - s.lastActive > 10000 || this.hiddenInSolo(s)) continue; // 움직인 적 없는 총(꺼진 총의 수신기)은 그리지 않는다
       const who = this.playerOf(s);
       drawAim(s.x, s.y, who >= 0 ? PLAYER_COLORS[who] : null, who >= 0 ? `${who + 1}P` : '총');
     }
@@ -2944,6 +2979,19 @@ function drawSparkles(x, y, w, h, time, count = 6, seed = 1, alpha = 1) {
 }
 const LEVEL_COLORS = ['#ffffff', '#ffe14a', '#ffb23a', '#ff7a3a', '#ff4a3a'];
 
+// 총 상태 띠: 화면 맨 위 왼쪽에 작게 (오른쪽 위 운영 버튼과 제목에 겹치지 않게)
+function drawGunStatus(players) {
+  const msg = Guns.statusMessage(players);
+  if (!msg) return;
+  const maxW = Math.min(cornerLeftPx, W) - U * 5;
+  const size = fitTextSize(msg, U * 2.4, maxW);
+  ctx.font = `bold ${Math.round(size)}px ${FONT}`;
+  const w = Math.min(maxW, ctx.measureText(msg).width) + U * 2;
+  ctx.fillStyle = 'rgba(130, 22, 10, 0.88)';
+  ctx.fillRect(U * 1, U * 0.3, w, U * 4);
+  text(msg, U * 2, U * 2.3, size, '#ffe9d0', 'left');
+}
+
 function drawGunSetup() {
   if (Guns.calib) { drawGunCalib(); return; }
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
@@ -2977,7 +3025,7 @@ function drawGunSetup() {
     pads.forEach((s, i) => {
       const who = Guns.playerOf(s);
       const color = who >= 0 ? PLAYER_COLORS[who] : '#ffffff';
-      const role = who >= 0 ? `${who + 1}P` : '미지정';
+      const role = who >= 0 ? `${who + 1}P${Guns.receiverSlot(s.id) === who ? ' 자동' : ''}` : '미지정';
       const axes = (s.axes || []).slice(0, 4).map((v) => v.toFixed(2)).join('  ');
       const fresh = performance.now() - s.lastActive < 1500;
       text(`총 ${i + 1}  ·  ${role}`, px + U * 6, y, U * 3.8, color, 'left');
@@ -2986,10 +3034,17 @@ function drawGunSetup() {
       // 움직이는 중에 위치 갱신이 적으면 총이 화면(센서)을 잘 못 보는 것: 배터리·렌즈·총 보정 확인
       const rateColor = !fresh ? '#8a7a72' : s.rate >= 40 ? '#7dff7a' : s.rate >= 15 ? '#ffe14a' : '#ff8a7a';
       const capNote = AimCap.gapForHz(settings.versusAimHz) > 0 ? `  ·  대결 중 ${s.capRate ?? 0}/초` : '';
-      text(`위치 갱신 ${s.rate ?? 0}/초${capNote}${fresh && s.rate < 15 ? '  ← 느림: 배터리·렌즈·총 보정 확인' : ''}`, px + U * 66, y + U * 4, U * 2.4, rateColor, 'left', { live: true });
+      const model = fresh && s.rate >= 80 ? '  ·  빠른 총(Pro)' : fresh && s.rate >= 20 ? '  ·  보통 총' : '';
+      const rateLine = !s.moved ? '신호 없음 — 총 전원을 켜고 조이스틱 모드인지 확인한 뒤 한 번 흔들어 보세요'
+        : `위치 갱신 ${s.rate ?? 0}/초${model}${capNote}${fresh && s.rate < 15 ? '  ← 느림: 배터리·렌즈·총 보정 확인' : ''}`;
+      text(rateLine, px + U * 66, y + U * 4, fitTextSize(rateLine, U * 2.4, pw - U * 70), !s.moved ? '#ff8a7a' : rateColor, 'left', { live: true });
       text(s.id.slice(0, 48), px + U * 6, y + U * 4, U * 2.2, '#8a7a72', 'left');
       y += U * 9.5;
     });
+    if (AimCap.gapForHz(settings.versusAimHz) > 0) {
+      const fair = `대결 중에는 두 총 모두 1초에 약 ${settings.versusAimHz}번만 새 위치를 받아요: 빠른 총(Pro, 약 130번)은 줄이고 보통 총(약 40번)은 그대로`;
+      text(fair, cx, y + U * 1.5, fitTextSize(fair, U * 2.4, pw - U * 8), '#c9a89a');
+    }
   }
 
   // 안내 문구: 지금 무엇을 해야 하는지. 두 총이 다 준비되면 바로 대결을 시작할 수 있는 버튼
@@ -3600,6 +3655,7 @@ function draw(time) {
   if (game.state === 'champion') Tournament.drawChampion(time);
   if (game.state === 'aimtest') drawAimTest();
   if (game.state === 'gunsetup') drawGunSetup();
+  if (['title', 'solo', 'bracket'].includes(game.state)) drawGunStatus(game.state === 'solo' ? [0] : [0, 1]);
   drawBanner();
   drawIdleNotice();
 
@@ -3624,7 +3680,8 @@ function draw(time) {
   const cursor = hideCursor ? 'none' : inGame ? 'crosshair' : 'default';
   if (canvas.style.cursor !== cursor) canvas.style.cursor = cursor;
   // 2인 대결에서는 마우스 조준점 대신 총마다 색이 다른 조준점을 그린다
-  const mouseAim = showBig && aim.seen && game.state !== 'aimtest' && !(isTwoPlayer() && inGame && Guns.active());
+  // 게임 중 총(게임패드)이 한 번이라도 움직였으면 마우스 조준점은 그리지 않는다 (총 조준점 + 마우스 조준점이 겹쳐 3개로 보이던 문제)
+  const mouseAim = showBig && aim.seen && game.state !== 'aimtest' && !(inGame && Guns.list().some((s) => s.moved));
   if (mouseAim) drawAim(aim.x, aim.y);
   // 게임패드로 연결된 총의 조준점 (메뉴에서도 보여야 총으로 버튼을 고를 수 있다)
   Guns.draw(time);

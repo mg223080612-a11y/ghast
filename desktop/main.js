@@ -34,7 +34,6 @@ if (!app.requestSingleInstanceLock()) {
 const root = path.join(__dirname, '..');
 let win = null;
 
-const REFOCUS_DELAY_MS = 300;        // 전체화면에서 포커스를 뺏기면 이만큼 뒤에 게임 창으로 되돌린다
 const CRASH_RELOAD_LIMIT = 3;        // 화면이 죽어서 다시 여는 것은 1분에 이만큼까지 (계속 죽는 고장이면 멈춘다)
 const CRASH_RELOAD_WINDOW_MS = 60_000;
 let crashReloads = [];               // 최근에 다시 연 시각들
@@ -51,18 +50,6 @@ function reloadAfterCrash(details) {
     return;
   }
   win.reload();
-}
-
-// 전체화면일 때 운영체제 알림 창 등이 포커스를 가져가면 잠시 뒤 게임 창으로 되돌린다.
-// 게임 창이 포커스를 잃으면 게임패드(조이스틱 모드) 총 입력이 먹통이 되기 때문.
-// 게임이 직접 연 창(명단 파일 고르기·알림 창)이 떠 있는 동안은 창이 '사용 안 함'(isEnabled false)이라 건드리지 않는다
-function refocusIfFullScreen() {
-  setTimeout(() => {
-    if (!win || win.isDestroyed() || win.isFocused() || win.isMinimized()) return;
-    if (!win.isEnabled() || !isFull()) return;
-    if (isMac) app.focus({ steal: true });
-    win.focus();
-  }, REFOCUS_DELAY_MS);
 }
 
 function createWindow() {
@@ -92,7 +79,6 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith('app://')) { e.preventDefault(); openOutside(url); } });
   win.webContents.on('render-process-gone', (e, details) => reloadAfterCrash(details));
-  win.on('blur', refocusIfFullScreen);
 }
 
 // 맥은 '단순 전체화면'(simpleFullScreen)을 쓴다.
