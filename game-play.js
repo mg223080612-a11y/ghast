@@ -1,4 +1,4 @@
-// 가스트 사격 — 총 조준 테스트·게임 흐름 (처음 화면·시작·끝·점수)·입력 (터치·마우스·펜)·연사 차단
+// 가스트 사격 — 총 조준 테스트·게임 흐름 (처음 화면·시작·끝·점수)·입력 (터치·마우스·펜)
 // game.js 에서 기능별로 나눈 조각. index.html 이 game.js 다음에 차례로 불러오며, 이름(함수·변수)을 모두 함께 쓴다.
 'use strict';
 // ---------- 총 조준 테스트 ----------
@@ -311,22 +311,8 @@ function isDuplicateTap(x, y, now) {
   return dup;
 }
 
-// ---------- 연사 차단 ----------
-// 규칙은 fire-gate.js (총·마우스마다 따로). 막힌 발은 점수·감점·소리 없이 버리고,
-// 잠금이 새로 시작될 때만 그 자리에 '연사 금지' 를 띄우고 잠깐 알린다 (연사 스위치를 끄도록)
-const fireGate = new Map(); // 입력 장치(마우스·총마다) → FireGate 상태
-function allowShot(source, now) {
-  const r = FireGate.next(fireGate.get(source) || FireGate.initial(), now);
-  fireGate.set(source, r.state);
-  return r;
-}
-function noticeRapidFire(x, y, who) {
-  fieldLog('연사 차단', { 자리: `${who + 1}P`, 화면: game.state });
-  const tag = isTwoPlayer() ? `${who + 1}P ` : '';
-  const color = isTwoPlayer() ? PLAYER_COLORS[who] : '#ff6a5a';
-  popupScore(x, y - U * 4, `${tag}연사 금지!`, color);
-  showBanner(`${tag}연사(Rapid Fire)가 감지됐어요`, `${(FireGate.LOCK_MS / 1000).toFixed(1)}초 동안 쏠 수 없어요 — 총의 연사 스위치를 끄고 한 발씩 쏘세요`, color, 2.2);
-}
+// 연사: 방아쇠 간격으로 연사를 판정해 잠그던 차단은 v3.4.0 에서 삭제했다 (교사 결정). 들어온 발은 모두 인정한다.
+//   연사는 총에서 끈다 (총 연사 스위치·단축키, 펌웨어에 따라 수신기 COM 포트 명령 XA:0;)
 
 // 총으로 오른쪽 위 버튼을 누를 수 있는 화면. 게임 중(오른쪽 아래 '처음 화면')과 이름 쏘기 판은 빗나간 총알이
 // 판을 멈추지 않게 빼 둔다
@@ -360,18 +346,13 @@ function clickSettingsByGun(x, y) {
 
 let buttons = [];
 // who: 쏜 사람 (0 = 1P, 1 = 2P). 마우스·1인 기록전은 항상 1P
-// source: 어느 입력 장치에서 왔는지 (연사 차단을 장치마다 따로 하려고)
+// source: 어느 입력 장치에서 왔는지 ('pad:…' = 조이스틱 모드 총 — 되돌릴 수 없는 확인 버튼은 총으로 못 누르게)
 function onTap(x, y, who = 0, source = 'mouse') {
   // 설정 창이 열려 있으면 총알이 창 뒤의 화면(처음 화면 버튼 등)을 누르지 않게 한다.
   // 마우스는 창이 막아 주지만, 조이스틱 모드 총은 창과 상관없이 여기로 들어온다
   noteInput();
   const now = performance.now();
   if (isDuplicateTap(x, y, now)) return;
-  const gate = allowShot(source, now);
-  if (!gate.allowed) { // 연사: 점수·감점·소리 없이 버린다. 잠금이 막 시작됐을 때만 알림
-    if (gate.lockStarted) noticeRapidFire(x, y, who);
-    return;
-  }
   Sound.init();
   // 설정 창이 열려 있으면 총알은 창 안만 누른다 (창 뒤의 처음 화면 버튼 등은 누르지 않는다).
   // 마우스는 창이 직접 받고, 조이스틱 모드 총만 여기로 온다. 확인 창이 떠 있으면 그 창의 버튼만

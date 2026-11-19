@@ -220,7 +220,7 @@ const Guns = {
     Sound.init();
     // 조준 보정 중: 보정하는 총의 방아쇠만 받는다 (다른 총·다른 버튼은 무시)
     if (this.calib) {
-      if (s.key === this.calib.key && i === this.triggerOf(s) && allowShot(`pad:${s.key}`, performance.now()).allowed) recordCalibShot(s);
+      if (s.key === this.calib.key && i === this.triggerOf(s)) recordCalibShot(s);
       return;
     }
     // 총 연결 화면: 방아쇠를 당긴 총을 지금 자리(1P/2P)에, 그 버튼을 방아쇠로 기억
