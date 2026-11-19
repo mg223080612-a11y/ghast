@@ -35,6 +35,7 @@ const DEFAULTS = {
   gunInvertX: false,   // 조준이 좌우 반대로 움직이면 켜기
   gunInvertY: false,   // 조준이 위아래 반대로 움직이면 켜기
   versusAimHz: 40,     // 2인 대결·토너먼트 중 총마다 조준 위치를 1초에 약 몇 번까지 새로 받는지 (빠른 총이 유리하지 않게, 0 = 제한 없음)
+  versusFireDelayMs: 25, // 2인 대결·대회 중 1P(Pro) 총 방아쇠를 '다음 25ms 칸 + 이 값' 에 처리 (2P 보통 총이 25~50ms 늦어서, 0 = 끔)
   difficulty: 1,       // 기본 빠르기 (Normal 기준). 0.5 느리게 ~ 2 빠르게. Easy·Hard 는 여기에 배율을 곱한다
   diffLevel: 'normal', // 난이도 'easy' | 'normal' | 'hard' (닉네임 창에서 고르고, 다음 사람에게도 그대로)
   tournamentSeconds: 40, // 토너먼트 한 경기 시간 (보너스 시간 없이 고정)
@@ -1871,8 +1872,9 @@ function screenOffset() {
   };
 }
 
+const PARITY_GRID_MS = 25; // 2P 보통 총의 방아쇠가 들어오는 단위 (접시 사격 M0 실측: 25ms 배수)
 const Guns = {
-  pads: {},        // gamepad.index → { key, id, x, y, pressed[], min[], max[], lastActive }
+  pads: {},       // gamepad.index → { key, id, x, y, pressed[], min[], max[], lastActive }
   // 저장되는 지정 정보: 어떤 총(key)이 1P/2P 인지, 총마다 방아쇠 버튼 번호
   saved: readJson(GUN_SAVE_KEY, { p1: null, p2: null, trigger: {} }),
   assigning: null, // 총 연결 화면에서 지금 지정 중인 자리 (0 = 1P, 1 = 2P)
@@ -2007,6 +2009,7 @@ const Guns = {
       this.onUnplug(this.pads[idx]);
       delete this.pads[idx];
     }
+    this.flushPendingShots(now);
   },
 
   // 2인 경기(대결·토너먼트·리그) 중 1P/2P 총이 빠지면 P 를 누른 것처럼 멈추고 일시정지 화면에 알린다
@@ -2047,7 +2050,33 @@ const Guns = {
       who = this.playerOf(s);
       if (who < 0) return; // 지정 안 된 총은 대결 중 무시
     }
+    if (this.fireParity(s)) {
+      const at = AimCap.parityFireAt(performance.now(), PARITY_GRID_MS, settings.versusFireDelayMs);
+      this.pendingShots = [...this.pendingShots, { at, key: s.key, who, source: `pad:${s.key}` }];
+      return;
+    }
     onTap(s.x, s.y, who, `pad:${s.key}`);
+  },
+
+  // 2인 대결·대회 경기 중 방아쇠 공정성 보정 (접시 사격과 같은 규칙, aim-cap.js 의 parityFireAt):
+  //   2P 보통 총은 방아쇠가 25~50ms 늦게 들어온다 → 1P(Pro, 수신기 XGUNNER-P1) 방아쇠도 25~50ms 뒤에 처리한다.
+  //   처리할 때의 (속도 제한된) 조준 위치로 판정한다. 1인 기록전·메뉴에서는 바로 처리
+  pendingShots: [],
+  fireParity(s) {
+    return isTwoPlayer() && (game.state === 'play' || game.state === 'countdown')
+      && Number(settings.versusFireDelayMs) > 0 && this.receiverSlot(s.id) === 0;
+  },
+  // 때가 된 1P 방아쇠를 처리한다. 경기가 끝났거나 멈췄으면 보류 중인 사격은 버린다
+  flushPendingShots(now) {
+    if (!this.pendingShots.length) return;
+    const live = isTwoPlayer() && (game.state === 'play' || game.state === 'countdown') && !game.paused;
+    const due = this.pendingShots.filter((p) => p.at <= now);
+    this.pendingShots = live ? this.pendingShots.filter((p) => p.at > now) : [];
+    if (!live) return;
+    for (const p of due) {
+      const s = this.list().find((g) => g.key === p.key);
+      if (s) onTap(s.x, s.y, p.who, p.source);
+    }
   },
 
   // 화면에 총 조준점 그리기 (최근에 쓴 총만). 지정된 총은 1P/2P 색과 이름표
@@ -3042,7 +3071,8 @@ function drawGunSetup() {
       y += U * 9.5;
     });
     if (AimCap.gapForHz(settings.versusAimHz) > 0) {
-      const fair = `대결 중에는 두 총 모두 1초에 약 ${settings.versusAimHz}번만 새 위치를 받아요: 빠른 총(Pro, 약 130번)은 줄이고 보통 총(약 40번)은 그대로`;
+      const trigger = Number(settings.versusFireDelayMs) > 0 ? ' · 1P 방아쇠도 2P 처럼 25~50ms 뒤에 처리' : '';
+      const fair = `대결·대회 중에는 두 총 모두 1초에 약 ${settings.versusAimHz}번만 새 위치를 받아요 (Pro 약 130번은 줄이고 보통 총 약 40번은 그대로)${trigger}`;
       text(fair, cx, y + U * 1.5, fitTextSize(fair, U * 2.4, pw - U * 8), '#c9a89a');
     }
   }

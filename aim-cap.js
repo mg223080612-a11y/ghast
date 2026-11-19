@@ -28,5 +28,16 @@
     return { x: rawX, y: rawY, at: now };
   }
 
-  return { gapForHz, nextCappedAim };
+  // 2인 경기 방아쇠 공정성 보정: 빠른 총(1P, Pro)의 방아쇠를 언제 처리할지.
+  //   보통 총(2P)은 방아쇠가 25ms 단위로 25~50ms 늦게 들어온다 (접시 사격 M0 실측: 동시 당김 10회 중 9회).
+  //   그래서 1P 도 '다음 gridMs 칸 + delayMs' 에 처리해 25~50ms 로 맞춘다 (접시 사격 DESIGN §4.2.1 과 같은 규칙,
+  //   보정 뒤 동시 당김 63쌍 P2−P1 평균 −6.4ms). 숫자가 아니거나 0 이면 그 부분은 끈다
+  function parityFireAt(now, gridMs, delayMs) {
+    const grid = Number(gridMs) > 0 ? Number(gridMs) : 0;
+    const delay = Number(delayMs) > 0 ? Number(delayMs) : 0;
+    const base = grid > 0 ? (Math.floor(now / grid) + 1) * grid : now;
+    return grid > 0 || delay > 0 ? base + delay : now;
+  }
+
+  return { gapForHz, nextCappedAim, parityFireAt };
 });
