@@ -18,6 +18,8 @@ const RETRY_MS = 8000;          // 다시 보내는 간격
 const GAMEPAD_MODE = 'J';
 const ALIVE_QUERY = 'XQ;';     // 총이 켜져 있을 때만 'XV…' 로 답한다 (접시 사격 M0 실측)
 const ALIVE_WAIT_MS = 800;      // 답을 기다리는 시간
+const CHECK_TIMEOUT_MS = 3000;  // 포트 확인 전체 제한 — 수신기 시리얼이 멈추면(앱이 포트를 연 채 강제 종료된 뒤 등) 열기·쓰기가 끝나지 않는다
+const STUCK_RETRY_MS = 20000;   // 멈춘 수신기는 이 간격으로만 다시 시도
 
 const lower = (v) => String(v || '').toLowerCase();
 
@@ -34,7 +36,7 @@ async function receiverPorts() {
 //   (꺼진 총에 J 를 보내면 수신기가 좌표를 한 번 0 으로 보내 조준점이 잠깐 구석에 생긴다)
 //   주의: 시리얼 좌표(GT:A…)는 총이 마우스 모드여도 흘러서 모드를 알려 주지 않는다 (2026-11-19 실측).
 //   그래서 '게임패드 모드인지'는 게임 쪽에서 그 총의 게임패드 신호가 실제로 들어오는지로 판단한다 (confirmed)
-//   결과: 'alive' 켜짐 · 'switched' 켜짐 + J 보냄 · 'off' 꺼짐 · 'busy' 못 엶(다른 프로그램 등)
+//   결과: 'alive' 켜짐 · 'switched' 켜짐 + J 보냄 · 'off' 꺼짐 · 'busy' 못 엶(다른 프로그램 등) · 'stuck' 3초 안에 안 끝남(수신기 다시 꽂기)
 function checkPort(path, sendJ = false) {
   return new Promise((resolve) => {
     const port = new SerialPort({ path, baudRate: 115200, autoOpen: false });
@@ -43,8 +45,11 @@ function checkPort(path, sendJ = false) {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      clearTimeout(limit);
+      if (result === 'stuck') { resolve(result); try { if (port.isOpen) port.close(() => {}); } catch { /* 이미 멈춤 */ } return; }
       if (port.isOpen) port.close(() => resolve(result)); else resolve(result);
     };
+    const limit = setTimeout(() => finish('stuck'), CHECK_TIMEOUT_MS);
     const send = (cmd, next) => port.write(cmd, (err) => (err ? finish('busy') : port.drain(next)));
     port.on('error', () => finish('busy'));
     port.on('data', (d) => {
@@ -67,6 +72,7 @@ function checkPort(path, sendJ = false) {
 //   onSwitch(player): J 를 보냈을 때 · onStatus([{ player, state }]): state = 'ok'|'switching'|'mouse'|'off'|'busy'
 function startGunModeWatch({ isEnabled, isConfirmed = () => false, onSwitch = () => {}, onStatus = () => {}, log = () => {} }) {
   const info = new Map();     // player → { alive, tries, lastJ }
+  const stuckUntil = new Map(); // path → 멈춘 수신기를 다시 시도할 시각
   let running = false, stopped = false;
   const tick = async () => {
     if (running || stopped) return;
@@ -82,9 +88,17 @@ function startGunModeWatch({ isEnabled, isConfirmed = () => false, onSwitch = ()
         const confirmed = isConfirmed(player);
         if (confirmed) st.tries = 0;
         // 막 켜진 총(꺼짐 → 켜짐, 또는 앱을 막 켬)은 언제나 J. 켜져 있는데 게임패드 신호가 안 보이면 8초마다 다시 (최대 3번)
+        if ((stuckUntil.get(path) || 0) > now) { status.push({ player, state: 'stuck' }); continue; }
         const wantJ = isEnabled() && (!st.alive || (!confirmed && st.tries < RETRIES && now - st.lastJ >= RETRY_MS));
         const result = await checkPort(path, wantJ);
         if (result === 'busy') { status.push({ player, state: 'busy' }); info.set(player, st); continue; }
+        if (result === 'stuck') {
+          stuckUntil.set(path, now + STUCK_RETRY_MS);
+          log(`${player}P 수신기 시리얼이 응답하지 않음 — 수신기를 다시 꽂아야 할 수 있음`);
+          status.push({ player, state: 'stuck' });
+          continue;
+        }
+        stuckUntil.delete(path);
         if (result === 'off') { info.set(player, { alive: false, tries: 0, lastJ: 0 }); status.push({ player, state: 'off' }); continue; }
         st.alive = true;
         if (result === 'switched') {

@@ -5,11 +5,55 @@
 //  - 전체화면 끄기/켜기: F (또는 오른쪽 위 ⛶ 전체화면 버튼, F11)
 //  - 종료: Alt+F4 (맥은 Cmd+Q)
 const { app, BrowserWindow, protocol, net, shell, Menu, ipcMain, session, powerSaveBlocker } = require('electron');
+const { fork } = require('child_process');
 const path = require('path');
 const { pathToFileURL } = require('url');
-// 엑스거너 총 모드 자동 전환 (시리얼 부품을 못 불러와도 게임은 그대로 켜지게)
-let gunMode = null;
-try { gunMode = require('./gun-mode'); } catch (err) { console.error('[가스트 사격] 총 모드 자동 전환을 쓸 수 없습니다:', err.message); }
+// 엑스거너 총 모드 자동 전환: 게임과 따로 도는 작은 프로세스(desktop/gun-mode-worker.js)에서.
+// 시리얼 부품 오류로 그 프로세스가 죽어도 게임은 그대로이고, 3초 뒤 다시 띄운다 (1분에 5번까지)
+let gunWorker = null;
+const gunWorkerStarts = [];
+const GUN_WORKER_RESTART_MS = 3000;
+const GUN_WORKER_STUCK_RESTART_MS = 20000; // 수신기 시리얼이 멈춰 스스로 끝냈을 때 (그동안 '수신기 다시 꽂기' 안내 유지)
+let gunWorkerDelay = GUN_WORKER_RESTART_MS;
+let lastGunStatus = [];
+function sendToGame(channel, payload) { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); }
+function startGunWorker() {
+  const now = Date.now();
+  while (gunWorkerStarts.length && now - gunWorkerStarts[0] > 60_000) gunWorkerStarts.shift();
+  if (gunWorkerStarts.length >= 5 && gunWorkerDelay === GUN_WORKER_RESTART_MS) { console.error('[가스트 사격] 총 모드 자동 전환이 1분 안에 너무 자주 멈춰서 다시 켜지 않습니다'); return; }
+  gunWorkerStarts.push(now);
+  try {
+    // 앱 실행 파일을 일반 Node 로 띄운다 (ELECTRON_RUN_AS_NODE). 묶음(asar) 안의 파일·풀린 네이티브 부품도 그대로 읽는다
+    gunWorker = fork(path.join(__dirname, 'gun-mode-worker.js'), [], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+    });
+  } catch (err) {
+    console.error('[가스트 사격] 총 모드 자동 전환을 쓸 수 없습니다:', err.message);
+    return;
+  }
+  gunWorker.send({ type: 'enabled', on: gunAutoMode });
+  gunWorker.send({ type: 'confirmed', list: [...gunsConfirmed] });
+  gunWorker.on('message', (msg) => {
+    if (msg?.type === 'status') { lastGunStatus = msg.list; sendToGame('gun-status', msg.list); }
+    else if (msg?.type === 'restart-later') gunWorkerDelay = GUN_WORKER_STUCK_RESTART_MS;
+    else if (msg?.type === 'switch') sendToGame('gun-mode-switched', msg.player);
+    else if (msg?.type === 'log') console.log(`[가스트 사격] ${msg.msg}`);
+  });
+  gunWorker.on('error', (err) => console.error('[가스트 사격] 총 모드 자동 전환 프로세스 오류:', err.message));
+  gunWorker.on('exit', (code, signal) => {
+    gunWorker = null;
+    if (quitting) return;
+    console.error(`[가스트 사격] 총 모드 자동 전환 프로세스가 멈춤 (코드 ${code}${signal ? ` ${signal}` : ''}) — 잠시 뒤 다시 켭니다`);
+    const delay = gunWorkerDelay;
+    gunWorkerDelay = GUN_WORKER_RESTART_MS;
+    // 기다리는 동안에도 게임에 마지막 상태('응답 없음' 등)를 계속 알려 안내 띠가 사라지지 않게
+    const keep = setInterval(() => sendToGame('gun-status', lastGunStatus), 3000);
+    setTimeout(() => { clearInterval(keep); startGunWorker(); }, delay);
+  });
+}
+let quitting = false;
+app.on('before-quit', () => { quitting = true; gunWorker?.kill(); });
 let gunAutoMode = true; // 게임 설정 '총 모드 자동 전환' (game.js 가 알려 줌)
 let gunsConfirmed = new Set(); // 게임에 게임패드 신호가 들어오고 있는 자리 (1·2, game.js 가 알려 줌)
 
@@ -105,8 +149,12 @@ function toggleFullScreen() {
 ipcMain.on('toggle-fullscreen', (e) => { if (win && e.sender === win.webContents) toggleFullScreen(); });
 // 앱 버전 (package.json 의 version) → preload.js → 게임 처음 화면 구석의 'v2.0.0'
 ipcMain.on('app-version', (e) => { e.returnValue = app.getVersion(); });
-ipcMain.on('gun-auto-mode', (e, on) => { if (win && e.sender === win.webContents) gunAutoMode = !!on; });
-ipcMain.on('guns-confirmed', (e, list) => { if (win && e.sender === win.webContents && Array.isArray(list)) gunsConfirmed = new Set(list.map(Number)); });
+ipcMain.on('gun-auto-mode', (e, on) => { if (win && e.sender === win.webContents) { gunAutoMode = !!on; if (gunWorker?.connected) gunWorker.send({ type: 'enabled', on: gunAutoMode }); } });
+ipcMain.on('guns-confirmed', (e, list) => {
+  if (!win || e.sender !== win.webContents || !Array.isArray(list)) return;
+  gunsConfirmed = new Set(list.map(Number));
+  if (gunWorker?.connected) gunWorker.send({ type: 'confirmed', list: [...gunsConfirmed] });
+});
 
 app.whenReady().then(() => {
   // 메뉴 막대는 숨긴다. 맥은 메뉴가 없으면 Cmd+Q(종료)·복사/붙여넣기가 안 돼서 기본 메뉴만 남긴다
@@ -135,14 +183,8 @@ app.whenReady().then(() => {
     return net.fetch(pathToFileURL(file).toString());
   });
   createWindow();
-  // 3초마다 수신기를 확인해 마우스 모드인 총을 게임패드 모드로 (desktop/gun-mode.js)
-  gunMode?.startGunModeWatch({
-    isEnabled: () => gunAutoMode && !!win && !win.isDestroyed(),
-    isConfirmed: (player) => gunsConfirmed.has(player),
-    onSwitch: (player) => { if (win && !win.isDestroyed()) win.webContents.send('gun-mode-switched', player); },
-    onStatus: (list) => { if (win && !win.isDestroyed()) win.webContents.send('gun-status', list); },
-    log: (msg) => console.log(`[가스트 사격] ${msg}`),
-  });
+  // 3초마다 수신기를 확인해 마우스 모드인 총을 게임패드 모드로 (게임과 따로 도는 프로세스)
+  startGunWorker();
 });
 
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });

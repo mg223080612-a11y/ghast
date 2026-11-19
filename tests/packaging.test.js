@@ -49,7 +49,7 @@ test('build.files 에 적은 파일(글롭 제외)은 모두 실제로 있다', 
 
 test('프로그램 시작 파일(desktop/main.js·preload.js)이 묶음에 들어가고 아이콘이 있다', () => {
   assert.equal(pkg.main, 'desktop/main.js');
-  for (const rel of ['desktop/main.js', 'desktop/preload.js', 'desktop/gun-mode.js']) {
+  for (const rel of ['desktop/main.js', 'desktop/preload.js', 'desktop/gun-mode.js', 'desktop/gun-mode-worker.js']) {
     assert.ok(files.includes(rel), `${rel} 이 build.files 에 없습니다`);
     assert.ok(exists(rel), `${rel} 파일이 없습니다`);
   }

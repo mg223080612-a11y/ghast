@@ -1943,6 +1943,7 @@ const Guns = {
     if (serial.some(([, st]) => st !== null)) {
       const pickS = (kind) => serial.filter(([, st]) => st === kind).map(([i]) => `${i + 1}P`).join('·');
       if (pickS('missing')) return `${pickS('missing')} 총 수신기가 빠졌어요 — 수신기를 다시 꽂으세요`;
+      if (pickS('stuck')) return `${pickS('stuck')} 수신기가 응답하지 않아요 — 수신기를 뽑았다가 다시 꽂으세요`;
       if (pickS('off')) return `${pickS('off')} 총이 꺼져 있어요 — 총 전원을 켜세요 (켜면 게임패드 모드로 자동 전환)`;
       if (pickS('mouse')) return `${pickS('mouse')} 총이 게임패드 모드가 아니에요 — 총에서 Space + 5 + 조이스틱 왼쪽을 누르세요`;
       if (pickS('switching')) return `${pickS('switching')} 총을 게임패드 모드로 바꾸는 중… (총을 한 번 흔들어 주세요)`;
