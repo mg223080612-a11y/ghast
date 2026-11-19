@@ -49,7 +49,7 @@ function spawnGhast(demo) {
     const color = { small: '#bfe8ff', big: '#ffd9b0', angry: '#ff6a5a', gold: '#ffd84a' }[g.type];
     addPart({ kind: 'text', text: `${g.T.name} ${g.points}점`, x: g.x, y: g.y - g.h * 0.6, vy: -U * 2, size: U * 3.4, life: 1.4, color, shadow: '#1a1a1a' });
   }
-  if (g.type === 'gold') Sound.reward();
+  if (g.type === 'gold') Sound.goldAppear();
 }
 
 function goTitle() {
@@ -61,6 +61,7 @@ function goTitle() {
   game.pauseNote = null;
   game.confirmHome = false;
   fireballs = [];
+  resetPlayFx();
   ghasts.forEach((g) => g.hittable() && g.leave(true));
   refreshTitleTop();
   updateCornerButtons();
@@ -96,6 +97,7 @@ function startGame(mode = game.mode, names = game.players.map((p) => p.name), op
   // 1인 기록전: 시작하자마자 게임 시작 표를 받아 둔다 (기록을 올릴 때 필요)
   game.playToken = mode === 'solo' ? Ranking.takeToken(rules().game).catch(() => null) : null;
   banner = null;
+  resetPlayFx();
   fireballs = [];
   ghasts.forEach((g) => g.hittable() && g.leave(true));
   updateCornerButtons();
@@ -258,6 +260,8 @@ function playerHit(fb) {
   if (game.state !== 'play') return;
   Sound.explode();
   burstFire(fb.x, fb.y, 1.4);
+  addScorch(fb.x, fb.y, fb.size);
+  resetCombos(); // 화염구에 맞으면 모두 연속 명중이 끊긴다
   shake = Math.max(shake, settings.fewEffects ? 0 : U * 1.6);
   if (hitFlashReady()) doFlash('#ff2a10', settings.fewEffects ? 0.15 : 0.3);
   // 화면에 닿은 화염구는 모두가 맞은 것: 2인 대결이면 두 사람 모두 감점
@@ -410,6 +414,7 @@ function onTap(x, y, who = 0, source = 'mouse') {
     return;
   }
   if (game.state !== 'play') return;
+  if (game.timeUp) return; // TIME UP! 동안에는 쏴도 점수·감점·기록 없음 (예전에 시간이 끝나면 바로 결과 화면이던 것과 같게)
   const shooter = game.players[who];
   if (!shooter) return;
   const versus = isTwoPlayer();
@@ -424,6 +429,7 @@ function onTap(x, y, who = 0, source = 'mouse') {
   if (fb) {
     fb.dead = true;
     shooter.stats.deflects++;
+    bumpCombo(who, 'hit', fb.x, fb.y + U * 8);
     Sound.deflect();
     burstFire(fb.x, fb.y, 0.7);
     shake = Math.max(shake, U * 0.6);
@@ -438,7 +444,8 @@ function onTap(x, y, who = 0, source = 'mouse') {
     const c = g.center();
     g.kill(); // 한 번 맞히면 처치
     shooter.stats.kills++;
-    Sound.hit();
+    Sound.hit(bumpCombo(who, 'hit', c.x, c.y + g.h * 0.62));
+    if (g.type === 'gold') Sound.goldKill();
     shake = Math.max(shake, U * 0.8);
     doFlash('#ffffff', 0.12);
     const color = g.type === 'gold' ? '#ffd84a' : g.points > settings.killPoints ? '#ffb23a' : '#7dff6a';
@@ -453,6 +460,7 @@ function onTap(x, y, who = 0, source = 'mouse') {
 
   // 3) 빗나감 (배경을 맞힘) → 쏜 사람만 감점
   shooter.stats.misses++;
+  bumpCombo(who, 'miss');
   Sound.miss();
   for (let i = 0; i < 6; i++) {
     addPart({ x, y, vx: rand(-1, 1) * U * 8, vy: rand(-1, 0.3) * U * 8, g: U * 40, size: U * 0.6, life: 0.4, color: '#bbbbbb' });

@@ -31,11 +31,11 @@ function difficulty() {
 }
 
 // ---------- 가스트 종류 ----------
-// size·speed: 기본 가스트 대비 배수 / points: 처치 점수 (맞히기 어려울수록 높게)
+// size·speed: 기본 가스트 대비 배수 / points: 처치 점수 (맞히기 어려울수록 높게) / img: 그림(GV) 이름 — 종류마다 모양이 다르다
 const GHAST_TYPES = {
   normal: { name: '가스트', size: 1, speed: 1, img: 'normal', points: () => settings.killPoints },
-  small: { name: '아기 가스트', size: 0.6, speed: 1.5, img: 'normal', points: () => settings.killPoints + 2 },
-  big: { name: '큰 가스트', size: 1.35, speed: 0.7, img: 'normal', points: () => Math.max(1, settings.killPoints - 1) },
+  small: { name: '아기 가스트', size: 0.6, speed: 1.5, img: 'small', points: () => settings.killPoints + 2 },
+  big: { name: '큰 가스트', size: 1.35, speed: 0.7, img: 'big', points: () => Math.max(1, settings.killPoints - 1) },
   angry: { name: '분노 가스트', size: 1, speed: 1.35, img: 'angry', points: () => settings.killPoints + 1 },
   // 황금 가스트: 화염구를 쏘지 않고 금방 도망간다. 놓쳐도 감점 없음
   gold: { name: '황금 가스트', size: 0.75, speed: 1.9, img: 'gold', points: () => settings.killPoints * 5, noShoot: true, noEscapePenalty: true },
@@ -130,6 +130,7 @@ class Ghast {
     this.tx = this.x; this.ty = this.y;
     this.retarget = 0;
     this.bob = rand(0, Math.PI * 2);
+    this.wiggle = rand(0, 3);         // 촉수 흔들림 박자 (가스트마다 다르게, 보이기만)
     this.state = 'in';
     this.t = 0;
     this.alpha = 0;
@@ -207,6 +208,7 @@ class Ghast {
         if (this.t >= 0.5) { this.state = 'float'; this.t = 0; }
         break;
       case 'float':
+        if (this.demo) this.updatePreview(dt);
         if (!this.demo && this.t >= this.floatDur) {
           if (this.T.noShoot) { this.leave(); break; }
           this.state = 'charge'; this.t = 0; this.chargeDur = D.chargeTime;
@@ -222,6 +224,7 @@ class Ghast {
             fireballs.push(new Fireball(m.x, m.y, this.w * 0.42, D.flightTime * rand(0.9, 1.15)));
           }
           Sound.shoot();
+          noteFireballLaunched();
           this.shots--;
           this.t = 0;
           if (this.shots > 0) {
@@ -245,6 +248,25 @@ class Ghast {
         break;
     }
   }
+  // 처음 화면의 가스트: 가끔 충전하는 모습만 보여 준다 (화염구는 쏘지 않음 — 위험 신호를 미리 알게)
+  updatePreview(dt) {
+    if (!this.preview) {
+      if (Math.random() < dt * DEMO_PREVIEW_PER_SEC) this.preview = { t: 0, dur: rand(1.1, 1.5) };
+      return;
+    }
+    this.preview = { ...this.preview, t: this.preview.t + dt };
+    if (this.preview.t >= this.preview.dur) {
+      const m = this.mouth();
+      puff(m.x, m.y, this.w * 0.3, this.w * 0.3); // 피식 — 쏘지 않고 꺼짐
+      this.preview = null;
+    }
+  }
+  // 충전이 얼마나 됐는지 0 ~ 1 (충전 중이 아니면 -1). 처음 화면의 미리 보기 충전도 같은 모습으로 그린다
+  chargeP() {
+    if (this.state === 'charge') return clamp(this.t / this.chargeDur, 0, 1);
+    if (this.preview && this.state === 'float') return clamp(this.preview.t / this.preview.dur, 0, 1);
+    return -1;
+  }
   // forced: 게임 종료·처음 화면 이동 때문에 물러나는 것 (놓침 감점 없음)
   leave(forced = false) {
     this.forced = forced;
@@ -260,35 +282,42 @@ class Ghast {
   draw(time) {
     const w = this.w, h = this.h;
     let { x, y } = this.center();
-    if (this.state === 'charge') x += rand(-1, 1) * U * 0.5 * (this.t / this.chargeDur);
+    const p = this.chargeP();
+    const charging = p >= 0;
+    if (charging) x += rand(-1, 1) * U * 0.5 * p;
     if (this.state === 'dying') { x += rand(-1, 1) * U; y += rand(-1, 1) * U; }
 
-    // 충전 중이면 뒤에 붉은 경고 빛
-    if (this.state === 'charge') {
-      const p = this.t / this.chargeDur;
-      drawGlow(x, y, w * 0.9, '255,60,20', 0.35 * p);
-    }
+    // 충전 중이면 뒤에 붉은 경고 빛 (효과 줄이기에서는 빠진다 → 아래 drawChargeCue 가 늘 보인다)
+    if (charging) drawGlow(x, y, w * 0.9, '255,60,20', 0.35 * p);
 
     ctx.save();
     // 악랄 모드 Lv.4 의 분노 가스트는 깜빡여서 잘 안 보인다
     const flicker = this.fierce && this.type === 'angry' ? 0.55 + 0.45 * Math.abs(Math.sin(time * 2.5 + this.bob)) : 1;
     ctx.globalAlpha = this.alpha * flicker;
-    ctx.translate(x, y);
+    // 픽셀 그림이 번지지 않게 그리는 자리·크기를 정수 px 로 맞춘다 (판정에 쓰는 w·h 값은 그대로)
+    ctx.translate(Math.round(x), Math.round(y));
     const s = this.state === 'in' ? lerp(0.6, 1, this.alpha) : (this.state === 'dying' ? 1 + this.t * 0.8 : 1);
-    ctx.scale(this.flip * s, s);
-    const look = GV[this.T.img];
-    const img = this.state === 'dying' ? GV.hurt : this.state === 'charge' ? look.charge : look.normal;
-    ctx.drawImage(img, -w / 2, -h / 2, w, h);
-    if (this.state === 'charge') {
-      // 입 앞에서 화염구가 점점 커짐
-      const p = this.t / this.chargeDur;
-      const fs = w * 0.42 * p * (0.92 + 0.08 * Math.sin(time * 40));
-      const mx = (MOUTH.x / GHAST_W - 0.5) * w, my = (MOUTH.y / GHAST_H - 0.5) * h;
-      ctx.drawImage(IMG.fireball, mx - fs / 2, my - fs / 2, fs, fs);
+    const dw = Math.round(w * s), dh = Math.round(h * s);
+    ctx.scale(this.flip, 1);
+    const look = GV[this.T.img] || GV.normal;
+    // 촉수 흔들림: 1초에 약 6번 그림을 바꾼다 (가스트마다 박자가 다르게)
+    const f = Math.floor(time * GHAST_WIGGLE_FPS + this.wiggle) % look.frames.length;
+    const img = this.state === 'dying' ? look.hurt : charging ? look.charge[f] : look.frames[f];
+    ctx.drawImage(img, -Math.round(dw / 2), -Math.round(dh / 2), dw, dh);
+    if (charging) {
+      // 입 앞에서 화염구가 점점 커짐 (날아가는 화염구와 같은 그림·깜빡임)
+      const fs = Math.max(1, Math.round(w * 0.42 * p * (0.92 + 0.08 * Math.sin(time * 40))));
+      const mx = Math.round((MOUTH.x / GHAST_W - 0.5) * dw), my = Math.round((MOUTH.y / GHAST_H - 0.5) * dh);
+      ctx.drawImage(fireballFrame(time, this.wiggle), mx - Math.round(fs / 2), my - Math.round(fs / 2), fs, fs);
     }
     ctx.restore();
+    if (charging) drawChargeCue(x, y, w, h, p, time, this.alpha * flicker);
   }
 }
+
+// 가스트 촉수 흔들림 빠르기 (그림 바꾸는 횟수/초), 처음 화면 가스트가 충전 모습을 보여 주는 빈도 (1초에 이 확률)
+const GHAST_WIGGLE_FPS = 6;
+const DEMO_PREVIEW_PER_SEC = 0.1;
 
 // 둥근 빛 번짐. 매 프레임 그라데이션을 새로 만들지 않고, 색마다 한 번 그린 그림을 늘려 쓴다
 const glowCache = new Map();
@@ -337,7 +366,7 @@ class Fireball {
     this.size0 = size;
     this.dur = dur;
     this.p = 0;
-    this.rot = rand(0, Math.PI * 2);
+    this.flick = rand(0, 3);          // 불꽃 깜빡임 박자 (화염구마다 다르게, 보이기만)
     this.dead = false;
   }
   get x() { return lerp(this.x0, this.tx, this.p); }
@@ -348,7 +377,6 @@ class Fireball {
   }
   update(dt) {
     this.p += dt / this.dur;
-    this.rot += dt * 5;
     if (Math.random() < dt * 40) {
       addPart({
         x: this.x + rand(-0.3, 0.3) * this.size, y: this.y + rand(-0.3, 0.3) * this.size,
@@ -361,16 +389,17 @@ class Fireball {
       playerHit(this);
     }
   }
-  draw() {
-    const s = this.size;
-    drawGlow(this.x, this.y, s, '255,150,40', 0.45);
-    ctx.save();
-    ctx.translate(this.x, this.y);
-    ctx.rotate(this.rot);
-    ctx.drawImage(IMG.fireball, -s / 2, -s / 2, s, s);
-    ctx.restore();
+  // 돌리지 않고 3장 깜빡임으로 불꽃이 일렁인다. 자리·크기는 정수 px (픽셀 그림이 번지지 않게)
+  draw(time) {
+    const s = Math.round(this.size);
+    const x = Math.round(this.x), y = Math.round(this.y);
+    drawGlow(x, y, s, '255,150,40', 0.45);
+    ctx.drawImage(fireballFrame(time, this.flick), x - Math.round(s / 2), y - Math.round(s / 2), s, s);
   }
 }
+// 화염구 그림 3장 중 지금 것 (1초에 FIREBALL_FPS 장)
+const FIREBALL_FPS = 9;
+const fireballFrame = (time, phase = 0) => IMG.fireballFrames[Math.floor(time * FIREBALL_FPS + phase) % IMG.fireballFrames.length];
 
 // ---------- 게임 상태 ----------
 let ghasts = [];
@@ -393,6 +422,7 @@ const game = {
   diff: 'normal',       // 이번 판 난이도 (DIFFICULTIES 의 키)
   baseSeconds: 0,       // 이번 판 시작 시간 (토너먼트는 대진표에 정한 경기 시간)
   overtime: 0,          // 토너먼트 연장전 횟수
+  timeUp: null,         // 시간이 다 돼 'TIME UP!' 을 보여 주는 중 { t } (game-fx.js) — 이때는 쏴도 점수 변화 없음
   players: [],          // [{ name, score, rewardShown, stats }] — 1인은 1명, 2인 대결은 2명
   rankInfo: null,       // 결과 화면의 순위 { status: 'saving'|'saved'|'error', rankToday, rankAll, local }
   lastEntryId: null,    // 방금 저장한 기록 (랭킹 화면에서 강조)

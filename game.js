@@ -155,70 +155,50 @@ function resize() {
   buildBackground();
 }
 
-// ---------- 이미지 ----------
+// ---------- 그림 ----------
+// 가스트·화염구·가스트의 눈물·화약은 이 게임만의 픽셀 그림이다. 파일 없이 ghast-art.js 의 글자 줄 그림을
+// 시작할 때 작은 캔버스로 한 번 찍어 두고, 그릴 때 크게 늘린다 (imageSmoothingEnabled = false 라 픽셀이 또렷)
 const IMG = {};
-const IMG_SRC = {
-  ghast: 'assets/ghast.png',
-  fireball: 'assets/fireball.png',
-  tear: 'assets/ghast-tear.png',
-  gunpowder: 'assets/gunpowder.png',
-};
 function loadImages() {
-  return Promise.all(Object.entries(IMG_SRC).map(([key, src]) => new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => { IMG[key] = img; resolve(); };
-    img.onerror = () => reject(new Error(`${src} 를 불러오지 못했습니다`));
-    img.src = src;
-  })));
+  return new Promise((resolve, reject) => {
+    try {
+      for (const name of ['fireball', 'tear', 'gunpowder']) {
+        const { rows, palette } = GhastArt.itemGrid(name);
+        IMG[name] = GhastArt.toCanvas(rows, palette);
+      }
+      // 화염구는 3장 (불꽃이 돌아가며 깜빡임). IMG.fireball 은 첫 장 (처음 화면 카드 등)
+      IMG.fireballFrames = [0, 1, 2].map((frame) => {
+        const { rows, palette } = GhastArt.itemGrid('fireball', { frame });
+        return GhastArt.toCanvas(rows, palette);
+      });
+      resolve();
+    } catch (err) {
+      reject(new Error(`그림을 만들지 못했습니다: ${err.message}`));
+    }
+  });
 }
 
-// 가스트 원본 그림(440×554) 안의 위치들
+// 픽셀 그림을 정수 px 자리·크기로 그린다 (반 픽셀에 걸리면 칸이 고르지 않게 늘어나 보인다)
+function drawPixelImage(img, x, y, w, h) {
+  ctx.drawImage(img, Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+}
+
+// 가스트 그림의 비율·입 위치 (예전 그림 440×554 기준 값 그대로 — 판정 상자 비율과 화염구가 나가는 자리가 같게)
 const GHAST_W = 440, GHAST_H = 554;
 const MOUTH = { x: 96, y: 338 };
-// 평소 / 화염구 충전(빨간 눈 + 벌린 입) / 맞았을 때(빨갛게) 세 가지 모습을 미리 그려 둔다
+// GV[종류] = { frames: 평소 3장(촉수 흔들림), charge: 충전 3장(빨간 눈 + 벌린 입), hurt: 맞았을 때(빨갛게), normal: 처음 화면 카드용 }
 const GV = {};
-function parallelogram(g, x1, y1, x2, y2, h, color) {
-  g.fillStyle = color;
-  g.beginPath();
-  g.moveTo(x1, y1); g.lineTo(x2, y2); g.lineTo(x2, y2 + h); g.lineTo(x1, y1 + h);
-  g.closePath();
-  g.fill();
-}
 function buildGhastVariants() {
-  const make = (paint) => {
-    const c = document.createElement('canvas');
-    c.width = GHAST_W; c.height = GHAST_H;
-    const g = c.getContext('2d');
-    g.imageSmoothingEnabled = false;
-    g.drawImage(IMG.ghast, 0, 0);
-    if (paint) paint(g);
-    return c;
-  };
-  const chargeFace = (g) => {
-    // 눈을 크게 뜨고 빨간 눈동자
-    parallelogram(g, 34, 190, 72, 207, 16, '#262626');
-    parallelogram(g, 116, 231, 158, 249, 15, '#262626');
-    parallelogram(g, 45, 198, 61, 205, 8, '#ff2418');
-    parallelogram(g, 130, 239, 146, 246, 8, '#ff2418');
-    // 입을 크게 벌림
-    parallelogram(g, 72, 312, 118, 333, 34, '#1b1b1b');
-    parallelogram(g, 85, 326, 105, 335, 16, '#ff2418');
-  };
-  // 그림 전체에 색을 덧칠 (투명한 부분은 그대로)
-  const tint = (color) => (g) => {
-    g.globalCompositeOperation = 'source-atop';
-    g.fillStyle = color;
-    g.fillRect(0, 0, GHAST_W, GHAST_H);
-    g.globalCompositeOperation = 'source-over';
-  };
-  const angry = tint('rgba(215, 35, 15, 0.42)');
-  const gold = tint('rgba(255, 196, 30, 0.55)');
-
-  // GV[이미지 이름] = { normal: 평소, charge: 화염구 충전 중 }
-  GV.normal = { normal: IMG.ghast, charge: make(chargeFace) };
-  GV.angry = { normal: make(angry), charge: make((g) => { angry(g); chargeFace(g); }) };
-  GV.gold = { normal: make(gold), charge: make(gold) };
-  GV.hurt = make(tint('rgba(255, 30, 30, 0.6)'));
+  for (const type of GhastArt.TYPES) {
+    const pal = GhastArt.palette(type);
+    const frames = [], charge = [];
+    for (let f = 0; f < GhastArt.FRAMES; f++) {
+      frames.push(GhastArt.toCanvas(GhastArt.ghastGrid(type, { frame: f }), pal));
+      charge.push(GhastArt.toCanvas(GhastArt.ghastGrid(type, { frame: f, charge: true }), pal));
+    }
+    const hurt = GhastArt.toCanvas(GhastArt.ghastGrid(type, { frame: 0 }), GhastArt.palette(type, { hurt: true }));
+    GV[type] = { frames, charge, hurt, normal: frames[0] };
+  }
 }
 
 // ---------- 효과음 (파일 없이 WebAudio 로 직접 합성) ----------
@@ -277,7 +257,8 @@ const Sound = {
     o.start(t); o.stop(t + dur + 0.05);
   },
 
-  hit()     { this.tone(900, 0.08, { freqEnd: 400, gain: 0.25 }); this.noise(0.08, { type: 'highpass', freq: 2000, gain: 0.4 }); },
+  // pitch: 연속 명중일수록 조금씩 높게 (FxCore.comboPitch, 기본 1)
+  hit(pitch = 1) { this.tone(900 * pitch, 0.08, { freqEnd: 400 * pitch, gain: 0.25 }); this.noise(0.08, { type: 'highpass', freq: 2000, gain: 0.4 }); },
   pop()     { // 팡! (가스트가 연기로 터짐)
     this.noise(0.35, { freq: 4000, freqEnd: 200, gain: 0.9 });
     this.tone(160, 0.3, { type: 'sine', freqEnd: 45, gain: 0.7 });
@@ -288,7 +269,12 @@ const Sound = {
     this.tone(90, 0.7, { type: 'sine', freqEnd: 30, gain: 0.9 });
   },
   deflect() { this.tone(1400, 0.15, { type: 'triangle', freqEnd: 2200, gain: 0.3 }); this.noise(0.25, { freq: 3000, freqEnd: 300, gain: 0.5 }); },
-  charge()  { this.tone(500, 0.55, { type: 'sawtooth', freqEnd: 1300, gain: 0.2, attack: 0.1 }); },
+  // 화염구 충전: 올라가는 톱니 소리에 부드러운 삼각파와 '쉬익' 바람 소리를 겹쳐 더 잘 들리게 (날카롭지 않게 고음은 자름)
+  charge()  {
+    this.tone(500, 0.55, { type: 'sawtooth', freqEnd: 1300, gain: 0.2, attack: 0.1 });
+    this.tone(250, 0.6, { type: 'triangle', freqEnd: 650, gain: 0.22, attack: 0.12 });
+    this.noise(0.55, { type: 'bandpass', freq: 500, freqEnd: 1800, q: 3, gain: 0.25 });
+  },
   shoot()   { this.noise(0.5, { type: 'bandpass', freq: 400, freqEnd: 2500, q: 2, gain: 0.7 }); },
   spawn()   { this.tone(rand(260, 340), 0.6, { type: 'sine', freqEnd: 180, gain: 0.08, attack: 0.15 }); },
   escape()  { this.tone(420, 0.35, { type: 'triangle', freqEnd: 160, gain: 0.18 }); this.tone(300, 0.4, { type: 'sine', freqEnd: 120, gain: 0.12, delay: 0.08 }); },
@@ -297,6 +283,25 @@ const Sound = {
   go()      { this.tone(660, 0.12, { gain: 0.2 }); this.tone(990, 0.3, { gain: 0.2, delay: 0.1 }); },
   bonus()   { [523, 659, 784, 1047].forEach((f, i) => this.tone(f, 0.2, { gain: 0.2, delay: i * 0.09 })); },
   reward()  { [784, 988, 1175].forEach((f, i) => this.tone(f, 0.25, { type: 'triangle', gain: 0.25, delay: i * 0.1 })); },
+  // 황금 가스트가 나타남: 반짝반짝 내려오는 종소리
+  goldAppear() {
+    [2093, 1760, 2349, 1976].forEach((f, i) => this.tone(f, 0.18, { type: 'sine', gain: 0.16, delay: i * 0.06 }));
+    this.noise(0.3, { type: 'highpass', freq: 6000, gain: 0.12 });
+  },
+  // 황금 가스트 처치: 동전 소리 + 짧은 팡파르
+  goldKill() {
+    this.tone(988, 0.07, { type: 'square', gain: 0.14 });
+    this.tone(1319, 0.3, { type: 'square', gain: 0.14, delay: 0.07 });
+    [1047, 1319, 1568, 2093].forEach((f, i) => this.tone(f, 0.16, { type: 'triangle', gain: 0.2, delay: 0.16 + i * 0.07 }));
+  },
+  // TIME UP!: 낮게 두 번 울리는 경기 종료 버저
+  timeUp()  {
+    this.tone(440, 0.28, { type: 'square', freqEnd: 330, gain: 0.18 });
+    this.tone(330, 0.5, { type: 'square', freqEnd: 196, gain: 0.18, delay: 0.3 });
+    this.noise(0.5, { freq: 900, freqEnd: 120, gain: 0.25, delay: 0.3 });
+  },
+  // 결과 점수가 올라갈 때 '틱' (progress 0~1 에 따라 조금씩 높게)
+  countTick(progress = 0) { this.tone(1200 + 900 * progress, 0.03, { gain: 0.07 }); },
   end(win)  {
     const notes = win ? [523, 659, 784, 1047, 784, 1047] : [392, 349, 311, 262];
     notes.forEach((f, i) => this.tone(f, 0.28, { gain: 0.2, delay: i * 0.14 }));
@@ -440,6 +445,7 @@ const LAVA = ['#ff8a1c', '#ffb23a', '#e0601a', '#ffd25a', '#c94812', '#ff9e2c'];
 // 움직이는 배경만 (흐르는 용암·불꽃·불티). 나머지 배경은 아래 #bg 캔버스에 한 번 그려져 있다
 function drawBackground(time) {
   if (!bg || bg.width === 0 || bg.height === 0) return; // 창이 숨겨져 크기가 0일 때
+  drawHeat(time);
 
   // 흘러내리는 용암
   for (const f of lavaFalls) {
@@ -471,15 +477,60 @@ function drawBackground(time) {
   }
   ctx.globalAlpha = 1;
 }
+
+// 레벨이 오를수록 네더의 가장자리(좌우·천장)가 진홍빛으로 달아오르고 가장자리 불티가 늘어난다 (보이는 것만, 판정과 상관없음).
+// 화면 가운데·바닥 밝기는 Lv.1 과 거의 같게 둔다 (가스트·화염구가 잘 보이게, 화염구·황금 가스트의 주황과 겹치지 않게 진홍).
+// bgHeat 은 0 ~ 1 로 레벨(FxCore.heatOf)을 천천히 따라간다. 효과 줄이기면 일렁임 없이 고정
+let bgHeat = 0;
+const HEAT_EDGE_ALPHA = 0.6;
+const HEAT_EDGE_COLOR = '200, 18, 48';  // 진홍
+const HEAT_EMBER_MAX = 40;              // Lv.4 에서 더 생기는 가장자리 불티 수
+let heatEdge = null;                    // { w, h, img } 화면 크기마다 한 번 그린 가장자리 빛
+function heatEdgeImage() {
+  if (heatEdge && heatEdge.w === W && heatEdge.h === H) return heatEdge.img;
+  const img = document.createElement('canvas');
+  img.width = 160; img.height = 90;   // 작게 그려 늘려 쓴다 (부드러운 빛이라 충분)
+  const g = img.getContext('2d');
+  const band = (x0, y0, x1, y1, a) => {
+    const grad = g.createLinearGradient(x0, y0, x1, y1);
+    grad.addColorStop(0, `rgba(${HEAT_EDGE_COLOR}, ${a})`);
+    grad.addColorStop(1, `rgba(${HEAT_EDGE_COLOR}, 0)`);
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 160, 90);
+  };
+  band(0, 0, 160 * 0.2, 0, 0.9);          // 왼쪽
+  band(160, 0, 160 * 0.8, 0, 0.9);        // 오른쪽
+  band(0, 0, 0, 90 * 0.2, 0.6);           // 천장
+  heatEdge = { w: W, h: H, img };
+  return img;
+}
+function updateHeat(dt) { bgHeat = FxCore.approach(bgHeat, FxCore.heatOf(game.level), dt, 0.5); }
+function drawHeat(time) {
+  if (bgHeat <= 0.01) return;
+  const pulse = settings.fewEffects ? 1 : 0.85 + 0.15 * Math.sin(time * 2.2);
+  const smooth = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = true; // 빛은 부드럽게 늘려야 계단이 안 생긴다
+  ctx.globalAlpha = bgHeat * HEAT_EDGE_ALPHA * pulse;
+  ctx.drawImage(heatEdgeImage(), 0, 0, W, H);
+  ctx.globalAlpha = 1;
+  ctx.imageSmoothingEnabled = smooth;
+}
+
+function spawnEmber(heat) {
+  // heat: 레벨이 올라 더 생기는 가장자리 불티 (좌우 14% 안에서, 진홍빛)
+  const x = heat ? (Math.random() < 0.5 ? rand(0, W * 0.14) : rand(W * 0.86, W)) : rand(0, W);
+  const max = rand(3, 7);
+  embers.push({
+    x, y: heat ? rand(H * 0.3, H) : rand(groundY, H), vx: rand(-15, 15), vy: rand(-60, -25),
+    size: rand(0.25, 0.6) * U, life: max, max, heat,
+    color: heat ? pick(['#ff3a4a', '#e01e3c', '#ff6a5a']) : pick(['#ffb23a', '#ff6a1a', '#ffd25a']),
+  });
+}
 function updateEmbers(dt) {
-  if (embers.length < (settings.fewEffects ? 20 : 60) && Math.random() < dt * 20) {
-    embers.push({
-      x: rand(0, W), y: rand(groundY, H), vx: rand(-15, 15), vy: rand(-60, -25),
-      size: rand(0.25, 0.6) * U, life: 0, max: rand(3, 7),
-      color: pick(['#ffb23a', '#ff6a1a', '#ffd25a']),
-    });
-    embers[embers.length - 1].life = embers[embers.length - 1].max;
-  }
+  const base = embers.filter((e) => !e.heat).length;
+  if (base < (settings.fewEffects ? 20 : 60) && Math.random() < dt * 20) spawnEmber(false);
+  const heatMax = Math.round(HEAT_EMBER_MAX * bgHeat * (settings.fewEffects ? 0.5 : 1));
+  if (embers.length - base < heatMax && Math.random() < dt * 25 * bgHeat) spawnEmber(true);
   for (let i = embers.length - 1; i >= 0; i--) {
     const e = embers[i];
     e.x += (e.vx + Math.sin(e.y * 0.02) * 10) * dt;
@@ -526,9 +577,20 @@ function drawParts() {
       ctx.lineWidth = Math.max(2, U * 0.6 * (1 - a));
       ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.stroke();
     } else if (p.kind === 'img') {
+      // 떨어지는 아이템: 픽셀 그림이라 정수 px 자리·크기에, 90°씩만 돌린다 (비스듬히 돌리면 픽셀이 번진다)
+      const s = Math.round(p.size);
       ctx.save();
-      ctx.translate(p.x, p.y); ctx.rotate(p.rot);
-      ctx.drawImage(p.img, -p.size / 2, -p.size / 2, p.size, p.size);
+      ctx.translate(Math.round(p.x), Math.round(p.y)); ctx.rotate(Math.round(p.rot / (Math.PI / 2)) * (Math.PI / 2));
+      ctx.drawImage(p.img, -Math.round(s / 2), -Math.round(s / 2), s, s);
+      ctx.restore();
+    } else if (p.kind === 'sprite') {
+      // 터지는 가스트: 옆으로 퍼지고 위아래로 납작해지며 사라진다 (보이기만, 판정은 이미 끝남). 정수 px
+      ctx.globalAlpha = 1 - a;
+      const dw = Math.round(p.w * (1 + a * 0.6)), dh = Math.max(1, Math.round(p.h * (1 - a * 0.7)));
+      ctx.save();
+      ctx.translate(Math.round(p.x), Math.round(p.y));
+      ctx.scale(p.flip, 1);
+      ctx.drawImage(p.img, -Math.round(dw / 2), -Math.round(dh / 2), dw, dh);
       ctx.restore();
     } else if (p.kind === 'cross') {
       ctx.strokeStyle = p.color;
@@ -554,6 +616,9 @@ function drawParts() {
 function burstGhast(gh) {
   const { x, y } = gh.center();
   const w = gh.w, h = gh.h;
+  // 가스트 모습이 납작해지며 사라지는 '펑' (0.28초). 조각이 많아도 꼭 보이게 맨 앞에 넣는다
+  const look = GV[gh.type] || GV.normal;
+  parts.push({ kind: 'sprite', img: look.hurt, x, y, w, h, flip: gh.flip, age: 0, life: 0.28, vx: 0, vy: 0, g: 0, drag: 0, size: 0, grow: 0, rot: 0, vr: 0 });
   // 조각 수는 줄이고(가볍게) 크기를 조금 키워 '팡' 느낌은 그대로
   for (let i = 0; i < 16; i++) {
     addPart({

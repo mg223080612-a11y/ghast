@@ -174,12 +174,12 @@ function drawTitleCards(cx, top, width) {
     let name, pts, color;
     if (c.fireball) {
       const s = U * 7.5;
-      ctx.drawImage(IMG.fireball, x - s / 2, base - s, s, s);
+      drawPixelImage(IMG.fireball, x - s / 2, base - s, s, s);
       name = '화염구 반사'; pts = `+${settings.deflectPoints}`; color = '#ffb347';
     } else {
       const T = GHAST_TYPES[c.type];
       const h = U * CARD_IMG_H * cardScale(T.size), w = h * GHAST_W / GHAST_H;
-      ctx.drawImage(GV[T.img].normal, x - w / 2, base - h, w, h);
+      drawPixelImage(GV[T.img].normal, x - w / 2, base - h, w, h);
       name = T.name; pts = `+${T.points()}`; color = c.type === 'gold' ? '#ffd84a' : '#9fe870';
     }
     text(name, x, base + U * 2.8, fitTextSize(name, U * 2.5, cw - U * 2.2), '#ffd9b0');
@@ -246,8 +246,8 @@ function drawRulesPanel(cx, py, pw) {
   text(reward, cx, ry, rs, '#9ff6ff');
   ctx.font = `bold ${Math.round(rs)}px ${FONT}`;
   const rw = ctx.measureText(reward).width, ts = U * 4.2;
-  ctx.drawImage(IMG.tear, cx - rw / 2 - U * 2 - ts, ry - ts / 2, ts, ts);
-  ctx.drawImage(IMG.tear, cx + rw / 2 + U * 2, ry - ts / 2, ts, ts);
+  drawPixelImage(IMG.tear, cx - rw / 2 - U * 2 - ts, ry - ts / 2, ts, ts);
+  drawPixelImage(IMG.tear, cx + rw / 2 + U * 2, ry - ts / 2, ts, ts);
 }
 
 // 1·2·3위 색 (금·은·동). 처음 화면 랭킹 띠·랭킹 화면에서 쓴다

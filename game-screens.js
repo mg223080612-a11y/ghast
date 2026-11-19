@@ -97,24 +97,33 @@ function drawGunSetup() {
     if (pads.length < 2) {
       text(`게임패드로 잡힌 총: ${pads.length}대 / 2대 필요 — 다른 총의 방아쇠도 당겨 보세요 (안 잡히면 DIP 스위치 확인)`, cx, py + ph - U * 39, U * 2.8, '#ff8a7a');
     }
+    // 총 한 줄 = 왼쪽 칸(이름표·장치 이름) + 오른쪽 칸(방아쇠·축 / 위치 갱신). 칸 너비에 맞춰 글자를 줄여 서로 겹치지 않게
+    // (예전에는 '1P 자동' 이름표와 장치 이름이 오른쪽 글자 위로 넘쳤다). 총이 많이 잡혀도 아래 안내 줄 위에서 멈추게 줄 높이를 줄인다
+    const leftX = px + U * 5, leftW = U * 40, rightX = px + U * 48, rightW = pw - U * 53;
+    const rowsBottom = py + ph - U * 42;
+    const rowH = Math.min(U * 9.5, (rowsBottom - y) / Math.max(1, pads.length));
+    const k = rowH / (U * 9.5); // 줄이 낮아지면 글자도 같이 줄인다
     pads.forEach((s, i) => {
       const who = Guns.playerOf(s);
       const color = who >= 0 ? PLAYER_COLORS[who] : '#ffffff';
       const role = who >= 0 ? `${who + 1}P${Guns.receiverSlot(s.id) === who ? ' 자동' : ''}` : '미지정';
       const axes = (s.axes || []).slice(0, 4).map((v) => v.toFixed(2)).join('  ');
       const fresh = performance.now() - s.lastActive < 1500;
-      text(`총 ${i + 1}  ·  ${role}`, px + U * 6, y, U * 3.8, color, 'left');
+      const label = `총 ${i + 1}  ·  ${role}`;
+      text(label, leftX, y, fitTextSize(label, U * 3.6 * k, leftW), color, 'left');
+      const devName = s.id.slice(0, 48);
+      text(devName, leftX, y + rowH * 0.42, fitTextSize(devName, U * 2.2 * k, leftW), '#8a7a72', 'left');
       // 축 숫자는 매 프레임 바뀌므로 글자 그림으로 저장하지 않고 바로 그린다 (저장 공간이 쓸데없이 차지 않게)
-      text(`방아쇠 = 버튼 ${Guns.triggerOf(s)}  ·  축 [${axes}]${fresh ? '  ● 움직임' : ''}`, px + U * 34, y, U * 2.6, '#ffd9b0', 'left', { live: true });
+      const trigLine = `방아쇠 = 버튼 ${Guns.triggerOf(s)}  ·  축 [${axes}]${fresh ? '  ● 움직임' : ''}`;
+      text(trigLine, rightX, y, fitTextSize(trigLine, U * 2.6 * k, rightW), '#ffd9b0', 'left', { live: true });
       // 움직이는 중에 위치 갱신이 적으면 총이 화면(센서)을 잘 못 보는 것: 배터리·렌즈·총 보정 확인
       const rateColor = !fresh ? '#8a7a72' : s.rate >= 40 ? '#7dff7a' : s.rate >= 15 ? '#ffe14a' : '#ff8a7a';
       const capNote = AimCap.gapForHz(settings.versusAimHz) > 0 ? `  ·  대결 중 ${s.capRate ?? 0}/초` : '';
       const model = fresh && s.rate >= 80 ? '  ·  빠른 총(Pro)' : fresh && s.rate >= 20 ? '  ·  보통 총' : '';
       const rateLine = !s.moved ? '신호 없음 — 총 전원을 켜고 조이스틱 모드인지 확인한 뒤 한 번 흔들어 보세요'
         : `위치 갱신 ${s.rate ?? 0}/초${model}${capNote}${fresh && s.rate < 15 ? '  ← 느림: 배터리·렌즈·총 보정 확인' : ''}`;
-      text(rateLine, px + U * 66, y + U * 4, fitTextSize(rateLine, U * 2.4, pw - U * 70), !s.moved ? '#ff8a7a' : rateColor, 'left', { live: true });
-      text(s.id.slice(0, 48), px + U * 6, y + U * 4, U * 2.2, '#8a7a72', 'left');
-      y += U * 9.5;
+      text(rateLine, rightX, y + rowH * 0.42, fitTextSize(rateLine, U * 2.4 * k, rightW), !s.moved ? '#ff8a7a' : rateColor, 'left', { live: true });
+      y += rowH;
     });
     if (AimCap.gapForHz(settings.versusAimHz) > 0) {
       const trigger = Number(settings.versusFireDelayMs) > 0 ? ' · 1P 방아쇠도 2P 처럼 25~50ms 뒤에 처리' : '';
@@ -422,7 +431,7 @@ function drawHUD(time) {
   } else {
     panel(U * 2.5, U * 2.5, U * 40, U * 13, HUD_PANEL_ALPHA);
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(IMG.tear, U * 4.5, U * 4.5, U * 9, U * 9);
+    drawPixelImage(IMG.tear, U * 4.5, U * 4.5, U * 9, U * 9);
     text('점수', U * 16, U * 6, U * 3, '#ffd9b0', 'left');
     text(String(game.players[0].score), U * 16, U * 11.2, U * 7, '#ffffff', 'left');
   }
@@ -460,7 +469,7 @@ function drawHUD(time) {
     const mx = bx + bw * clamp(score / max, 0, 1);
     ctx.fillStyle = color;
     ctx.fillRect(mx - U * 0.3, by - U * 1.2, U * 0.6, bh + U * 2.4);
-    if (img) ctx.drawImage(img, mx - U * 2.4, by - U * 6, U * 4.8, U * 4.8);
+    if (img) drawPixelImage(img, mx - U * 2.4, by - U * 6, U * 4.8, U * 4.8);
     else text(label, mx, by - U * 3.4, U * 2.8, color);
     text(`${score}`, mx, by + bh + U * 2.6, U * 2.6, color);
   };
@@ -513,7 +522,7 @@ function drawVersusResult(time) {
     }
     const label = playerLabel(p, i);
     text(label, ccx, top + U * 8, fitTextSize(label, U * 4.4, colW - U * 8), PLAYER_COLORS[i]);
-    text(`${p.score}점`, ccx, top + U * 19, U * 12, '#ffffff', 'center', { shadow: '#a3200c' });
+    drawCountScore(p.score, ccx, top + U * 19, U * 12, '#ffffff', '#a3200c');
     const acc = st.shots ? Math.round(((st.kills + st.deflects) / st.shots) * 100) : 0;
     const statLine = `처치 ${st.kills} · 반사 ${st.deflects} · 빗나감 ${st.misses} · 명중률 ${acc}%`;
     text(statLine, ccx, top + U * 29, fitTextSize(statLine, U * 2.8, colW - U * 6), '#ffd9b0');
@@ -525,7 +534,7 @@ function drawVersusResult(time) {
       const tw = ctx.measureText(msg).width;
       const left = ccx - (ts + gap + tw) / 2;
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(IMG.tear, left, top + U * 36 - ts / 2, ts, ts);
+      drawPixelImage(IMG.tear, left, top + U * 36 - ts / 2, ts, ts);
       text(msg, left + ts + gap, top + U * 36, U * 3.6, '#9ff6ff', 'left');
     }
   });
@@ -552,7 +561,7 @@ function drawResult(time) {
   const st = me.stats;
   const title = `${me.name || '이름없음'} 님 · 미션 종료!`;
   text(title, cx, py + U * 7, fitTextSize(title, U * 6.5, pw - U * 8), '#ffcf5a');
-  text(`${me.score}점`, cx, py + U * 19, U * 14, '#ffffff', 'center', { shadow: '#a3200c' });
+  drawCountScore(me.score, cx, py + U * 19, U * 14, '#ffffff', '#a3200c'); // 0 에서 올라감 (보이는 숫자만)
   text(`${rules().label}  ·  레벨 ${game.level}`, cx, py + U * 28.5, U * 3, rules().color);
   drawResultStats(cx, py + U * 37, pw - U * 10, st);
 
@@ -570,7 +579,7 @@ function drawResult(time) {
     const ts = U * 14, ty = py + U * 59 + Math.sin(time * 3) * U * 0.6;
     drawGlow(cx, ty, ts * 1.4, '160,246,255', 0.55);
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(IMG.tear, cx - ts / 2, ty - ts / 2, ts, ts);
+    drawPixelImage(IMG.tear, cx - ts / 2, ty - ts / 2, ts, ts);
     text('가스트의 눈물 획득!', cx, py + U * 69.5, U * 5.5, '#9ff6ff');
     text('진행요원에게 가스트의 눈물을 받아가세요', cx, py + U * 75.2, U * 3.2, '#ffffff');
   } else {

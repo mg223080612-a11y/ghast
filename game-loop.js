@@ -5,6 +5,8 @@
 function update(dt) {
   Guns.poll(); // 화면 그리기 직전에도 한 번 더 (조준점 위치를 최신으로)
   updateEmbers(dt);
+  updateHeat(dt);
+  updateScorches(dt);
 
   if (game.state === 'title' || game.state === 'solo') {
     if (ghasts.filter((g) => g.demo && g.state !== 'leave').length < 3 && Math.random() < dt) spawnGhast(true);
@@ -24,7 +26,7 @@ function update(dt) {
     }
   }
 
-  const running = game.state === 'play' && !game.paused;
+  const running = game.state === 'play' && !game.paused && !game.timeUp;
   if (game.state === 'play' && game.paused) return;
 
   if (running) {
@@ -45,15 +47,21 @@ function update(dt) {
     if (alive === 0) game.spawnTimer = Math.min(game.spawnTimer, 0.2); // 화면이 비지 않게
   }
 
-  const D = difficulty();
-  for (const g of ghasts) g.update(dt, D);
-  ghasts = ghasts.filter((g) => !g.dead);
-  if (running) {
-    for (const f of fireballs) f.update(dt);
-    fireballs = fireballs.filter((f) => !f.dead);
-    if (game.timeLeft <= 0) endGame();
+  if (game.state === 'play' && game.timeUp) {
+    // TIME UP!: 가스트·화염구는 그 자리에 멈춘다 (쏴도·닿아도 점수 변화 없음). 잠깐 뒤 endGame
+    updateTimeUp(dt);
+  } else {
+    const D = difficulty();
+    for (const g of ghasts) g.update(dt, D);
+    ghasts = ghasts.filter((g) => !g.dead);
+    if (running) {
+      for (const f of fireballs) f.update(dt);
+      fireballs = fireballs.filter((f) => !f.dead);
+      if (game.timeLeft <= 0) onTimeOver();
+    }
   }
   if (game.state === 'initials') updateInitials(dt);
+  updateResultCount(dt);
   if (game.state === 'solo') SoloReady.tick(dt);
   // 결과 화면, 그리고 게임이 끝나 바로 뜬 랭킹 화면에서도 잠금 시간을 센다
   if (['result', 'bracket', 'champion'].includes(game.state) || (game.state === 'ranking' && game.rankFrom === 'result')) game.resultTime += dt;
@@ -80,7 +88,7 @@ function draw(time) {
   // 흔들림은 게임 세계에만 적용 (아래 배경 캔버스는 CSS 로 같이 흔든다)
   ctx.save();
   if (shake > 0) {
-    const dx = rand(-1, 1) * shake, dy = rand(-1, 1) * shake;
+    const dx = Math.round(rand(-1, 1) * shake), dy = Math.round(rand(-1, 1) * shake); // 정수 px (픽셀 그림이 번지지 않게)
     ctx.translate(dx, dy);
     bgCanvas.style.transform = `translate(${dx}px, ${dy}px)`;
     bgShaken = true;
@@ -90,9 +98,11 @@ function draw(time) {
   }
   drawBackground(time);
   [...ghasts].sort((a, b) => a.z - b.z).forEach((g) => g.draw(time));
-  [...fireballs].sort((a, b) => a.p - b.p).forEach((f) => f.draw());
+  drawImpactRings(time);
+  [...fireballs].sort((a, b) => a.p - b.p).forEach((f) => f.draw(time));
   drawParts();
   ctx.restore();
+  drawScorches(); // 화면에 난 금은 흔들리지 않게 (화면 자체에 난 자국)
 
   if (flash.a > 0) {
     ctx.globalAlpha = flash.a;
@@ -105,7 +115,7 @@ function draw(time) {
   if (game.state === 'solo') drawSoloReady(time);
   syncSoloInput();
   if (game.state === 'countdown') { drawHUD(time); drawCountdown(); }
-  if (game.state === 'play') drawHUD(time);
+  if (game.state === 'play') { drawHUD(time); if (game.timeUp) drawTimeUp(); }
   if (game.state === 'result') drawResult(time);
   if (game.state === 'ranking') drawRanking(time);
   if (game.state === 'initials') drawInitials(time);
