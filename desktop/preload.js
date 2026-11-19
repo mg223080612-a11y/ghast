@@ -11,4 +11,6 @@ contextBridge.exposeInMainWorld('ghastApp', {
   onGunModeSwitched: (fn) => ipcRenderer.on('gun-mode-switched', (_e, player) => fn(Number(player))),
   // 꽂힌 수신기마다 총 상태 [{ player, state: 'ok'|'switching'|'mouse'|'off'|'busy' }] (3초마다)
   onGunStatus: (fn) => ipcRenderer.on('gun-status', (_e, list) => fn(Array.isArray(list) ? list : [])),
+  // 실기용 기록 파일에 한 줄 (desktop/field-log.js). 이름은 넘기지 않는다
+  log: (event, data) => ipcRenderer.send('field-log', String(event), data && typeof data === 'object' ? data : {}),
 });

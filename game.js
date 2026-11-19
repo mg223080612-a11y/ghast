@@ -10,6 +10,35 @@
 // 컴퓨터용 프로그램(exe·맥 앱)의 버전. package.json 의 version 을 앱(desktop/main.js → preload.js)이 넘겨준다.
 // 웹(브라우저)에는 없어서 빈 글자 → 처음 화면에 버전을 그리지 않는다
 const APP_VERSION = (window.ghastApp && typeof window.ghastApp.version === 'string') ? window.ghastApp.version : '';
+
+// ---------- 실기용 기록 파일 (앱에서만 — desktop/field-log.js, 웹 버전은 아무 일도 안 함) ----------
+// 설정 폴더 logs/play-YYYY-MM-DD.log 에 '경기 시작·끝, 총 잡힘·빠짐, 1P 방아쇠 보정, 오류' 등을 한 줄씩. 이름은 넘기지 않는다
+const MODE_WORDS = { solo: '1인 기록전', versus: '2인 대결', tournament: '대회 경기' };
+const ERROR_LOG_LIMIT = 20; // 오류 내용은 처음 20건까지만 적는다 (같은 오류가 1초에 60번 날 수 있어서)
+let fieldLogWarned = false;
+function fieldLog(event, data = {}) {
+  if (!window.ghastApp?.log) return;
+  try {
+    window.ghastApp.log(event, data);
+  } catch (err) {
+    if (!fieldLogWarned) { fieldLogWarned = true; console.warn('[가스트 사격] 기록 파일로 보내지 못함', err); }
+  }
+}
+// 오류 한 건을 기록용으로: 번호·내용(200글자까지)·어디서(스택 앞 두 줄).
+// 오류 문구가 그대로 파일에 남으므로 게임 코드에서 던지는 오류 문구에는 이름(닉네임·명단)을 넣지 않는다
+const errorDetail = (err, n) => ({
+  번호: n,
+  내용: String(err?.message ?? err).slice(0, 200),
+  위치: String(err?.stack || '').split('\n').slice(1, 3).map((s) => s.trim()).join(' | '),
+});
+// try 로 잡지 못한 오류(다른 스크립트·비동기)도 기록 파일에 (게임 동작은 그대로)
+let uncaughtCount = 0;
+function logUncaught(kind, err) {
+  uncaughtCount += 1;
+  if (uncaughtCount <= ERROR_LOG_LIMIT) fieldLog(kind, errorDetail(err, uncaughtCount));
+}
+window.addEventListener('error', (e) => logUncaught('처리 안 된 오류', e.error || e.message));
+window.addEventListener('unhandledrejection', (e) => logUncaught('처리 안 된 비동기 오류', e.reason));
 // 이 게임을 만든 학생 (본인 공개 동의, 처음 화면 제목 아래·아래 띠에 표시)
 const CREATOR = '정다희';
 

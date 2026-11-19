@@ -24,6 +24,7 @@ function screenOffset() {
 }
 
 const PARITY_GRID_MS = 25; // 2P 보통 총의 방아쇠가 들어오는 단위 (접시 사격 M0 실측: 25ms 배수)
+const PARITY_LINES_PER_MATCH = 30; // 실기 기록 파일에 1P 방아쇠 보정을 발마다 적는 것은 한 경기 처음 30발까지
 const Guns = {
   pads: {},       // gamepad.index → { key, id, x, y, pressed[], min[], max[], lastActive }
   // 저장되는 지정 정보: 어떤 총(key)이 1P/2P 인지, 총마다 방아쇠 버튼 번호
@@ -54,6 +55,7 @@ const Guns = {
     if (this.saved[slot] === s.key && this.saved[other] !== s.key) return;
     this.saved = { ...this.saved, [slot]: s.key, [other]: this.saved[other] === s.key ? null : this.saved[other] };
     this.save();
+    fieldLog('총 자리 지정', { 자리: `${who + 1}P`, 총: s.id, 방법: '수신기 번호' });
   },
   // 총 상태 (접시 사격의 총 상태 배너와 같은 생각). 꺼진 총도 수신기는 마지막 위치를 계속 보내서(실측) 켜짐·꺼짐은 구분할 수 없다.
   // 'missing' 이번 실행에서 잡혔던 1P/2P 수신기가 빠짐 · 'silent' 수신기는 있는데 3초 넘게 움직임·방아쇠가 한 번도 없음 · 'ok' · 'none'
@@ -150,6 +152,7 @@ const Guns = {
       let s = this.pads[gp.index];
       if (!s || s.key !== key) {
         s = this.pads[gp.index] = { key, id: gp.id, index: gp.index, x: W / 2, y: H / 2, pressed: [], min: [], max: [], lastActive: -1e9, moved: false, connectedAt: now };
+        fieldLog('총 잡힘', { 총: gp.id, 번호: gp.index, 화면: game.state });
         this.seen[key] = true;
         this.autoAssign(s);
       }
@@ -196,7 +199,9 @@ const Guns = {
     // 뽑힌 총은 목록에서 뺀다
     for (const idx of Object.keys(this.pads)) {
       if (list.some((g) => String(g.index) === idx)) continue;
-      this.onUnplug(this.pads[idx]);
+      const gone = this.pads[idx];
+      fieldLog('총 빠짐', { 총: gone.id, 번호: gone.index, 자리: this.playerOf(gone) >= 0 ? `${this.playerOf(gone) + 1}P` : '지정 안 됨', 화면: game.state });
+      this.onUnplug(gone);
       delete this.pads[idx];
     }
     this.flushPendingShots(now);
@@ -208,6 +213,7 @@ const Guns = {
     if (who < 0 || !isTwoPlayer() || game.state !== 'play' || game.paused) return;
     game.paused = true;
     game.pauseNote = { title: `${who + 1}P 총 연결이 끊겼어요`, sub: '총을 다시 연결한 뒤 P 또는 Space 로 계속하세요' };
+    fieldLog('총 빠짐으로 일시정지', { 자리: `${who + 1}P`, 모드: MODE_WORDS[game.mode] || game.mode });
   },
 
   onButton(s, i) {
@@ -230,6 +236,7 @@ const Guns = {
       // 1P 를 정했고 2P 가 아직 없으면 바로 2P 지정으로 넘어간다
       this.assigning = done === 0 && !this.saved.p2 ? 1 : null;
       this.message = `${done + 1}P 총을 지정했어요 (방아쇠 = 버튼 ${i})`;
+      fieldLog('총 자리 지정', { 자리: `${done + 1}P`, 총: s.id, 방아쇠버튼: i, 방법: '총 연결 화면' });
       return;
     }
     if (i !== this.triggerOf(s)) return; // 방아쇠가 아닌 버튼은 무시
@@ -241,8 +248,9 @@ const Guns = {
       if (who < 0) return; // 지정 안 된 총은 대결 중 무시
     }
     if (this.fireParity(s)) {
-      const at = AimCap.parityFireAt(performance.now(), PARITY_GRID_MS, settings.versusFireDelayMs);
-      this.pendingShots = [...this.pendingShots, { at, key: s.key, who, source: `pad:${s.key}` }];
+      const pressed = performance.now();
+      const at = AimCap.parityFireAt(pressed, PARITY_GRID_MS, settings.versusFireDelayMs);
+      this.pendingShots = [...this.pendingShots, { at, pressed, key: s.key, who, source: `pad:${s.key}` }];
       return;
     }
     onTap(s.x, s.y, who, `pad:${s.key}`);
@@ -261,12 +269,31 @@ const Guns = {
     if (!this.pendingShots.length) return;
     const live = isTwoPlayer() && (game.state === 'play' || game.state === 'countdown') && !game.paused;
     const due = this.pendingShots.filter((p) => p.at <= now);
+    const dropped = live ? 0 : this.pendingShots.length;
     this.pendingShots = live ? this.pendingShots.filter((p) => p.at > now) : [];
-    if (!live) return;
+    if (!live) {
+      this.parity = { ...this.parity, dropped: this.parity.dropped + dropped };
+      fieldLog('1P 방아쇠 보정 버림', { 발수: dropped, 이유: game.paused ? '일시정지' : `경기 중 아님(${game.state})` });
+      return;
+    }
     for (const p of due) {
       const s = this.list().find((g) => g.key === p.key);
+      this.noteParityShot(now - p.pressed, p.at - p.pressed);
       if (s) onTap(s.x, s.y, p.who, p.source);
     }
+  },
+  // 실기 기록용: 1P 방아쇠를 실제로 몇 ms 늦게 처리했는지 (계획 = 25ms 칸 + 설정값, 실제 = 총 읽기 간격만큼 더 늦을 수 있음)
+  parity: { count: 0, sum: 0, max: 0, dropped: 0 },
+  resetParity() { this.parity = { count: 0, sum: 0, max: 0, dropped: 0 }; },
+  // 발마다 한 줄은 한 경기에 처음 PARITY_LINES_PER_MATCH 발까지만 (연사로 줄이 쌓여 하루 기록 한도를 먼저 채우지 않게).
+  // 나머지는 '경기 끝' 의 1P보정 요약(발수·평균·최대)에만 센다
+  noteParityShot(lateMs, plannedMs) {
+    this.parity = { ...this.parity, count: this.parity.count + 1, sum: this.parity.sum + lateMs, max: Math.max(this.parity.max, lateMs) };
+    if (this.parity.count <= PARITY_LINES_PER_MATCH) fieldLog('1P 방아쇠 보정', { 늦춤ms: Math.round(lateMs), 계획ms: Math.round(plannedMs) });
+  },
+  paritySummary() {
+    const { count, sum, max, dropped } = this.parity;
+    return { 발수: count, 평균ms: count ? Math.round(sum / count) : 0, 최대ms: Math.round(max), 버림: dropped };
   },
 
   // 화면에 총 조준점 그리기 (최근에 쓴 총만). 지정된 총은 1P/2P 색과 이름표

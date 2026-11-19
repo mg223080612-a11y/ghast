@@ -54,6 +54,9 @@ function spawnGhast(demo) {
 
 function goTitle() {
   if (confirmOpen()) closeConfirm(false);
+  if (game.state === 'play' || game.state === 'countdown') {
+    fieldLog('경기 중단', { 모드: MODE_WORDS[game.mode] || game.mode, 경과초: Math.round(game.elapsed || 0), 점수: game.players.map((p) => p.score) });
+  }
   game.state = 'title';
   game.diff = settings.diffLevel; // 처음 화면의 설명·랭킹 띠는 고른 난이도로
   game.level = 1; // 처음 화면의 가스트는 천천히
@@ -101,11 +104,34 @@ function startGame(mode = game.mode, names = game.players.map((p) => p.name), op
   fireballs = [];
   ghasts.forEach((g) => g.hittable() && g.leave(true));
   updateCornerButtons();
+  Guns.resetParity();
+  fieldLog('경기 시작', {
+    모드: MODE_WORDS[mode] || mode, 난이도: game.diff, 시간초: game.baseSeconds, 인원: count,
+    입력: settings.inputMode, 조준점: settings.aimMode,
+    ...(count === 2 ? { 조준제한Hz: settings.versusAimHz, '1P보정ms': settings.versusFireDelayMs } : {}),
+  });
+}
+
+// 경기 끝 기록용 요약 (이름 없이 자리·점수·통계만)
+function matchSummary() {
+  const players = game.players.map((p, i) => ({
+    자리: `${i + 1}P`, 점수: p.score, 쏜수: p.stats.shots, 처치: p.stats.kills, 반사: p.stats.deflects,
+    맞음: p.stats.hitsTaken, 빈곳: p.stats.misses, 놓침: p.stats.escapes,
+  }));
+  return {
+    모드: MODE_WORDS[game.mode] || game.mode, 난이도: game.diff, 경기초: Math.round(game.elapsed || 0), 레벨: game.level,
+    선수: players, ...(isTwoPlayer() ? { '1P보정': Guns.paritySummary() } : {}), 오류누계: errorLog.count,
+  };
 }
 
 function endGame() {
   // 토너먼트는 비기면 끝내지 않고 연장전으로 이어 간다
-  if (game.mode === 'tournament' && Tournament.tied()) { Tournament.startOvertime(); return; }
+  if (game.mode === 'tournament' && Tournament.tied()) {
+    fieldLog('연장전', { 점수: game.players.map((p) => p.score), 연장: game.overtime + 1 });
+    Tournament.startOvertime();
+    return;
+  }
+  fieldLog('경기 끝', matchSummary());
   game.state = 'result';
   game.resultTime = 0;
   game.timeLeft = 0;
@@ -295,6 +321,7 @@ function allowShot(source, now) {
   return r;
 }
 function noticeRapidFire(x, y, who) {
+  fieldLog('연사 차단', { 자리: `${who + 1}P`, 화면: game.state });
   const tag = isTwoPlayer() ? `${who + 1}P ` : '';
   const color = isTwoPlayer() ? PLAYER_COLORS[who] : '#ff6a5a';
   popupScore(x, y - U * 4, `${tag}연사 금지!`, color);

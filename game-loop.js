@@ -197,6 +197,9 @@ const errorLog = { count: 0 };
 function reportError(err) {
   errorLog.count++;
   if (errorLog.count <= 5) console.error('[가스트 사격] 오류가 났지만 게임은 계속합니다', err);
+  // 실기 기록 파일: 처음 20건은 내용까지, 그 뒤는 한 번만 알리고 개수는 '경기 끝' 의 오류누계로
+  if (errorLog.count <= ERROR_LOG_LIMIT) fieldLog('오류', { ...errorDetail(err, errorLog.count), 화면: game.state });
+  else if (errorLog.count === ERROR_LOG_LIMIT + 1) fieldLog('오류가 계속 남', { 이유: `${ERROR_LOG_LIMIT}건이 넘어 더는 내용을 적지 않음` });
 }
 
 // 렉 자동 방지: 화면이 3초 넘게 40fps 아래로 버벅이면 한 단계씩 가볍게 바꾼다 (설정에서 끌 수 있음)
@@ -222,7 +225,10 @@ function checkAutoPerf(now) {
   if (autoPerf.lowSeconds >= 3 && now - autoPerf.lastChange > 10000) {
     autoPerf.lowSeconds = 0;
     autoPerf.lastChange = now;
-    if (lightenOneStep()) showBanner('렉 방지: 화면을 가볍게 바꿨어요', '설정 → 화질에서 되돌릴 수 있어요', '#9ff6ff', 2.2);
+    if (lightenOneStep()) {
+      showBanner('렉 방지: 화면을 가볍게 바꿨어요', '설정 → 화질에서 되돌릴 수 있어요', '#9ff6ff', 2.2);
+      fieldLog('렉 방지로 화질 낮춤', { fps: fpsMeter.value, 화질: settings.quality, 효과줄이기: settings.fewEffects });
+    }
   }
 }
 
@@ -271,8 +277,14 @@ Promise.all([loadImages(), scriptsReady])
     loadLocalAdminKey();
     // 효과음 준비. 보통 브라우저에서는 첫 클릭·키 입력 때 소리가 켜진다 (Sound.init 이 다시 불리며 재개).
     Sound.init();
+    fieldLog('게임 준비', {
+      화면: `${screen.width}x${screen.height}`, 창: `${window.innerWidth}x${window.innerHeight}`, 배율: window.devicePixelRatio,
+      화질: settings.quality, 입력: settings.inputMode, 조준점: settings.aimMode, 총자동전환: settings.gunAutoMode !== false,
+      저장된총: { '1P': !!Guns.saved.p1, '2P': !!Guns.saved.p2 },
+    });
   })
   .catch((err) => {
+    fieldLog('게임 준비 실패', { 내용: String(err?.message ?? err) });
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.fillStyle = '#fff';
     ctx.font = '20px sans-serif';
