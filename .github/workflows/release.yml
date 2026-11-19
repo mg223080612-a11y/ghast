@@ -41,8 +41,34 @@ jobs:
             files: release/*-mac-*.zip
             name: mac
     runs-on: ${{ matrix.os }}
+    env:
+      # 맥 고정 서명 인증서가 비밀값에 있는지 (if 에서 secrets 를 직접 못 쓰므로)
+      HAS_MAC_CERT: ${{ secrets.MAC_CERT_P12 != '' }}
     steps:
       - uses: actions/checkout@v4
+      # 맥 고정 서명: 비밀값의 자체 인증서(GVCS Ghast Shooting Local)를 이번 실행에만 쓰는 임시 키체인에 넣는다.
+      # desktop/build.js 가 MAC_SIGN_HASH 로 앱을 다시 서명 → 새로 설치해도 맥 입력 모니터링 권한이 이어진다
+      - name: 맥 고정 서명 인증서 준비
+        if: matrix.name == 'mac' && env.HAS_MAC_CERT == 'true'
+        shell: bash
+        env:
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/ghast-sign.keychain-db"
+          KCPW="$(openssl rand -hex 16)"
+          echo "$MAC_CERT_P12" | base64 --decode > "$RUNNER_TEMP/ghast-sign.p12"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          security import "$RUNNER_TEMP/ghast-sign.p12" -k "$KC" -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/ghast-sign.p12"
+          HASH="$(security find-identity -p codesigning "$KC" | awk '/GVCS Ghast Shooting Local/ {print $2; exit}')"
+          if [ -z "$HASH" ]; then echo "::error::인증서를 키체인에서 찾지 못했습니다"; exit 1; fi
+          echo "MAC_SIGN_HASH=$HASH" >> "$GITHUB_ENV"
+          echo "MAC_SIGN_KEYCHAIN=$KC" >> "$GITHUB_ENV"
       # 태그 이름(v2.0.0)과 package.json 의 version(2.0.0)이 다르면 멈춘다 → 파일 이름·화면 버전이 어긋나는 일을 막음
       - name: 태그와 package.json 버전 맞는지 확인
         if: startsWith(github.ref, 'refs/tags/v')
@@ -58,6 +84,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # 테스트가 하나라도 실패하면 프로그램을 만들지 않는다
+      - run: npm test
       - run: npm run ${{ matrix.script }}
       - uses: actions/upload-artifact@v4
         with:
