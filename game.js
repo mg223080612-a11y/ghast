@@ -1945,7 +1945,13 @@ const Guns = {
       if (pickS('missing')) return `${pickS('missing')} 총 수신기가 빠졌어요 — 수신기를 다시 꽂으세요`;
       if (pickS('stuck')) return `${pickS('stuck')} 수신기가 응답하지 않아요 — 수신기를 뽑았다가 다시 꽂으세요`;
       if (pickS('off')) return `${pickS('off')} 총이 꺼져 있어요 — 총 전원을 켜세요 (켜면 게임패드 모드로 자동 전환)`;
-      if (pickS('mouse')) return `${pickS('mouse')} 총이 게임패드 모드가 아니에요 — 총에서 Space + 5 + 조이스틱 왼쪽을 누르세요`;
+      // 총은 켜져 있고 전환도 보냈는데 게임에 안 잡힘: 맥은 대부분 입력 모니터링 권한 문제 (수신기에 키보드 기능이 있어 권한이 있어야 열림.
+      // 정식 서명이 없는 빌드는 새로 설치할 때마다 권한이 이어지지 않는다 — 2026-11-19 실측). 그 밖에는 총에서 직접 전환
+      if (pickS('mouse')) {
+        return /Mac/i.test(navigator.platform)
+          ? `${pickS('mouse')} 총이 게임에 안 잡혀요 — 시스템 설정 → 개인정보 보호 및 보안 → 입력 모니터링에서 이 앱을 켜고 다시 시작 (안 되면 총에서 Space + 5 + 왼쪽)`
+          : `${pickS('mouse')} 총이 게임패드 모드가 아니에요 — 총에서 Space + 5 + 조이스틱 왼쪽을 누르세요`;
+      }
       if (pickS('switching')) return `${pickS('switching')} 총을 게임패드 모드로 바꾸는 중… (총을 한 번 흔들어 주세요)`;
     }
     const pick = (kind) => players.filter((i) => this.statusOf(i) === kind).map((i) => `${i + 1}P`).join('·');
