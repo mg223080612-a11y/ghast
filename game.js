@@ -113,24 +113,6 @@ function hash(n) {
   n = (n << 13) ^ n;
   return ((Math.imul(n, Math.imul(Math.imul(n, n), 15731) + 789221) + 1376312589) & 0x7fffffff) / 0x7fffffff;
 }
-// 부드럽게 오르내리는 1차원 노이즈 (지형 높이용)
-function makeNoise(r) {
-  const pts = Array.from({ length: 512 }, () => r());
-  return (x) => {
-    const i = Math.floor(x), f = x - i;
-    const a = pts[((i % 512) + 512) % 512], b = pts[(((i + 1) % 512) + 512) % 512];
-    const s = (1 - Math.cos(f * Math.PI)) / 2;
-    return a + (b - a) * s;
-  };
-}
-function shade(hex, f) {
-  const n = parseInt(hex.slice(1), 16);
-  const r = Math.round(((n >> 16) & 255) * f);
-  const g = Math.round(((n >> 8) & 255) * f);
-  const b = Math.round((n & 255) * f);
-  return `rgb(${r},${g},${b})`;
-}
-
 // ---------- 캔버스 ----------
 // 화면은 두 겹: 아래 #bg 에는 움직이지 않는 네더 배경을 한 번만 그리고,
 // 위 #game 에는 매 프레임 가스트·효과·글자만 그린다 (매번 화면 전체 배경을 다시 칠하지 않아 가볍다)
@@ -162,15 +144,9 @@ const IMG = {};
 function loadImages() {
   return new Promise((resolve, reject) => {
     try {
-      for (const name of ['fireball', 'tear', 'gunpowder']) {
-        const { rows, palette } = GhastArt.itemGrid(name);
-        IMG[name] = GhastArt.toCanvas(rows, palette);
-      }
-      // 화염구는 3장 (불꽃이 돌아가며 깜빡임). IMG.fireball 은 첫 장 (처음 화면 카드 등)
-      IMG.fireballFrames = [0, 1, 2].map((frame) => {
-        const { rows, palette } = GhastArt.itemGrid('fireball', { frame });
-        return GhastArt.toCanvas(rows, palette);
-      });
+      // 화면 글자 옆 가스트의 눈물 (16×16). 떨어지는 아이템·화염구는 itemImage 로 칸 수에 맞춰 그때그때 만든다
+      const { rows, palette } = GhastArt.itemGrid('tear');
+      IMG.tear = GhastArt.toCanvas(rows, palette);
       resolve();
     } catch (err) {
       reject(new Error(`그림을 만들지 못했습니다: ${err.message}`));
@@ -178,27 +154,66 @@ function loadImages() {
   });
 }
 
-// 픽셀 그림을 정수 px 자리·크기로 그린다 (반 픽셀에 걸리면 칸이 고르지 않게 늘어나 보인다)
+// 픽셀 그림을 그림 칸 수의 정수 배 크기로, 주어진 칸(x, y, w, h)의 가운데에 그린다 (칸이 고르지 않게 늘어나지 않게)
 function drawPixelImage(img, x, y, w, h) {
-  ctx.drawImage(img, Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+  const k = Math.max(1, Math.round(Math.min(w / img.width, h / img.height)));
+  const dw = img.width * k, dh = img.height * k;
+  ctx.drawImage(img, Math.round(x + (w - dw) / 2), Math.round(y + (h - dh) / 2), dw, dh);
 }
 
 // 가스트 그림의 비율·입 위치 (예전 그림 440×554 기준 값 그대로 — 판정 상자 비율과 화염구가 나가는 자리가 같게)
 const GHAST_W = 440, GHAST_H = 554;
 const MOUTH = { x: 96, y: 338 };
-// GV[종류] = { frames: 평소 3장(촉수 흔들림), charge: 충전 3장(빨간 눈 + 벌린 입), hurt: 맞았을 때(빨갛게), normal: 처음 화면 카드용 }
+// GV[종류] = { frames: 평소 3장(촉수 흔들림), charge: 충전 3장(빨간 눈 + 벌린 입), hurt: 맞았을 때(빨갛게), normal: 첫 장,
+//             cols·rows 칸 수, box 칠해진 칸 범위, spawn: 나타나기 3장(칸이 차례로 켜짐), poof: 터지기 장면들, poofMargin }
 const GV = {};
+const SPAWN_LEVELS = [0.25, 0.5, 0.75];
 function buildGhastVariants() {
   for (const type of GhastArt.TYPES) {
     const pal = GhastArt.palette(type);
+    const hurtPal = GhastArt.palette(type, { hurt: true });
     const frames = [], charge = [];
     for (let f = 0; f < GhastArt.FRAMES; f++) {
       frames.push(GhastArt.toCanvas(GhastArt.ghastGrid(type, { frame: f }), pal));
       charge.push(GhastArt.toCanvas(GhastArt.ghastGrid(type, { frame: f, charge: true }), pal));
     }
-    const hurt = GhastArt.toCanvas(GhastArt.ghastGrid(type, { frame: 0 }), GhastArt.palette(type, { hurt: true }));
-    GV[type] = { frames, charge, hurt, normal: frames[0] };
+    const rows0 = GhastArt.ghastGrid(type, { frame: 0 });
+    const hurt = GhastArt.toCanvas(rows0, hurtPal);
+    const spawn = SPAWN_LEVELS.map((lv) => GhastArt.toCanvas(GhastArt.materialize(rows0, lv), pal));
+    const { frames: poofRows, margin } = GhastArt.poofFrames(rows0);
+    const smokePal = GhastArt.palette(type, { smoke: true });
+    const poof = poofRows.map((r, i) => GhastArt.toCanvas(r, i < poofRows.length - 1 ? hurtPal : smokePal));
+    GV[type] = { frames, charge, hurt, normal: frames[0], ...GhastArt.gridSize(type), box: GhastArt.visibleBox(type), spawn, poof, poofMargin: margin };
   }
+  // 처음 화면 카드용 작은 아이콘 (icon-art.js)
+  IMG.icons = Object.fromEntries(IconArt.TYPES.map((type) => [type, GhastArt.toCanvas(IconArt.iconGrid(type), IconArt.iconPalette(type))]));
+  const fb = IconArt.fireballIcon();
+  IMG.fireballIcon = GhastArt.toCanvas(fb.rows, fb.palette);
+}
+
+// 칸 수가 정해진 아이템 그림 (날아오는 화염구는 커지면서 칸 수가 늘어난다 — 늘 한 칸 = P px). 한 번 만든 것은 다시 쓴다
+const itemCache = new Map(); // 이름 → Map(칸 수 × 4 + 장면 → 캔버스)
+const ITEM_CACHE_MAX = 400;   // 이름마다 이만큼 넘으면 비우고 다시 만든다
+function itemImage(name, cells, frame = 0) {
+  let byName = itemCache.get(name);
+  if (!byName) { byName = new Map(); itemCache.set(name, byName); }
+  const key = cells * 4 + frame;
+  let img = byName.get(key);
+  if (!img) {
+    const { rows, palette } = GhastArt.itemGrid(name, { size: cells, frame });
+    img = GhastArt.toCanvas(rows, palette);
+    if (byName.size >= ITEM_CACHE_MAX) byName.clear();
+    byName.set(key, img);
+  }
+  return img;
+}
+// 화염구를 px 크기 sizePx 에 가장 가까운 짝수 칸으로, 가운데 (x, y) 에 그린다 (정수 px, 한 칸 = P)
+function drawFireballCells(x, y, sizePx, time, phase) {
+  const P = pixelP();
+  const cells = PixelScale.evenCells(sizePx, P, 4);
+  const frame = Math.floor(time * FIREBALL_FPS + phase) % GhastArt.FRAMES;
+  const s = cells * P;
+  ctx.drawImage(itemImage('fireball', cells, frame), Math.round(x) - s / 2, Math.round(y) - s / 2, s, s);
 }
 
 // ---------- 효과음 (파일 없이 WebAudio 로 직접 합성) ----------
@@ -318,162 +333,99 @@ for (const key of Object.keys(Sound)) {
 }
 
 // ---------- 배경 (네더) ----------
-const NETHERRACK = ['#6f2a2a', '#7d3232', '#5e2222', '#8a3a3a', '#532020', '#6a2626', '#773030'];
-const GLOWSTONE = ['#f6d77e', '#e8b94e', '#fff1a8', '#c9963c'];
+// 배경은 가스트와 같은 한 칸 크기 P 로 그린다 (v3.2.0): 텍셀 해상도(화면 ÷ P)로 한 번 칠해(NetherBg) P 배로 늘려 #bg 캔버스에 찍는다.
+// 손으로 그린 네더랙 타일 · 먼 벽 / 가운데 기둥·언덕 / 가까운 천장·바닥 세 겹. 매 프레임에는 용암 폭포·웅덩이·불·불티만 그린다.
 let bg = null;
-let BLK = 8;
+let bgP = 0;            // 배경을 그린 한 칸 크기 (난이도·설정으로 P 가 바뀌면 배경도 다시 그린다)
+let bgLayout = null;    // NetherBg.layout 결과 (텍셀 단위)
 let groundY = 0;
-let lavaFalls = [];
+let lavaFalls = [];     // 용암 폭포 (텍셀 단위) — 그림은 lavaImgs
+let lavaImgs = [];
+let poolImg = null;
 let fires = [];
 const embers = [];
+const LAVA_FALL_FLOW = 18; // 용암 폭포가 1초에 흘러내리는 칸 수
+const LAVA_POOL_FLOW = 3;  // 웅덩이가 1초에 옆으로 흐르는 칸 수
+const BG_MIN_TEXELS = 64;  // 배경을 칠하는 최소 칸 수 (가로·세로)
+// 바닥 불꽃 세 겹: [색, 불길 높이에 대한 비율]
+const FIRE_LAYERS = [['#ff5a1a', 1], ['#ffb02e', 0.66], ['#fff3b0', 0.3]];
+
+// RGBA 버퍼 → 같은 크기 캔버스 (한 칸 = 1픽셀)
+function pixelCanvas(w, h, data) {
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, w);
+  c.height = Math.max(1, h);
+  if (w > 0 && h > 0) c.getContext('2d').putImageData(new ImageData(data, w, h), 0, 0);
+  return c;
+}
 
 function buildBackground() {
-  const r = seeded(20261016);
-  const n1 = makeNoise(r), n2 = makeNoise(r), n3 = makeNoise(r), n4 = makeNoise(r);
-  BLK = Math.max(6, Math.round(H / 64));
-  const cols = Math.ceil(W / BLK) + 1;
+  const P = pixelP();
+  bgP = P;
+  groundY = H * 0.82; // 가스트가 날아다니는 아래 끝 (판정·움직임에 쓰는 값이라 그대로)
+  // 아주 작은 창에서도 천장·바닥·폭포가 겹치지 않게 최소 64×64 칸으로 칠한다 (화면 밖은 잘려 안 보인다)
+  const tw = Math.max(BG_MIN_TEXELS, Math.ceil(W / P)), th = Math.max(BG_MIN_TEXELS, Math.ceil(H / P));
+  bgLayout = NetherBg.layout({ tw, th, groundRow: Math.round(groundY / P) });
+  const tex = pixelCanvas(tw, th, NetherBg.paint(bgLayout));
 
   bg = bgCanvas;
   bg.width = Math.round(W * DPR);
   bg.height = Math.round(H * DPR);
   const g = bg.getContext('2d');
   g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.imageSmoothingEnabled = false;
+  g.drawImage(tex, 0, 0, tw * P, th * P);
 
-  // 붉은 동굴 공기
-  const sky = g.createLinearGradient(0, 0, 0, H);
-  sky.addColorStop(0, '#120202');
-  sky.addColorStop(0.5, '#3d0d08');
-  sky.addColorStop(1, '#1a0403');
-  g.fillStyle = sky;
-  g.fillRect(0, 0, W, H);
-
-  const column = (c, top, bottom, f) => {
-    for (let y = Math.floor(top / BLK) * BLK; y < bottom; y += BLK) {
-      g.fillStyle = shade(NETHERRACK[Math.floor(r() * NETHERRACK.length)], f * (0.85 + r() * 0.3));
-      g.fillRect(c * BLK, y, BLK, BLK);
-    }
-  };
-  const haze = (a) => { g.fillStyle = `rgba(70, 10, 6, ${a})`; g.fillRect(0, 0, W, H); };
-
-  // 먼 언덕 두 겹 (멀수록 어둡고 흐리게)
-  for (let c = 0; c < cols; c++) column(c, H * 0.5 - n1(c * 0.05) * H * 0.18, H, 0.35);
-  haze(0.35);
-  // 먼 기둥
-  for (let k = 0; k < 3; k++) {
-    const c0 = Math.floor(lerp(0.1, 0.9, (k + r()) / 3) * cols);
-    const w = 3 + Math.floor(r() * 3);
-    for (let c = c0; c < c0 + w; c++) column(c, 0, H * 0.7, 0.4);
-  }
-  for (let c = 0; c < cols; c++) column(c, H * 0.66 - n2(c * 0.07) * H * 0.12, H, 0.5);
-  haze(0.25);
-
-  // 천장과 매달린 바위, 발광석
-  const ceil = [];
-  for (let c = 0; c < cols; c++) {
-    const depth = Math.floor(2 + Math.pow(n3(c * 0.12), 2) * 12) * BLK;
-    ceil.push(depth);
-    column(c, 0, depth, 0.55);
-  }
-  for (let c = 2; c < cols - 4; c++) {
-    if (n4(c * 0.3) > 0.78 && r() < 0.5) {
-      const w = 2 + Math.floor(r() * 3);
-      for (let i = 0; i < w; i++) {
-        const cc = c + i, h = 1 + Math.floor(r() * 3);
-        for (let j = 0; j < h; j++) {
-          g.fillStyle = pick(GLOWSTONE);
-          g.fillRect(cc * BLK, ceil[cc] + j * BLK, BLK, BLK);
-        }
-      }
-      const gx = (c + w / 2) * BLK, gy = ceil[c] + BLK * 2;
-      const glow = g.createRadialGradient(gx, gy, 0, gx, gy, BLK * 14);
-      glow.addColorStop(0, 'rgba(255, 210, 120, 0.25)');
-      glow.addColorStop(1, 'rgba(255, 210, 120, 0)');
-      g.fillStyle = glow;
-      g.fillRect(gx - BLK * 14, gy - BLK * 14, BLK * 28, BLK * 28);
-      c += w + 4;
-    }
-  }
-
-  // 바닥 (가까우니 밝게) + 용암 웅덩이 + 불
-  groundY = H * 0.82;
-  fires = [];
-  const poolStart = Math.floor(cols * lerp(0.55, 0.7, r()));
-  const poolEnd = poolStart + Math.floor(cols * 0.12);
-  for (let c = 0; c < cols; c++) {
-    const top = groundY + Math.floor(n2(c * 0.1 + 30) * 3) * BLK;
-    column(c, top, H, 0.8);
-    g.fillStyle = 'rgba(255, 120, 90, 0.12)';
-    g.fillRect(c * BLK, top, BLK, BLK);
-    if (c >= poolStart && c < poolEnd) {
-      for (let j = 0; j < 2; j++) {
-        g.fillStyle = pick(['#ff8a1c', '#ffb23a', '#e0601a', '#ffcf5a']);
-        g.fillRect(c * BLK, top + j * BLK, BLK, BLK);
-      }
-    } else if (r() < 0.035) {
-      fires.push({ x: c * BLK, y: top, phase: r() * 10 });
-    }
-  }
-  const pg = g.createRadialGradient((poolStart + poolEnd) / 2 * BLK, groundY, 0, (poolStart + poolEnd) / 2 * BLK, groundY, W * 0.2);
-  pg.addColorStop(0, 'rgba(255, 120, 30, 0.3)');
-  pg.addColorStop(1, 'rgba(255, 120, 30, 0)');
-  g.fillStyle = pg;
-  g.fillRect(0, 0, W, H);
-
-  // 용암 폭포 위치 (그림은 매 프레임 움직이며 그림)
-  lavaFalls = [0.18, 0.83].map((p) => {
-    const c = Math.floor(cols * (p + (r() - 0.5) * 0.08));
-    return { x: c * BLK, top: ceil[c] || BLK * 4, bottom: groundY + BLK * 2, col: c };
+  // 움직이는 용암: 무늬를 LAVA_PERIOD 줄 더 길게 만들어 두고 매 프레임 한 칸씩 밀어 그린다
+  const { LAVA_PERIOD, TILE, POOL_DEPTH } = NetherBg;
+  lavaFalls = bgLayout.falls;
+  lavaImgs = lavaFalls.map((f, i) => {
+    const h = f.bottom - f.top + LAVA_PERIOD;
+    return pixelCanvas(f.w, h, NetherBg.lavaStrip(f.w, h, i));
   });
-  for (const f of lavaFalls) {
-    const glow = g.createLinearGradient(f.x - BLK * 10, 0, f.x + BLK * 12, 0);
-    glow.addColorStop(0, 'rgba(255, 110, 20, 0)');
-    glow.addColorStop(0.5, 'rgba(255, 110, 20, 0.22)');
-    glow.addColorStop(1, 'rgba(255, 110, 20, 0)');
-    g.fillStyle = glow;
-    g.fillRect(f.x - BLK * 10, f.top, BLK * 22, f.bottom - f.top);
-  }
-
-  // 가장자리 어둡게
-  const v = g.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
-  v.addColorStop(0, 'rgba(0,0,0,0)');
-  v.addColorStop(1, 'rgba(0,0,0,0.6)');
-  g.fillStyle = v;
-  g.fillRect(0, 0, W, H);
+  const pw = (bgLayout.pool.c1 - bgLayout.pool.c0) * TILE + LAVA_PERIOD;
+  poolImg = pixelCanvas(pw, POOL_DEPTH, NetherBg.lavaStrip(pw, POOL_DEPTH, 7, true));
+  fires = bgLayout.fires;
 }
 
-const LAVA = ['#ff8a1c', '#ffb23a', '#e0601a', '#ffd25a', '#c94812', '#ff9e2c'];
 // 움직이는 배경만 (흐르는 용암·불꽃·불티). 나머지 배경은 아래 #bg 캔버스에 한 번 그려져 있다
 function drawBackground(time) {
   if (!bg || bg.width === 0 || bg.height === 0) return; // 창이 숨겨져 크기가 0일 때
+  if (bgP !== pixelP()) buildBackground();             // 난이도·설정으로 한 칸 크기가 바뀌었으면 배경도 같은 칸으로
   drawHeat(time);
+  const P = bgP;
+  const { LAVA_PERIOD, TILE, POOL_DEPTH } = NetherBg;
 
-  // 흘러내리는 용암
-  for (const f of lavaFalls) {
-    const shift = Math.floor(time * 7);
-    for (let y = f.top, row = 0; y < f.bottom; y += BLK, row++) {
-      for (let i = 0; i < 2; i++) {
-        ctx.fillStyle = LAVA[Math.floor(hash((f.col + i) * 7919 + (row - shift) * 31) * LAVA.length)];
-        ctx.fillRect(f.x + i * BLK, y, BLK, BLK);
+  // 흘러내리는 용암 (한 칸씩)
+  const shift = Math.floor(time * LAVA_FALL_FLOW) % LAVA_PERIOD;
+  lavaFalls.forEach((f, i) => {
+    const h = f.bottom - f.top;
+    ctx.drawImage(lavaImgs[i], 0, LAVA_PERIOD - shift, f.w, h, f.x * P, f.top * P, f.w * P, h * P);
+  });
+  // 옆으로 흐르는 용암 웅덩이
+  const pool = bgLayout.pool, pw = (pool.c1 - pool.c0) * TILE;
+  const poolShift = Math.floor(time * LAVA_POOL_FLOW) % LAVA_PERIOD;
+  ctx.drawImage(poolImg, poolShift, 0, pw, POOL_DEPTH, pool.c0 * TILE * P, bgLayout.floorTop[pool.c0] * P, pw * P, POOL_DEPTH * P);
+
+  // 바닥의 불꽃: 2칸 폭 불길 셋, 높이가 칸 단위로 일렁인다
+  for (const fire of fires) {
+    for (let i = 0; i < 3; i++) {
+      const h = 3 + Math.round(Math.abs(Math.sin(time * 9 + fire.phase + i * 1.7)) * 6);
+      const x = (fire.x - 3 + i * 2) * P;
+      for (const [color, k] of FIRE_LAYERS) {
+        const hh = Math.round(h * k);
+        ctx.fillStyle = color;
+        ctx.fillRect(x, (fire.y - hh) * P, P * 2, hh * P);
       }
     }
   }
 
-  // 바닥의 불꽃
-  for (const fire of fires) {
-    for (let i = 0; i < 3; i++) {
-      const h = BLK * (1.2 + Math.abs(Math.sin(time * 9 + fire.phase + i * 1.7)) * 1.6);
-      const x = fire.x - BLK * 0.5 + i * BLK * 0.66;
-      ctx.fillStyle = '#ff5a1a'; ctx.fillRect(x, fire.y - h, BLK * 0.66, h);
-      ctx.fillStyle = '#ffb02e'; ctx.fillRect(x, fire.y - h * 0.66, BLK * 0.66, h * 0.66);
-      ctx.fillStyle = '#fff3b0'; ctx.fillRect(x, fire.y - h * 0.3, BLK * 0.66, h * 0.3);
-    }
-  }
-
-  // 떠오르는 불티
+  // 떠오르는 불티 (배경 칸에 맞춰 한 칸 크기)
   for (const e of embers) {
+    const s = Math.max(1, Math.round(e.size / P)) * P;
     ctx.globalAlpha = clamp(e.life / e.max, 0, 1) * 0.9;
     ctx.fillStyle = e.color;
-    ctx.fillRect(e.x, e.y, e.size, e.size);
+    ctx.fillRect(Math.floor(e.x / P) * P, Math.floor(e.y / P) * P, s, s);
   }
   ctx.globalAlpha = 1;
 }
@@ -566,31 +518,38 @@ function updateParts(dt) {
   }
 }
 function drawParts() {
+  const P = pixelP(); // 조각·고리·아이템 모두 한 칸 = P
   for (const p of parts) {
     const a = p.age / p.life;
     ctx.globalAlpha = p.kind === 'text' ? (a > 0.7 ? (1 - a) / 0.3 : 1) : 1 - a * a;
     if (p.kind === 'sq') {
+      // 조각은 한 칸(P)의 정수 배 크기, 정수 px 자리 (가스트·배경과 같은 픽셀 크기)
+      const s = Math.max(1, Math.round(p.size / P)) * P;
       ctx.fillStyle = p.color;
-      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+      ctx.fillRect(Math.round(p.x - s / 2), Math.round(p.y - s / 2), s, s);
+    } else if (p.kind === 'pxring') {
+      drawPixelRing(p, a, P);
     } else if (p.kind === 'ring') {
       ctx.strokeStyle = p.color;
       ctx.lineWidth = Math.max(2, U * 0.6 * (1 - a));
       ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.stroke();
     } else if (p.kind === 'img') {
-      // 떨어지는 아이템: 픽셀 그림이라 정수 px 자리·크기에, 90°씩만 돌린다 (비스듬히 돌리면 픽셀이 번진다)
-      const s = Math.round(p.size);
+      // 떨어지는 아이템: 한 칸 = P 인 cells 칸 그림, 정수 px 자리에 90°씩만 돌린다 (비스듬히 돌리면 픽셀이 번진다)
+      const s = p.cells * P;
       ctx.save();
       ctx.translate(Math.round(p.x), Math.round(p.y)); ctx.rotate(Math.round(p.rot / (Math.PI / 2)) * (Math.PI / 2));
-      ctx.drawImage(p.img, -Math.round(s / 2), -Math.round(s / 2), s, s);
+      ctx.drawImage(itemImage(p.item, p.cells), -s / 2, -s / 2, s, s);
       ctx.restore();
-    } else if (p.kind === 'sprite') {
-      // 터지는 가스트: 옆으로 퍼지고 위아래로 납작해지며 사라진다 (보이기만, 판정은 이미 끝남). 정수 px
-      ctx.globalAlpha = 1 - a;
-      const dw = Math.round(p.w * (1 + a * 0.6)), dh = Math.max(1, Math.round(p.h * (1 - a * 0.7)));
+    } else if (p.kind === 'poof') {
+      // 터지는 가스트: 몸이 한 칸(P) 조각으로 부서져 흩어지는 장면 (크기를 늘리거나 줄이지 않는다, 보이기만 — 판정은 이미 끝남)
+      ctx.globalAlpha = 1;
+      const look = GV[p.type] || GV.normal;
+      const img = look.poof[Math.min(look.poof.length - 1, Math.floor(a * look.poof.length))];
+      const w = img.width * p.P, h = img.height * p.P; // 터진 순간의 칸 크기 그대로
       ctx.save();
       ctx.translate(Math.round(p.x), Math.round(p.y));
       ctx.scale(p.flip, 1);
-      ctx.drawImage(p.img, -Math.round(dw / 2), -Math.round(dh / 2), dw, dh);
+      ctx.drawImage(img, -w / 2, -h / 2, w, h);
       ctx.restore();
     } else if (p.kind === 'cross') {
       ctx.strokeStyle = p.color;
@@ -613,12 +572,12 @@ function drawParts() {
 }
 
 // 가스트가 연기와 함께 팡! 터지는 효과
+const DROP_CELLS = 10; // 떨어지는 가스트의 눈물·화약 그림 칸 수 (한 칸 = P)
 function burstGhast(gh) {
   const { x, y } = gh.center();
   const w = gh.w, h = gh.h;
-  // 가스트 모습이 납작해지며 사라지는 '펑' (0.28초). 조각이 많아도 꼭 보이게 맨 앞에 넣는다
-  const look = GV[gh.type] || GV.normal;
-  parts.push({ kind: 'sprite', img: look.hurt, x, y, w, h, flip: gh.flip, age: 0, life: 0.28, vx: 0, vy: 0, g: 0, drag: 0, size: 0, grow: 0, rot: 0, vr: 0 });
+  // 가스트 몸이 한 칸 조각으로 부서져 흩어지는 '펑' (0.28초). 조각이 많아도 꼭 보이게 맨 앞에 넣는다
+  parts.push({ kind: 'poof', type: gh.type, P: pixelP(), x, y, flip: gh.flip, age: 0, life: 0.28, vx: 0, vy: 0, g: 0, drag: 0, size: 0, grow: 0, rot: 0, vr: 0 });
   // 조각 수는 줄이고(가볍게) 크기를 조금 키워 '팡' 느낌은 그대로
   for (let i = 0; i < 16; i++) {
     addPart({
@@ -636,14 +595,14 @@ function burstGhast(gh) {
       color: pick(['#ffd25a', '#ff8a1c', '#fff3b0', '#ff5a1a']),
     });
   }
-  addPart({ kind: 'ring', x, y, size: w * 0.2, grow: U * 90, life: 0.35, color: '#fff7d6' });
+  addPart({ kind: 'pxring', x, y, size: w * 0.2, grow: U * 90, life: 0.35, colors: RING_COLORS.ghast });
   // 가스트의 눈물·화약이 떨어짐
   const drops = Math.random() < 0.5 ? 2 : 1;
   for (let i = 0; i < drops; i++) {
     addPart({
-      kind: 'img', img: pick([IMG.tear, IMG.gunpowder, IMG.tear]),
+      kind: 'img', item: pick(['tear', 'gunpowder', 'tear']), cells: DROP_CELLS,
       x, y, vx: rand(-1, 1) * U * 15, vy: -rand(15, 30) * U, g: U * 110,
-      size: U * 5 * gh.z, life: 1.2, vr: rand(-6, 6),
+      life: 1.2, vr: rand(-6, 6),
     });
   }
   addPart({
@@ -662,7 +621,25 @@ function burstFire(x, y, scale) {
       color: pick(['#ffd25a', '#ff8a1c', '#fff3b0', '#ff5a1a', '#5a5a5a', '#3a3a3a']),
     });
   }
-  addPart({ kind: 'ring', x, y, size: U * 3, grow: U * 120 * scale, life: 0.4, color: '#ffb23a' });
+  addPart({ kind: 'pxring', x, y, size: U * 3, grow: U * 120 * scale, life: 0.4, colors: RING_COLORS.fire });
+}
+
+// 퍼지는 고리 (픽셀 격자): 한 칸 = P 인 격자 원. 투명도 대신 색이 단계별로 어두워지고(밝은 노랑 → 주황 → 검붉음),
+// 처음엔 2칸 굵기, 끝 무렵에는 한 칸 걸러 한 칸만 남아 흩어진다
+const RING_COLORS = {
+  fire: ['#fff3b0', '#ffd25a', '#ff8a1c', '#c94812', '#6a1e0a'],
+  ghast: ['#ffffff', '#fff7d6', '#ffd9a0', '#c8a08a', '#6a4a40'],
+};
+function drawPixelRing(p, a, P) {
+  const colors = p.colors || RING_COLORS.fire;
+  const step = Math.min(colors.length - 1, Math.floor(a * colors.length));
+  const rc = Math.max(1, Math.round(p.size / P));
+  const gx = Math.round(p.x / P), gy = Math.round(p.y / P);
+  ctx.globalAlpha = 1;
+  const outer = circleCells(rc);
+  const cells = step >= colors.length - 2 ? outer.filter(([cx, cy]) => ((cx + cy) & 1) === 0) : outer; // 끝 무렵엔 듬성듬성
+  fillCells(cells, gx, gy, P, colors[step]);
+  if (a < 0.45) fillCells(circleCells(rc - 1), gx, gy, P, colors[Math.min(colors.length - 1, step + 1)]); // 처음엔 안쪽 한 칸 더 (2칸 굵기)
 }
 
 function popupScore(x, y, label, color) {

@@ -154,14 +154,21 @@ const titleCards = () => [
   { fireball: true },
 ];
 const CARD_IMG_H = 9;                     // 기본 가스트 그림 높이 (U)
-// 종류별 크기 차이는 보이되, 아기 가스트도 알아볼 만큼만 줄인다
+// 종류별 크기 차이는 보이되, 아기 가스트도 알아볼 만큼만 줄인다 (아이콘 배율은 가장 큰 카드 높이에 맞춘다)
 const cardScale = (size) => 0.55 + 0.45 * size;
+
+// 카드 그림: 게임 그림을 줄이지 않고 카드용 작은 아이콘(icon-art.js)을 모든 카드에 같은 정수 배율로 그린다 (얼굴이 또렷하게)
+function drawCardIcon(img, x, base, k) {
+  const w = img.width * k, h = img.height * k;
+  ctx.drawImage(img, Math.round(x - w / 2), Math.round(base - h), w, h);
+}
 
 function drawTitleCards(cx, top, width) {
   const cards = titleCards();
   const n = cards.length;
   const cw = width / n;
   const base = top + U * 12.5;            // 그림 바닥선 (크기가 달라도 바닥을 맞춘다)
+  const k = IconArt.iconScale(U * CARD_IMG_H * cardScale(GHAST_TYPES.big.size));
   ctx.imageSmoothingEnabled = false;
   cards.forEach((c, i) => {
     const x = cx - width / 2 + cw * (i + 0.5);
@@ -173,13 +180,11 @@ function drawTitleCards(cx, top, width) {
     ctx.strokeRect(x - cw / 2 + U * 0.8, top, cw - U * 1.6, U * 20);
     let name, pts, color;
     if (c.fireball) {
-      const s = U * 7.5;
-      drawPixelImage(IMG.fireball, x - s / 2, base - s, s, s);
+      drawCardIcon(IMG.fireballIcon, x, base, k);
       name = '화염구 반사'; pts = `+${settings.deflectPoints}`; color = '#ffb347';
     } else {
       const T = GHAST_TYPES[c.type];
-      const h = U * CARD_IMG_H * cardScale(T.size), w = h * GHAST_W / GHAST_H;
-      drawPixelImage(GV[T.img].normal, x - w / 2, base - h, w, h);
+      drawCardIcon(IMG.icons[T.img], x, base, k);
       name = T.name; pts = `+${T.points()}`; color = c.type === 'gold' ? '#ffd84a' : '#9fe870';
     }
     text(name, x, base + U * 2.8, fitTextSize(name, U * 2.5, cw - U * 2.2), '#ffd9b0');

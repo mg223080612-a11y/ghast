@@ -8,15 +8,69 @@ const Art = require('../ghast-art.js');
 const cell = (rows, x, y) => rows[Math.floor(y)][Math.floor(x)];
 const filled = (rows) => rows.reduce((n, row) => n + [...row].filter((ch) => ch !== '.').length, 0);
 
-test('가스트 그림은 종류·장면마다 40×50 칸이고 쓰는 글자는 모두 색이 정해져 있다', () => {
+// game-ghasts.js 의 GHAST_TYPES 크기 배수 (그림 칸 수가 이 비율을 따라야 같은 칸 크기로 그려진다)
+const SIZES = (() => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'game-ghasts.js'), 'utf8');
+  return Object.fromEntries([...src.matchAll(/^\s+(\w+): \{ name: '[^']+', size: ([\d.]+)/gm)].map((m) => [m[1], Number(m[2])]));
+})();
+
+test('가스트 그림은 종류마다 정해진 칸 수(보통·분노 40×50, 아기 24×30, 황금 30×38, 큰 54×68)이고 쓰는 글자는 모두 색이 정해져 있다', () => {
+  assert.deepEqual(Art.gridSize('normal'), { cols: Art.GW, rows: Art.GH });
+  assert.deepEqual(Art.gridSize('small'), { cols: 24, rows: 30 });
+  assert.deepEqual(Art.gridSize('gold'), { cols: 30, rows: 38 });
+  assert.deepEqual(Art.gridSize('big'), { cols: 54, rows: 68 });
   for (const type of Art.TYPES) {
     const pal = Art.palette(type);
+    const { cols, rows: nRows } = Art.gridSize(type);
     for (let frame = 0; frame < Art.FRAMES; frame++) {
       for (const charge of [false, true]) {
         const rows = Art.ghastGrid(type, { frame, charge });
-        assert.equal(rows.length, Art.GH, `${type} 줄 수`);
-        rows.forEach((row) => assert.equal(row.length, Art.GW, `${type} 칸 수`));
+        assert.equal(rows.length, nRows, `${type} 줄 수`);
+        rows.forEach((row) => assert.equal(row.length, cols, `${type} 칸 수`));
         for (const ch of new Set(rows.join(''))) if (ch !== '.') assert.ok(pal[ch], `${type} 의 '${ch}' 색이 없음`);
+      }
+    }
+  }
+});
+
+test('칸 수는 종류 크기 배수(GHAST_TYPES size)에 비례하고(±1칸), 가운데가 정수 px 에 오게 짝수다', () => {
+  assert.equal(Object.keys(SIZES).length, Art.TYPES.length, 'game-ghasts.js 에서 크기를 다 찾지 못함');
+  for (const type of Art.TYPES) {
+    const { cols, rows } = Art.gridSize(type);
+    assert.ok(Math.abs(cols - Art.GW * SIZES[type]) <= 1, `${type} 칸 ${cols} vs ${Art.GW * SIZES[type]}`);
+    assert.ok(Math.abs(rows - Art.GH * SIZES[type]) <= 1, `${type} 줄 ${rows} vs ${Art.GH * SIZES[type]}`);
+    assert.equal(cols % 2, 0, `${type} 칸 수 홀수`);
+    assert.equal(rows % 2, 0, `${type} 줄 수 홀수`);
+  }
+});
+
+// 입 자리 칸에서 4방향으로 이어진 입 글자(k·r·y·t) 덩어리의 가운데 (칸 경계 기준)
+function mouthCenter(rows, mc) {
+  const isMouth = (x, y) => 'kryt'.includes((rows[y] || '')[x] || '.');
+  const start = [Math.floor(mc.x), Math.floor(mc.y)];
+  const seen = new Set([start.join(',')]), stack = [start];
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  while (stack.length) {
+    const [x, y] = stack.pop();
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + 1); y1 = Math.max(y1, y + 1);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const k = `${x + dx},${y + dy}`;
+      if (!seen.has(k) && isMouth(x + dx, y + dy)) { seen.add(k); stack.push([x + dx, y + dy]); }
+    }
+  }
+  return { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
+}
+
+test('모든 종류에서 그린 입(평소·충전)의 가운데가 입 자리(MOUTH 비율 × 칸 수)에서 1칸 안 → 화염구가 입에서 나간다', () => {
+  for (const type of Art.TYPES) {
+    const mc = Art.mouthCell(type);
+    const { cols, rows } = Art.gridSize(type);
+    assert.ok(Math.abs(mc.x / cols - Art.MOUTH_CELL.x / Art.GW) < 1e-9 && Math.abs(mc.y / rows - Art.MOUTH_CELL.y / Art.GH) < 1e-9, `${type} 입 비율`);
+    for (const charge of [false, true]) {
+      for (let frame = 0; frame < Art.FRAMES; frame++) {
+        const grid = Art.ghastGrid(type, { frame, charge });
+        const c = mouthCenter(grid, mc);
+        assert.ok(Math.abs(c.x - mc.x) <= 1 && Math.abs(c.y - mc.y) <= 1, `${type}${charge ? ' 충전' : ''} 입 가운데 (${c.x}, ${c.y}) vs (${mc.x.toFixed(2)}, ${mc.y.toFixed(2)})`);
       }
     }
   }
@@ -32,9 +86,10 @@ test('입 자리(MOUTH_CELL)는 game.js 의 MOUTH(440×554 의 96, 338)와 같�
   for (const type of Art.TYPES) {
     const calm = Art.ghastGrid(type);
     const charge = Art.ghastGrid(type, { charge: true });
-    assert.notEqual(cell(calm, Art.MOUTH_CELL.x, Art.MOUTH_CELL.y), '.', `${type} 입 자리가 비어 있음`);
+    const mc = Art.mouthCell(type);
+    assert.ok(['k', 't'].includes(cell(calm, mc.x, mc.y)), `${type} 입 자리가 입이 아님`);
     // 충전 그림은 입 자리에 벌린 입(검은 입·불빛)이 있다
-    assert.ok(['k', 'r', 'y'].includes(cell(charge, Art.MOUTH_CELL.x, Art.MOUTH_CELL.y)), `${type} 충전 입`);
+    assert.ok(['k', 'r', 'y'].includes(cell(charge, mc.x, mc.y)), `${type} 충전 입`);
   }
 });
 
@@ -50,9 +105,10 @@ test('종류마다 모양이 다르다 (색만 바꾼 그림이 아님)', () => 
 test('촉수만 흔들린다: 장면(frame)마다 아랫부분은 다르고 윗부분(몸·얼굴)은 같다', () => {
   for (const type of Art.TYPES) {
     const [a, b, c] = [0, 1, 2].map((frame) => Art.ghastGrid(type, { frame }));
-    assert.deepEqual(a.slice(0, 30), b.slice(0, 30), `${type} 윗부분이 바뀜`);
-    assert.notDeepEqual(a.slice(36), b.slice(36), `${type} 0·1 촉수가 같음`);
-    assert.notDeepEqual(b.slice(36), c.slice(36), `${type} 1·2 촉수가 같음`);
+    const top = Math.round(a.length * 0.6), low = Math.round(a.length * 0.72); // 40×50 이면 30줄 · 36줄
+    assert.deepEqual(a.slice(0, top), b.slice(0, top), `${type} 윗부분이 바뀜`);
+    assert.notDeepEqual(a.slice(low), b.slice(low), `${type} 0·1 촉수가 같음`);
+    assert.notDeepEqual(b.slice(low), c.slice(low), `${type} 1·2 촉수가 같음`);
     assert.deepEqual(Art.ghastGrid(type, { frame: 3 }), a, 'frame 은 3장마다 되돌아온다');
   }
 });
@@ -110,16 +166,17 @@ test('몸 색(o·d·m·l·h)에 한 칸짜리 잡티가 1% 이하 (모든 장면
   }
 });
 
-test('촉수 줄(y=38~43)의 80% 이상에서 촉수 사이가 2칸 이상 떨어지고, 한 덩어리 폭은 6칸 이하 (흔들려도)', () => {
+test('촉수 줄(그림 높이 76~86%, 40×50 이면 y=38~43)의 80% 이상에서 촉수 사이가 2칸 이상, 한 덩어리 폭은 6칸(40칸 기준 비율) 이하', () => {
   for (const type of Art.TYPES) {
     for (const rows of allGrids(type)) {
       let ok = 0, total = 0;
-      for (let y = 38; y <= 43; y++) {
+      const maxRun = Math.max(3, Math.round((6 * rows[0].length) / 40));
+      for (let y = Math.round(rows.length * 0.76); y <= Math.round(rows.length * 0.86); y++) {
         const runs = [...rows[y].matchAll(/[^.]+/g)].map((m) => [m.index, m.index + m[0].length]);
         if (runs.length < 2) continue;
         total++;
         const gaps = runs.slice(1).map((r, i) => r[0] - runs[i][1]);
-        if (gaps.every((g) => g >= 2) && runs.every((r) => r[1] - r[0] <= 6)) ok++;
+        if (gaps.every((g) => g >= 2) && runs.every((r) => r[1] - r[0] <= maxRun)) ok++;
       }
       assert.ok(!total || ok / total >= 0.8, `${type} 촉수 줄 ${ok}/${total}`);
     }
@@ -161,7 +218,7 @@ test('몸 왼쪽 위 윤곽은 위에서 아래로 갈수록 줄어드는 고른
     const left = rows.map((r) => r.indexOf('#'));
     const top = left.findIndex((v) => v >= 0);
     let widest = top;
-    for (let y = top; y < 34; y++) if (left[y] >= 0 && left[y] < left[widest]) widest = y;
+    for (let y = top; y < Art.specOf(type).body.bottom; y++) if (left[y] >= 0 && left[y] < left[widest]) widest = y;
     const steps = [];
     for (let y = top + 1; y <= widest; y++) steps.push(left[y - 1] - left[y]);
     steps.forEach((s, i) => {
@@ -170,15 +227,17 @@ test('몸 왼쪽 위 윤곽은 위에서 아래로 갈수록 줄어드는 고른
   }
 });
 
-test('얼굴: 눈 높이 4칸 이상, 아기 가스트의 눈이 가장 크다', () => {
+test('얼굴: 눈 높이 4칸 이상, 아기 가스트의 눈이 몸 크기에 비해 가장 크다', () => {
   const eyeHeight = (type) => {
     const rows = Art.ghastGrid(type);
-    // 가까운 눈(오른쪽, 11~17 칸)의 눈 글자가 있는 줄 수
-    return rows.filter((row) => /[ewry]/.test(row.slice(11, 18))).length;
+    const { at, rows: eye } = Art.specOf(type).face.near;
+    // 가까운 눈(오른쪽) 자리에서 눈 글자가 있는 줄 수
+    return rows.filter((row) => /[ewry]/.test(row.slice(at[0], at[0] + eye[0].length))).length;
   };
   const h = Object.fromEntries(Art.TYPES.map((t) => [t, eyeHeight(t)]));
+  const ratio = (t) => h[t] / Art.gridSize(t).rows;
   for (const t of Art.TYPES) assert.ok(h[t] >= 4, `${t} 눈 높이 ${h[t]}`);
-  for (const t of Art.TYPES) if (t !== 'small') assert.ok(h.small > h[t], `아기 ${h.small} > ${t} ${h[t]}`);
+  for (const t of Art.TYPES) if (t !== 'small') assert.ok(ratio('small') > ratio(t), `아기 ${ratio('small').toFixed(2)} > ${t} ${ratio(t).toFixed(2)}`);
 });
 
 test('분노 가스트: 뿔 높이 8칸 이상, 눈 불빛(노랑) 3×2 이상', () => {
@@ -193,7 +252,7 @@ test('분노 가스트: 뿔 높이 8칸 이상, 눈 불빛(노랑) 3×2 이상',
 const COUNTS = { normal: [5], small: [3], big: [4], angry: [5], gold: [4, 5] };
 const bodyBottoms = (type) => {
   const mask = Art.bodyMask(type);
-  return Array.from({ length: Art.GW }, (_, x) => mask.reduce((y, row, r) => (row[x] === '#' ? r : y), -1));
+  return Array.from({ length: mask[0].length }, (_, x) => mask.reduce((y, row, r) => (row[x] === '#' ? r : y), -1));
 };
 
 test('촉수 개수가 종류마다 정해진 수이고, 간격이 모두 같지 않으며, 몸 폭 가운데 80% 안에 있다', () => {
@@ -232,7 +291,8 @@ test('촉수 길이가 확실히 다르다: 가장 짧은 것 ≤ 가장 긴 것
     assert.ok(new Set(lens).size >= 3, `${type} ${lens}`);
   }
   assert.ok(Math.max(...Art.tentacles('normal', 0).map((t) => t.len)) >= 12, '보통 가스트의 가장 긴 촉수 12칸 이상');
-  for (const t of Art.tentacles('small', 0)) assert.ok(t.len >= 4 && t.len <= 7, `아기 촉수 ${t.len}`);
+  // 아기 촉수는 짧다: 3칸 이상, 그림 높이의 20% 이하
+  for (const t of Art.tentacles('small', 0)) assert.ok(t.len >= 3 && t.len <= Art.gridSize('small').rows * 0.2, `아기 촉수 ${t.len}`);
 });
 
 test('촉수는 무릎 없이 S 자: 한 줄에 옆으로 1칸까지, 같은 자리에 2줄 이상, 6줄 이상이면 방향이 한 번 이상 바뀜 (3장 모두)', () => {

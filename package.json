@@ -1,7 +1,7 @@
 {
   "name": "ghast-shooting",
   "productName": "가스트 사격 3",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "가스트 사격 — 학교 행사용 라이트건 사격 게임",
   "author": "SYNC",
   "private": true,
@@ -46,6 +46,9 @@
       "rank-rules.js",
       "fire-gate.js",
       "ghast-art.js",
+      "icon-art.js",
+      "pixel-scale.js",
+      "nether-bg.js",
       "fx-core.js",
       "contest-csv.js",
       "contest-manage.js",

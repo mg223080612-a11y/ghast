@@ -92,6 +92,21 @@ const rewardScoreNow = () => settings[rules().rewardKey] ?? settings.rewardScore
 const gotReward = (p) => !!p && (p.rewardShown || p.score >= rewardScoreNow());
 const ghastScaleNow = () => settings.ghastScale * rules().size;
 const hitPaddingNow = () => Math.max(0, settings.hitPadding + rules().padding);
+
+// ---------- 픽셀 한 칸 크기 P (v3.2.0) ----------
+// 화면 크기(U)·가스트 크기·난이도·판정 여유가 같으면 같은 값. 가스트 5종·화염구·아이템·배경·효과를 모두 이 칸 크기로 그린다.
+// 보통 가스트의 평균 판정 폭에 맞추되, 칠해진 그림이 가장 작은 판정 상자(z 최소)에도 들어가는 값까지만 (pixel-scale.js)
+// 매 프레임 여러 번 불리므로 세 값이 그대로면 저장해 둔 P 를 바로 돌려준다
+const pixel = { U: -1, scale: -1, pad: -1, P: 4 };
+function pixelP() {
+  const scale = ghastScaleNow(), pad = hitPaddingNow();
+  if (U !== pixel.U || scale !== pixel.scale || pad !== pixel.pad) {
+    const types = GhastArt.TYPES.map((type) => ({ size: GHAST_TYPES[type].size, ...GhastArt.gridSize(type), box: GhastArt.visibleBox(type), ref: type === 'normal' }));
+    pixel.P = PixelScale.pickTexel({ U, scalePct: scale, padPct: pad, types });
+    pixel.U = U; pixel.scale = scale; pixel.pad = pad;
+  }
+  return pixel.P;
+}
 // 토너먼트는 경기 시간이 늘 같게 보너스 시간이 없다 (레벨 UP 은 그대로)
 const bonusSecondsNow = () => (game.mode === 'tournament' ? 0 : settings.bonusSeconds);
 
@@ -279,42 +294,54 @@ class Ghast {
     this.state = 'dying';
     this.t = 0;
   }
+  // 그림은 종류마다 정해진 칸 수 × P px 로 고정 (z·나타나기·터지기에 따라 크기를 바꾸지 않는다). 자리는 정수 px, 떨림은 P 단위
   draw(time) {
-    const w = this.w, h = this.h;
-    let { x, y } = this.center();
+    const P = pixelP();
+    const look = GV[this.T.img] || GV.normal;
+    const { x, y } = this.center();
     const p = this.chargeP();
     const charging = p >= 0;
-    if (charging) x += rand(-1, 1) * U * 0.5 * p;
-    if (this.state === 'dying') { x += rand(-1, 1) * U; y += rand(-1, 1) * U; }
+    let jx = 0, jy = 0;
+    if (charging && p > CHARGE_SHAKE_FROM) {
+      // 충전 떨림: 칠해진 그림이 판정 상자 밖으로 나가지 않을 만큼 여유가 있을 때만 옆으로 한 칸
+      const room = PixelScale.shakeCells({ P, hw: PixelScale.hitHalf({ w: this.w, h: this.h, padPct: hitPaddingNow() }).hw, cols: look.cols, box: look.box });
+      jx = room * SHAKE_STEPS[Math.floor(time * (8 + 16 * p) + this.wiggle * 4) % SHAKE_STEPS.length] * P;
+    }
+    if (this.state === 'dying') { jx = Math.round(rand(-1, 1)) * P; jy = Math.round(rand(-1, 1)) * P; }
+    const at = PixelScale.placeSprite({ cx: x, cy: y, P, cols: look.cols, rows: look.rows, jx, jy });
 
     // 충전 중이면 뒤에 붉은 경고 빛 (효과 줄이기에서는 빠진다 → 아래 drawChargeCue 가 늘 보인다)
-    if (charging) drawGlow(x, y, w * 0.9, '255,60,20', 0.35 * p);
+    if (charging) drawGlow(at.cx, at.cy, this.w * 0.9, '255,60,20', 0.35 * p);
 
     ctx.save();
     // 악랄 모드 Lv.4 의 분노 가스트는 깜빡여서 잘 안 보인다
     const flicker = this.fierce && this.type === 'angry' ? 0.55 + 0.45 * Math.abs(Math.sin(time * 2.5 + this.bob)) : 1;
-    ctx.globalAlpha = this.alpha * flicker;
-    // 픽셀 그림이 번지지 않게 그리는 자리·크기를 정수 px 로 맞춘다 (판정에 쓰는 w·h 값은 그대로)
-    ctx.translate(Math.round(x), Math.round(y));
-    const s = this.state === 'in' ? lerp(0.6, 1, this.alpha) : (this.state === 'dying' ? 1 + this.t * 0.8 : 1);
-    const dw = Math.round(w * s), dh = Math.round(h * s);
+    // 나타날 때: 크기는 그대로, 칸이 무늬 순서로 켜지며(25 → 50 → 75%) 드러난다
+    const spawnStage = this.state === 'in' ? Math.floor(this.alpha * (look.spawn.length + 1)) : look.spawn.length;
+    const fade = this.state === 'in' ? 0.4 + 0.6 * this.alpha : this.alpha;
+    ctx.globalAlpha = fade * flicker;
+    ctx.translate(at.cx, at.cy);
     ctx.scale(this.flip, 1);
-    const look = GV[this.T.img] || GV.normal;
     // 촉수 흔들림: 1초에 약 6번 그림을 바꾼다 (가스트마다 박자가 다르게)
     const f = Math.floor(time * GHAST_WIGGLE_FPS + this.wiggle) % look.frames.length;
-    const img = this.state === 'dying' ? look.hurt : charging ? look.charge[f] : look.frames[f];
-    ctx.drawImage(img, -Math.round(dw / 2), -Math.round(dh / 2), dw, dh);
+    const img = this.state === 'dying' ? look.hurt
+      : spawnStage < look.spawn.length ? look.spawn[spawnStage]
+        : charging ? look.charge[f] : look.frames[f];
+    ctx.drawImage(img, -at.w / 2, -at.h / 2, at.w, at.h);
     if (charging) {
-      // 입 앞에서 화염구가 점점 커짐 (날아가는 화염구와 같은 그림·깜빡임)
-      const fs = Math.max(1, Math.round(w * 0.42 * p * (0.92 + 0.08 * Math.sin(time * 40))));
-      const mx = Math.round((MOUTH.x / GHAST_W - 0.5) * dw), my = Math.round((MOUTH.y / GHAST_H - 0.5) * dh);
-      ctx.drawImage(fireballFrame(time, this.wiggle), mx - Math.round(fs / 2), my - Math.round(fs / 2), fs, fs);
+      // 입 앞에서 화염구가 점점 커짐 (날아가는 화염구와 같은 그림·같은 칸 크기)
+      const fs = this.w * 0.42 * p * (0.92 + 0.08 * Math.sin(time * 40));
+      const mx = Math.round((MOUTH.x / GHAST_W - 0.5) * at.w), my = Math.round((MOUTH.y / GHAST_H - 0.5) * at.h);
+      if (fs >= P * 2) drawFireballCells(mx, my, fs, time, this.wiggle);
     }
     ctx.restore();
-    if (charging) drawChargeCue(x, y, w, h, p, time, this.alpha * flicker);
+    if (charging) drawChargeCue(at.cx, at.cy, this.w, this.h, p, time, fade * flicker);
   }
 }
 
+// 충전 떨림: 충전이 이만큼 된 뒤부터, 이 순서로 (칸) 옆으로 흔들린다
+const CHARGE_SHAKE_FROM = 0.3;
+const SHAKE_STEPS = [0, 1, 0, -1];
 // 가스트 촉수 흔들림 빠르기 (그림 바꾸는 횟수/초), 처음 화면 가스트가 충전 모습을 보여 주는 빈도 (1초에 이 확률)
 const GHAST_WIGGLE_FPS = 6;
 const DEMO_PREVIEW_PER_SEC = 0.1;
@@ -389,17 +416,15 @@ class Fireball {
       playerHit(this);
     }
   }
-  // 돌리지 않고 3장 깜빡임으로 불꽃이 일렁인다. 자리·크기는 정수 px (픽셀 그림이 번지지 않게)
+  // 돌리지 않고 3장 깜빡임으로 불꽃이 일렁인다. 커질 때는 칸 수가 늘어난다 (한 칸 = P, 크기를 소수 배로 늘리지 않는다)
   draw(time) {
-    const s = Math.round(this.size);
     const x = Math.round(this.x), y = Math.round(this.y);
-    drawGlow(x, y, s, '255,150,40', 0.45);
-    ctx.drawImage(fireballFrame(time, this.flick), x - Math.round(s / 2), y - Math.round(s / 2), s, s);
+    drawGlow(x, y, this.size, '255,150,40', 0.45);
+    drawFireballCells(x, y, this.size, time, this.flick);
   }
 }
-// 화염구 그림 3장 중 지금 것 (1초에 FIREBALL_FPS 장)
+// 화염구 불꽃 깜빡임 (1초에 FIREBALL_FPS 장)
 const FIREBALL_FPS = 9;
-const fireballFrame = (time, phase = 0) => IMG.fireballFrames[Math.floor(time * FIREBALL_FPS + phase) % IMG.fireballFrames.length];
 
 // ---------- 게임 상태 ----------
 let ghasts = [];

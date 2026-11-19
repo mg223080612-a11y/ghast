@@ -4,8 +4,9 @@
 'use strict';
 
 // ---------- 픽셀 격자 ----------
-// 효과는 모두 격자(한 칸 = FxCore.pixelCell(U) px) 단위의 사각형으로 그린다 (부드러운 선·원 대신 픽셀 그림처럼)
-const cellPx = () => FxCore.pixelCell(U);
+// 효과는 모두 격자 단위의 사각형으로 그린다 (부드러운 선·원 대신 픽셀 그림처럼).
+// 한 칸은 가스트·배경과 같은 P (v3.2.0, pixelP — 아주 작은 창에서도 2px 이상)
+const cellPx = () => Math.max(2, pixelP());
 const circleCache = new Map(); // 반지름(칸) → 둘레 칸 목록
 function circleCells(r) {
   let cells = circleCache.get(r);
