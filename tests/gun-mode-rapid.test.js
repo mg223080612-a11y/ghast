@@ -253,16 +253,80 @@ test('앱을 연사 도중에 켜서 켜짐을 본 적이 없어도, 연사를 �
 
 // v3.6.0: 게임이 그 총의 신호(조준 위치 변화·방아쇠)를 지금 받고 있으면(isLive) 켜져 있고 게임패드 모드다
 //   → XQ; 답이 없어도 꺼짐으로 세지 않고 J 도 보내지 않는다 (11-20 TV 실기: 경기 중 2P 에 J 가 다시 가고 조준점이 가끔 끊김)
-test('신호가 들어오고 있는 총은 XQ; 답이 몇 번 없어도 꺼짐으로 보지 않고 J 도 보내지 않는다', async () => {
-  const OFF = { state: 'off', rapid: null };
+// v2.5.2: 그런 총의 수신기는 아예 열지 않는다 (11-20 TV 실기: 경기 중 3초 확인 직후 1P 수신기가 멈춤)
+test('신호가 들어오고 있는 총은 수신기를 열지 않고(XQ;·XA:0; 없음) 켜짐·연사 OFF 상태를 그대로 보여 준다', async () => {
   let asked = 0; // 첫 회차(앱을 막 켬)에는 아직 게임 소식이 없다 → 그다음부터 신호가 들어오는 중
   const t = watch({
-    results: [ALIVE_SENT, OFF, OFF, OFF, ALIVE_SENT], ticks: 5, isRapidEnabled: () => true,
+    results: [ALIVE_SENT], ticks: 5, isRapidEnabled: () => true,
     isLive: () => (asked++ > 0),
   });
   await t.done;
+  assert.equal(t.calls.length, 1, '처음 한 번만 연다');
   assert.deepEqual(t.statuses.map((s) => s[0].state), ['ok', 'ok', 'ok', 'ok', 'ok']);
-  assert.deepEqual(t.calls.map((o) => o.sendJ), [true, false, false, false, false]);
+  assert.deepEqual(t.statuses.map((s) => s[0].rapid), ['off', 'off', 'off', 'off', 'off']);
+});
+
+test('앱을 경기 도중에 켜서(또는 총 모드 프로그램이 다시 켜져) 처음부터 신호가 들어오는 총도 열지 않고 켜짐으로 본다', async () => {
+  const t = watch({ results: [ALIVE_SENT], ticks: 3, isRapidEnabled: () => true, isLive: () => true });
+  await t.done;
+  assert.equal(t.calls.length, 0);
+  assert.deepEqual(t.statuses.map((s) => s[0].state), ['ok', 'ok', 'ok']);
+});
+
+test('신호가 들어오는 총이라도 연사를 보면(requestOff) 그때만 열어 OFF 를 보내고 알린다 (J 는 안 보냄)', async () => {
+  let asked = 0;
+  const t = watch({
+    results: [ALIVE_SENT], ticks: 3, intervalMs: 60000, isRapidEnabled: () => true,
+    isLive: () => (asked++ > 0),
+  });
+  await new Promise((r) => setTimeout(r, 10)); // 첫 회차(열어서 J)가 끝난 뒤
+  t.w.requestOff(1);
+  await new Promise((r) => setTimeout(r, 10));
+  t.w.requestOff(1);
+  await t.done;
+  assert.deepEqual(t.calls.map((o) => [o.sendJ, !!o.offFirst]), [[true, false], [false, true], [false, true]]);
+  assert.deepEqual(t.offs, [1, 1]);
+});
+
+test('신호가 끊긴 뒤 처음 답하면 J 를 한 번 보낸다 (열지 않은 동안 전원을 껐다 켰는지 몰라서), 그다음은 보내지 않는다', async () => {
+  let n = 0;
+  const liveAt = [false, true, true, false, false]; // 회차마다 신호가 들어오는지
+  const t = watch({
+    results: [ALIVE_SENT], ticks: 5, isRapidEnabled: () => true,
+    isLive: () => liveAt[Math.min(n++, liveAt.length - 1)],
+  });
+  await t.done;
+  assert.deepEqual(t.calls.map((o) => o.sendJ), [true, true, false], '신호가 들어오던 2·3회차는 열지 않음');
+  assert.deepEqual(t.statuses.map((s) => s[0].state), ['ok', 'ok', 'ok', 'ok', 'ok']);
+});
+
+test('신호가 끊긴 뒤 확인용으로 보낸 J 는 화면 알림(onSwitch) 없이 기록만 남긴다 (총을 내려놓을 때마다 알림이 뜨지 않게)', async () => {
+  let n = 0;
+  const liveAt = [false, true, false, false];
+  const switches = [];
+  const t = watch({
+    results: [ALIVE_SENT], ticks: 4, isRapidEnabled: () => true,
+    isLive: () => liveAt[Math.min(n++, liveAt.length - 1)],
+    check: async (path, o) => (o.sendJ ? { state: 'switched', rapid: null } : ALIVE_SENT),
+    onSwitch: (p) => switches.push(p),
+  });
+  await t.done;
+  assert.deepEqual(switches, [1], '앱을 막 켰을 때 한 번만 알림');
+  assert.equal(t.logs.filter((m) => m.includes('확인용')).length, 1);
+  assert.deepEqual(t.statuses.map((s) => s[0].state), ['ok', 'ok', 'ok', 'ok']);
+});
+
+test('신호가 끊긴 뒤 답이 두 번 없으면 꺼짐, 다시 켜져 답하면 J', async () => {
+  const OFF = { state: 'off', rapid: null };
+  let n = 0;
+  const liveAt = [false, true, false, false, false];
+  const t = watch({
+    results: [ALIVE_SENT, OFF, OFF, ALIVE_SENT], ticks: 5, isRapidEnabled: () => true,
+    isLive: () => liveAt[Math.min(n++, liveAt.length - 1)],
+  });
+  await t.done;
+  assert.deepEqual(t.statuses.map((s) => s[0].state), ['ok', 'ok', 'ok', 'off', 'ok']);
+  assert.equal(t.calls.at(-1).sendJ, true, '다시 켜진 총에 J');
 });
 
 test('신호가 끊긴 총은 예전처럼 두 번 이어서 답이 없으면 꺼짐, 다시 켜지면 J', async () => {
@@ -271,17 +335,4 @@ test('신호가 끊긴 총은 예전처럼 두 번 이어서 답이 없으면 �
   await t.done;
   assert.deepEqual(t.statuses.map((s) => s[0].state), ['ok', 'ok', 'off', 'ok']);
   assert.deepEqual(t.calls.map((o) => o.sendJ), [true, false, false, true]);
-});
-
-test('신호가 들어오는 동안 답이 두 번 넘게 없던 총이, 신호가 끊긴 채 다시 답하면 J 를 보낸다 (전원을 빨리 껐다 켜 마우스 모드가 된 총)', async () => {
-  const OFF = { state: 'off', rapid: null };
-  let n = 0;
-  const liveAt = [false, true, true, false, false]; // 회차마다 신호가 들어오는지
-  const t = watch({
-    results: [ALIVE_SENT, OFF, OFF, ALIVE_SENT, ALIVE_SENT], ticks: 5, isRapidEnabled: () => true,
-    isLive: () => liveAt[Math.min(n++, liveAt.length - 1)],
-  });
-  await t.done;
-  assert.deepEqual(t.calls.map((o) => o.sendJ), [true, false, false, true, false]);
-  assert.deepEqual(t.statuses.map((s) => s[0].state), ['ok', 'ok', 'ok', 'ok', 'ok']);
 });

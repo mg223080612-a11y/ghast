@@ -15,6 +15,8 @@
 //   - J 를 보낸 회차에는 OFF 를 보내지 않는다 (모드가 바뀌는 중이라, 다음 회차에)
 //   - 게임이 연사를 본 총은 XQ; 답을 기다리지 않고 XA:0; 부터 보낸다 (v3.5.2 — 11-20 실측: 2P 가 연사 중 XQ; 에 답하지 않아
 //     꺼짐으로 보이고 OFF 가 5초 늦었다). 게임이 그 총의 방아쇠 신호를 받고 있으니 켜져 있고 게임패드 모드다 → J 도 안 보낸다
+//   - 게임이 지금 신호를 받고 있는 총(live)은 수신기를 아예 열지 않는다 (v2.5.2 — 11-20 TV 실기: 경기 중 3초 확인 직후
+//     1P 수신기가 멈춰 방아쇠·조준이 끊기고 다시 꽂아야 했다). 연사를 본 총만 그때 한 번 열어 OFF 를 보낸다
 // =============================================================
 const { SerialPort } = require('serialport');
 
@@ -108,7 +110,8 @@ function aliveState(st, confirmed) {
 //   isConfirmed(player): 게임 쪽에서 그 총의 게임패드 신호가 들어오고 있는지 (최근 60초, 렌더러가 알려 줌)
 //   isLive(player): 게임이 그 총의 신호(조준 위치 변화·방아쇠)를 지금(몇 초 안) 받고 있는지 → 켜져 있고 게임패드 모드가 확실하다.
 //     XQ; 답이 없어도 꺼짐으로 세지 않고 J 도 보내지 않는다 (v3.6.0 — 11-20 TV 실기: 2P 가 XQ; 에 가끔 답하지 않아
-//     경기 중에 J 가 다시 가고 조준점이 가끔 끊김)
+//     경기 중에 J 가 다시 가고 조준점이 가끔 끊김). v2.5.2 부터는 그런 총의 수신기는 열지도 않는다 (연사를 본 총만 예외),
+//     신호가 끊긴 뒤 처음 답할 때 J 를 한 번 보낸다 (그동안 전원을 껐다 켰는지 몰라서)
 //   총이 꺼짐 → 켜짐이 되면 바로 J (엑스거너는 켤 때 언제나 마우스 모드), 켜져 있는데 게임패드 신호가 안 보이면 8초마다 다시 (최대 3번)
 //   isRapidEnabled(): 설정 '연사 자동 끄기' → 켜진 총에 회차마다 연사 OFF
 //   onRapidOff(player): 게임이 연사 ON 을 보고 부탁한(requestOff) 총에 OFF 를 보냈을 때
@@ -139,13 +142,25 @@ function startGunModeWatch({
     if ((stuckUntil.get(path) || 0) > now) return { player, state: 'stuck' };
     // 게임이 연사를 본 총: 켜져 있고 게임패드 모드인 것이 확실하다 → J 없이 OFF 부터
     const urgent = rapidWanted && offWanted.has(player);
+    const live = isLive(player);
+    // 게임이 지금 그 총의 신호를 받고 있으면(live) 수신기를 열지 않는다 (v2.5.2 — 11-20 TV 실기: 경기 중 3초 확인(열기·XQ;·XA:0;)
+    //   바로 뒤에 1P 수신기가 멈춰 방아쇠·조준이 끊기고 다시 꽂아야 했다, 2인 대결 약 16판에 3번. 총을 가만히 둔 오전 내내는 0번).
+    //   켜져 있고 게임패드 모드인 것이 확실해 물어볼 것도 없다. 연사를 본 총(urgent)만 아래에서 열어 OFF 를 보낸다.
+    //   그동안 전원을 껐다 켰는지는 모르므로 quiet 로 표시해 두고, 신호가 끊긴 뒤 처음 답할 때 J 를 한 번 보낸다
+    if (live && !urgent) {
+      info.set(player, { ...st, alive: true, misses: 0, quiet: true });
+      return { player, state: aliveState(st, confirmed), rapid: rapidStatus(player, rapidWanted) };
+    }
     // 게임이 지금 그 총의 신호를 받고 있거나(live) 연사를 봤으면(urgent) 켜져 있고 게임패드 모드다 (sure)
-    const sure = urgent || isLive(player);
+    const sure = urgent || live;
     // 막 켜진 총(꺼짐 → 켜짐, 또는 앱을 막 켬)은 언제나 J. 켜져 있는데 게임패드 신호가 안 보이면 8초마다 다시 (최대 3번).
-    //   신호가 들어오는 동안 답이 두 번 넘게 없던 총(silent)이 신호가 끊긴 채 다시 답하면 J — 전원을 빨리 껐다 켜
-    //   마우스 모드가 됐을 수 있다 (게임패드 모드면 J 는 아무 일도 안 함)
+    //   신호가 들어오는 동안 답이 두 번 넘게 없던 총(silent), 또는 신호가 들어와 수신기를 열지 않았던 총(quiet)이
+    //   신호가 끊긴 채 다시 답하면 J — 전원을 빨리 껐다 켜 마우스 모드가 됐을 수 있다 (게임패드 모드면 J 는 아무 일도 안 함)
     const silent = (st.misses || 0) >= OFF_MISSES;
-    const wantJ = !sure && isEnabled() && (!st.alive || silent || (!confirmed && st.tries < RETRIES && now - st.lastJ >= RETRY_MS));
+    const needJ = !st.alive || silent || (!confirmed && st.tries < RETRIES && now - st.lastJ >= RETRY_MS);
+    const wantJ = !sure && isEnabled() && (needJ || !!st.quiet);
+    // quiet 때문에만 보내는 J 는 확인용: 화면 알림·횟수 없이 (총을 내려놓을 때마다 '바꾸는 중' 이 뜨지 않게)
+    const recheckJ = wantJ && !needJ;
     const { state: result, rapid } = await check(path, { sendJ: wantJ, rapidOff: rapidWanted && !wantJ, offFirst: urgent });
     if (result === 'busy') { info.set(player, st); return { player, state: 'busy' }; }
     if (result === 'stuck') {
@@ -177,7 +192,11 @@ function startGunModeWatch({
     }
     st.alive = true;
     st.misses = 0;
-    if (result === 'switched') {
+    st.quiet = false; // 답을 받았으니 지금 상태를 안다
+    if (result === 'switched' && recheckJ) {
+      st.lastJ = now;
+      log(`${player}P 총: 신호가 끊겨 게임패드 모드 명령을 한 번 더 보냄 (확인용)`);
+    } else if (result === 'switched') {
       st.tries += 1; st.lastJ = now;
       log(`${player}P 총: 게임패드 신호가 없어 게임패드 모드로 바꿈 (${st.tries}번째)`);
       if (st.tries === 1) onSwitch(player);
