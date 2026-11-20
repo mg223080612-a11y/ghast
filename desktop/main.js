@@ -49,7 +49,7 @@ function startGunWorker() {
   }
   gunWorker.send({ type: 'enabled', on: gunAutoMode });
   gunWorker.send({ type: 'rapid-enabled', on: rapidAutoOff });
-  gunWorker.send({ type: 'confirmed', list: [...gunsConfirmed] });
+  gunWorker.send({ type: 'confirmed', list: [...gunsConfirmed], live: [...gunsLive] });
   gunWorker.on('message', (msg) => {
     if (msg?.type === 'status') {
       // 기록 파일에는 상태가 바뀔 때만 (3초마다 오므로)
@@ -88,7 +88,8 @@ app.on('before-quit', () => {
 });
 let gunAutoMode = true; // 게임 설정 '총 모드 자동 전환' (game.js 가 알려 줌)
 let rapidAutoOff = true; // 게임 설정 '연사 자동 끄기' (v3.5.0~, game.js 가 알려 줌)
-let gunsConfirmed = new Set(); // 게임에 게임패드 신호가 들어오고 있는 자리 (1·2, game.js 가 알려 줌)
+let gunsConfirmed = new Set(); // 게임에 게임패드 신호가 들어오고 있는 자리 (1·2, 최근 60초, game.js 가 알려 줌)
+let gunsLive = new Set();      // 게임이 지금(몇 초 안) 신호를 받고 있는 자리 (v3.6.0)
 
 const isMac = process.platform === 'darwin';
 
@@ -214,10 +215,12 @@ ipcMain.on('field-log', (e, event, data) => {
   if (!win || e.sender !== win.webContents) return;
   playLog?.write('게임', event, data);
 });
-ipcMain.on('guns-confirmed', (e, list) => {
+const playerSet = (list) => new Set((Array.isArray(list) ? list : []).map(Number).filter((p) => p === 1 || p === 2));
+ipcMain.on('guns-confirmed', (e, list, live) => {
   if (!win || e.sender !== win.webContents || !Array.isArray(list)) return;
-  gunsConfirmed = new Set(list.map(Number));
-  if (gunWorker?.connected) gunWorker.send({ type: 'confirmed', list: [...gunsConfirmed] });
+  gunsConfirmed = playerSet(list);
+  gunsLive = playerSet(live);
+  if (gunWorker?.connected) gunWorker.send({ type: 'confirmed', list: [...gunsConfirmed], live: [...gunsLive] });
 });
 
 app.whenReady().then(() => {

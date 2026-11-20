@@ -102,3 +102,25 @@ test('충전 꺾쇠 색: 처음부터 밝은 빨강, 중간 노랑, 끝은 거�
   assert.equal(Fx.chargeCueColor(2), '#fff8dc');
   assert.match(Fx.chargeCueColor(0.3), /^#[0-9a-f]{6}$/);
 });
+
+// 1P·2P 총소리 구분 (v3.6.0, 11-20 TV 실기 교사: "1P,2P의 총 소리가 똑같아서 헷갈린다")
+test('1P·2P 총소리 음색이 다르다 (높이·파형·잡음 대역)', () => {
+  const p1 = Fx.shotVoice(0), p2 = Fx.shotVoice(1);
+  assert.notEqual(p1.pitch, p2.pitch);
+  assert.notEqual(p1.wave, p2.wave);
+  assert.notEqual(p1.noiseFreq, p2.noiseFreq);
+  assert.ok(p2.pitch < p1.pitch * 0.75, '2P 는 1P 보다 확실히 낮게 (반음 몇 개가 아니라 귀로 바로 구분되게)');
+});
+
+test('1P 총소리는 예전 소리 그대로 (1인 기록전·메뉴도 1P 소리)', () => {
+  assert.deepEqual(Fx.shotVoice(0), { pitch: 1, wave: 'square', noiseFreq: 2000 });
+});
+
+test('자리를 모르면 1P 소리, 돌려준 값을 바꿔도 다음 값은 그대로', () => {
+  assert.deepEqual(Fx.shotVoice(undefined), Fx.shotVoice(0));
+  assert.deepEqual(Fx.shotVoice(7), Fx.shotVoice(0));
+  assert.deepEqual(Fx.shotVoice(-1), Fx.shotVoice(0));
+  const v = Fx.shotVoice(1);
+  v.pitch = 99;
+  assert.notEqual(Fx.shotVoice(1).pitch, 99);
+});

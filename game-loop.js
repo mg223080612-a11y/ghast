@@ -163,12 +163,20 @@ function draw(time) {
 }
 
 // 큰 조준점 (프로젝터 화면에서도 잘 보이게). 크기는 설정의 '조준점 크기'
-// glow: 테두리 빛 색 (2인 대결의 1P/2P 색), label: 조준점 아래 이름표
+// glow: 1P/2P 색 (총마다), label: 조준점 아래 이름표
+//   색이 있으면 조준점 몸통 전체를 그 색으로 (v3.6.0 — 예전에는 몸통이 흰색이고 색은 가장자리 빛뿐이라
+//   TV 에서 1P·2P 가 같은 색으로 보였다, 11-20 교사). 색이 없으면(마우스·지정 안 된 총) 예전처럼 흰 몸통 + 노란 빛
+const AIM_PLAIN_GLOW = 'rgba(255,225,74,0.9)';
+function aimLayers(glow, t, s) {
+  const outline = ['rgba(0,0,0,0.85)', t + U * 0.7 * s];
+  if (glow) return [outline, [glow, t + U * 0.28 * s]];
+  return [outline, [AIM_PLAIN_GLOW, t + U * 0.28 * s], ['#ffffff', t]];
+}
 function drawAim(x, y, glow = null, label = '') {
   const s = clamp(settings.aimSize, 50, 300) / 100;
   const r = U * 3.8 * s, gap = U * 1.1 * s, len = U * 2.4 * s, t = Math.max(3, U * 0.6 * s);
-  // 검은 테두리 → 노란(또는 플레이어 색) 빛 → 흰 선 순서로 겹쳐 어두운 네더 배경에서도 또렷하게
-  for (const [color, w] of [['rgba(0,0,0,0.85)', t + U * 0.7 * s], [glow || 'rgba(255,225,74,0.9)', t + U * 0.28 * s], ['#ffffff', t]]) {
+  // 검은 테두리 → (색 몸통) 또는 (노란 빛 → 흰 선) 순서로 겹쳐 어두운 네더 배경에서도 또렷하게
+  for (const [color, w] of aimLayers(glow, t, s)) {
     ctx.strokeStyle = color;
     ctx.lineWidth = w;
     ctx.lineCap = 'square';

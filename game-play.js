@@ -438,7 +438,7 @@ function onTap(x, y, who = 0, source = 'mouse') {
     fb.dead = true;
     shooter.stats.deflects++;
     bumpCombo(who, 'hit', fb.x, fb.y + U * 8);
-    Sound.deflect();
+    Sound.deflect(who);
     burstFire(fb.x, fb.y, 0.7);
     shake = Math.max(shake, U * 0.6);
     if (settings.deflectPoints > 0) popupScore(fb.x, fb.y - U * 4, tag(`+${settings.deflectPoints} 반사!`), tint('#ffd25a'));
@@ -452,7 +452,7 @@ function onTap(x, y, who = 0, source = 'mouse') {
     const c = g.center();
     g.kill(); // 한 번 맞히면 처치
     shooter.stats.kills++;
-    Sound.hit(bumpCombo(who, 'hit', c.x, c.y + g.h * 0.62));
+    Sound.hit(bumpCombo(who, 'hit', c.x, c.y + g.h * 0.62), who);
     if (g.type === 'gold') Sound.goldKill();
     shake = Math.max(shake, U * 0.8);
     doFlash('#ffffff', 0.12);
@@ -469,7 +469,7 @@ function onTap(x, y, who = 0, source = 'mouse') {
   // 3) 빗나감 (배경을 맞힘) → 쏜 사람만 감점
   shooter.stats.misses++;
   bumpCombo(who, 'miss');
-  Sound.miss();
+  Sound.miss(who);
   for (let i = 0; i < 6; i++) {
     addPart({ x, y, vx: rand(-1, 1) * U * 8, vy: rand(-1, 0.3) * U * 8, g: U * 40, size: U * 0.6, life: 0.4, color: '#bbbbbb' });
   }

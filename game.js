@@ -86,6 +86,8 @@ const DEFAULTS = {
   debounceMs: 80,      // (터치 모드에서만) 센서가 한 번의 충격을 여러 번 보내는 것을 무시
   showTouches: true,   // 터치(탄착) 위치를 화면에 표시
 };
+const GUN_LIVE_MS = 2000;   // 이 안에 조준 위치가 바뀌었거나 방아쇠를 당긴 총은 '지금 신호가 들어오는 총' (앱에 알림)
+const GUN_REPORT_MS = 1000; // 앱에 알리는 간격
 // 기본 규칙이 바뀌면 이름 뒤 숫자를 올려 예전에 저장된 설정을 무시한다
 const SETTINGS_KEY = 'ghast-shooting-settings-v10';
 let settings = loadSettings();
@@ -96,12 +98,23 @@ window.ghastApp?.onGunStatus?.((list) => {
   // 게임 파일(game-guns.js)을 아직 다 읽기 전에 신호가 오면 이번 한 번은 건너뛴다 (3초마다 다시 온다)
   if (typeof Guns === 'undefined') return;
   Guns.serial = { at: performance.now(), list };
-  // 게임패드 신호가 실제로 들어오는 엑스거너 자리(최근 60초 안에 값이 들어옴)를 앱에 알린다 → 앱은 그 총에 모드 전환을 다시 보내지 않는다
-  // (가만히 든 총은 값이 잠깐 안 바뀔 수 있어 넉넉히. 총을 껐다 켜면 앱이 '켜짐'을 보고 바로 다시 바꾼다)
-  const now = performance.now();
-  const ok = Guns.list().filter((s) => s.moved && now - s.lastReport < 60000).map((s) => Guns.receiverSlot(s.id) + 1).filter((n) => n > 0);
-  window.ghastApp?.reportGunsConfirmed?.(ok);
+  reportGunsToApp();
 });
+// 게임패드 신호가 실제로 들어오는 엑스거너 자리(최근 60초 안에 값이 들어옴)를 앱에 알린다 → 앱은 그 총에 모드 전환을 다시 보내지 않는다
+// (가만히 든 총은 값이 잠깐 안 바뀔 수 있어 넉넉히. 총을 껐다 켜면 앱이 '켜짐'을 보고 바로 다시 바꾼다)
+// live: 지금(2초 안) 조준 위치가 바뀌었거나 방아쇠를 당긴 총 = 켜져 있고 게임패드 모드 → 앱이 꺼짐으로 보지 않고 모드 전환도 다시 안 보낸다
+//   (v3.6.0 — 11-20 TV 실기: 2P 가 앱의 '켜짐' 질문에 가끔 답하지 않아 경기 중에 모드 전환이 다시 가고 조준점이 가끔 끊김).
+//   막 연결돼 아직 움직이지 않은 총은 넣지 않는다. 총을 끈 것을 앱이 빨리 알도록 1초마다 알린다
+function reportGunsToApp() {
+  if (typeof Guns === 'undefined' || !window.ghastApp?.reportGunsConfirmed) return;
+  const now = performance.now();
+  const slotOf = (s) => Guns.receiverSlot(s.id) + 1;
+  const ok = Guns.list().filter((s) => s.moved && now - s.lastReport < 60000).map(slotOf).filter((n) => n > 0);
+  const fresh = (s) => now - Math.max(s.lastReport ?? -Infinity, s.lastActive ?? -Infinity) < GUN_LIVE_MS;
+  const live = Guns.list().filter((s) => s.moved && fresh(s)).map(slotOf).filter((n) => n > 0);
+  window.ghastApp.reportGunsConfirmed(ok, live);
+}
+if (window.ghastApp?.reportGunsConfirmed) setInterval(reportGunsToApp, GUN_REPORT_MS);
 window.ghastApp?.onGunModeSwitched?.((player) => {
   if (typeof game === 'undefined' || typeof showBanner === 'undefined') return; // 게임 파일을 다 읽기 전 (알림만 건너뜀)
   if (game.state === 'play' || game.state === 'countdown') return;
@@ -367,8 +380,13 @@ const Sound = {
     o.start(t); o.stop(t + dur + 0.05);
   },
 
+  // 사격 결과 소리(맞힘·반사·빗나감)는 쏜 선수마다 음색이 다르다 (who: 0 = 1P, 1 = 2P — FxCore.shotVoice). 1P 는 예전 소리 그대로
   // pitch: 연속 명중일수록 조금씩 높게 (FxCore.comboPitch, 기본 1)
-  hit(pitch = 1) { this.tone(900 * pitch, 0.08, { freqEnd: 400 * pitch, gain: 0.25 }); this.noise(0.08, { type: 'highpass', freq: 2000, gain: 0.4 }); },
+  hit(pitch = 1, who = 0) {
+    const v = FxCore.shotVoice(who), p = pitch * v.pitch;
+    this.tone(900 * p, 0.08, { type: v.wave, freqEnd: 400 * p, gain: 0.25 });
+    this.noise(0.08, { type: 'highpass', freq: v.noiseFreq, gain: 0.4 });
+  },
   pop()     { // 팡! (가스트가 연기로 터짐)
     this.noise(0.35, { freq: 4000, freqEnd: 200, gain: 0.9 });
     this.tone(160, 0.3, { type: 'sine', freqEnd: 45, gain: 0.7 });
@@ -378,7 +396,11 @@ const Sound = {
     this.noise(0.9, { freq: 2500, freqEnd: 80, gain: 1 });
     this.tone(90, 0.7, { type: 'sine', freqEnd: 30, gain: 0.9 });
   },
-  deflect() { this.tone(1400, 0.15, { type: 'triangle', freqEnd: 2200, gain: 0.3 }); this.noise(0.25, { freq: 3000, freqEnd: 300, gain: 0.5 }); },
+  deflect(who = 0) {
+    const v = FxCore.shotVoice(who);
+    this.tone(1400 * v.pitch, 0.15, { type: who === 1 ? 'sawtooth' : 'triangle', freqEnd: 2200 * v.pitch, gain: 0.3 });
+    this.noise(0.25, { freq: 3000 * v.pitch, freqEnd: 300, gain: 0.5 });
+  },
   // 화염구 충전: 올라가는 톱니 소리에 부드러운 삼각파와 '쉬익' 바람 소리를 겹쳐 더 잘 들리게 (날카롭지 않게 고음은 자름)
   charge()  {
     this.tone(500, 0.55, { type: 'sawtooth', freqEnd: 1300, gain: 0.2, attack: 0.1 });
@@ -388,7 +410,11 @@ const Sound = {
   shoot()   { this.noise(0.5, { type: 'bandpass', freq: 400, freqEnd: 2500, q: 2, gain: 0.7 }); },
   spawn()   { this.tone(rand(260, 340), 0.6, { type: 'sine', freqEnd: 180, gain: 0.08, attack: 0.15 }); },
   escape()  { this.tone(420, 0.35, { type: 'triangle', freqEnd: 160, gain: 0.18 }); this.tone(300, 0.4, { type: 'sine', freqEnd: 120, gain: 0.12, delay: 0.08 }); },
-  miss()    { this.noise(0.06, { type: 'highpass', freq: 1500, gain: 0.15 }); this.tone(180, 0.18, { type: 'square', freqEnd: 110, gain: 0.12 }); },
+  miss(who = 0) {
+    const v = FxCore.shotVoice(who);
+    this.noise(0.06, { type: 'highpass', freq: 1500 * v.noiseFreq / 2000, gain: 0.15 });
+    this.tone(180 * v.pitch, 0.18, { type: v.wave, freqEnd: 110 * v.pitch, gain: 0.12 });
+  },
   tick()    { this.tone(1000, 0.05, { gain: 0.12 }); },
   go()      { this.tone(660, 0.12, { gain: 0.2 }); this.tone(990, 0.3, { gain: 0.2, delay: 0.1 }); },
   bonus()   { [523, 659, 784, 1047].forEach((f, i) => this.tone(f, 0.2, { gain: 0.2, delay: i * 0.09 })); },

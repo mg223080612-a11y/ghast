@@ -5,6 +5,7 @@
 //   · 레벨에 따라 배경이 달아오르는 정도 (0 ~ 1)
 //   · 화염구가 떨어질 자리 표시 고리 (가까워질수록 커지고 진해짐)
 //   · 시간이 다 됐을 때: 토너먼트 동점이면 바로 연장전(예전과 같음), 아니면 'TIME UP!' 을 보여 준 뒤 끝낸다
+//   · 1P·2P 총소리 음색 (shotVoice)
 //   게임(index.html)에서는 전역 FxCore 로, 테스트(node)에서는 require 로 쓴다.
 // =============================================================
 (function (root, factory) {
@@ -99,9 +100,19 @@
     return `#${c0.map((v, j) => Math.round(v + (c1[j] - v) * k).toString(16).padStart(2, '0')).join('')}`;
   }
 
+  // 1P·2P 총소리(맞힘·빗나감·반사) 음색 (v3.6.0). 2P 는 낮고(×0.6) 거친 톱니파·낮은 잡음으로 1P 와 귀로 바로 구분되게.
+  //   1P 는 예전 소리 그대로. 자리를 모르면 1P. 늘 새 객체를 돌려준다
+  const SHOT_VOICES = [
+    { pitch: 1, wave: 'square', noiseFreq: 2000 },
+    { pitch: 0.6, wave: 'sawtooth', noiseFreq: 800 },
+  ];
+  function shotVoice(who) {
+    return { ...(SHOT_VOICES[who] || SHOT_VOICES[0]) };
+  }
+
   return {
     COUNT_UP_SEC, TIME_UP_SEC, COMBO_SHOW_FROM,
     countUpValue, comboAfter, comboLabel, comboPitch, heatOf, approach, impactRing, timeUpPlan,
-    pixelCell, gridLine, gridCircle, chargeCueColor,
+    pixelCell, gridLine, gridCircle, chargeCueColor, shotVoice,
   };
 });
