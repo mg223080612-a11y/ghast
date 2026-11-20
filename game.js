@@ -77,7 +77,7 @@ const DEFAULTS = {
   showFps: false,      // 왼쪽 아래에 FPS(화면 갱신 속도) 표시
   autoQuality: true,   // 버벅이면 자동으로 화질·효과를 한 단계씩 낮춤
   gunAutoMode: true,   // 총 모드 자동 전환 (앱만): 마우스 모드로 켜진 엑스거너 총을 게임패드 모드로 (desktop/gun-mode.js)
-  rapidAutoOff: true,  // 연사 자동 끄기 (앱만, v3.5.0): 켜진 총의 연사를 수신기 COM 포트 명령(XA:0;)으로 끈다 (desktop/gun-mode.js)
+  rapidAutoOff: true,  // 연사 자동 끄기 (앱만, v3.5.0~): 켜진 총에 3초마다 수신기 COM 포트로 연사 OFF(XA:0;)를 보낸다 (desktop/gun-mode.js)
   fewEffects: false,   // 효과 줄이기: 터지는 조각 적게, 빛 번짐·불티 끄기
   volume: 0.8,         // 효과음 크기
   inputMode: 'gun',    // 'gun' = 라이트건(마우스로 인식) / 'touch' = 프로젝터 터치 센서
@@ -95,7 +95,6 @@ setTimeout(tellGunAutoMode, 0);
 window.ghastApp?.onGunStatus?.((list) => {
   // 게임 파일(game-guns.js)을 아직 다 읽기 전에 신호가 오면 이번 한 번은 건너뛴다 (3초마다 다시 온다)
   if (typeof Guns === 'undefined') return;
-  noticeRapidStuckOn(list);
   Guns.serial = { at: performance.now(), list };
   // 게임패드 신호가 실제로 들어오는 엑스거너 자리(최근 60초 안에 값이 들어옴)를 앱에 알린다 → 앱은 그 총에 모드 전환을 다시 보내지 않는다
   // (가만히 든 총은 값이 잠깐 안 바뀔 수 있어 넉넉히. 총을 껐다 켜면 앱이 '켜짐'을 보고 바로 다시 바꾼다)
@@ -108,7 +107,12 @@ window.ghastApp?.onGunModeSwitched?.((player) => {
   if (game.state === 'play' || game.state === 'countdown') return;
   showBanner(`${player}P 총을 게임패드 모드로 바꾸는 중`, '총이 켜져 있으면 곧 조준점이 나타나요 (안 나타나면 총 전원 확인)', '#9ff6ff', 2.2);
 });
-// 연사 자동 끄기 알림 (v3.5.0). 경기 중에는 화면을 가리지 않게 작은 글자로, 그 밖에는 안내 띠로
+// 연사 ON/OFF 알림 (v3.5.1). 연사 ON 은 게임이 방아쇠 신호로 알아보고(game-guns.js noteTrigger · rapid-detect.js),
+//   앱에 바로 OFF 를 부탁한다. 앱이 그 총에 OFF 를 보내면 'OFF' 를 알린다. 경기 중에는 화면을 가리지 않게 작은 글자로
+const RAPID_ON_NOTICE_MS = 5000;  // 같은 총의 'ON' 알림 간격
+const RAPID_ASK_MS = 1500;        // 앱에 OFF 를 부탁하는 간격
+const RAPID_RETRY_WINDOW_MS = 30000; // 이 안에 OFF 를 두 번 보냈는데 또 ON 이면 '끄지 못함' 안내
+const RAPID_AFTER_OFF_MS = 1000;  // OFF 를 보낸 직후에 들어온 방아쇠는 그 전 연사의 끝으로 본다
 function noticeRapid(player, title, sub, color) {
   if (typeof game === 'undefined' || typeof showBanner === 'undefined') return; // 게임 파일을 다 읽기 전 (알림만 건너뜀)
   const playing = (game.state === 'play' || game.state === 'countdown') && !game.paused;
@@ -116,22 +120,47 @@ function noticeRapid(player, title, sub, color) {
   if (playing) popupScore(W / 2, H * 0.2, title, tint);
   else showBanner(title, sub, color, 2.6);
 }
-// 앱이 켜져 있던 총의 연사를 껐을 때
-window.ghastApp?.onRapidOff?.((player) => {
-  noticeRapid(player, `${player}P 총의 연사를 껐어요`, '연사가 켜져 있어 앱이 총에 명령을 보내 껐어요 (한 번 당기면 한 발)', '#9ff6ff');
-});
-// 연사가 켜져 있는데 앱이 끄지 못함 (총이 끄기 명령에 답하지 않음) — '켜짐' 이 처음 보일 때 한 번 알린다
-const rapidLast = {};
-function noticeRapidStuckOn(list) {
-  for (const row of list) {
-    // 잠깐 확인하지 못한 회차(다른 프로그램이 사용 중·멈춤)는 이전 값을 그대로 둔다. 총을 끄면(off) 처음부터
-    if (row.rapid === undefined && row.state !== 'off') continue;
-    if (row.rapid === 'on' && rapidLast[row.player] !== 'on') {
-      noticeRapid(row.player, `${row.player}P 총의 연사가 켜져 있어요`, '앱이 끄지 못했어요 — 총 위쪽 Rapid Fire 스위치를 끄세요', '#ff8a7a');
-    }
-    rapidLast[row.player] = row.rapid;
+const rapidMemo = {}; // 자리 → { noticeAt, askAt, offs[] } (알림·부탁 간격, 최근 OFF 보낸 시각)
+// 게임이 연사 ON 을 봤을 때 (game-guns.js). canAsk: 수신기 번호를 아는 엑스거너 총이라 앱에 OFF 를 부탁할 수 있음
+function onRapidSeen(player, spanMs, canAsk) {
+  const now = performance.now();
+  const prev = rapidMemo[player] || { noticeAt: -Infinity, askAt: -Infinity, offs: [] };
+  const offs = prev.offs.filter((t) => now - t < RAPID_RETRY_WINDOW_MS);
+  const auto = canAsk && settings.rapidAutoOff !== false && !!window.ghastApp?.reportRapidOn;
+  const next = { ...prev, offs };
+  Guns.rapidSeen = { ...Guns.rapidSeen, [player]: now };
+  if (auto && now - prev.askAt >= RAPID_ASK_MS) {
+    next.askAt = now;
+    window.ghastApp.reportRapidOn(player);
   }
+  const stillOn = offs.length >= 2 && now - offs[offs.length - 1] > RAPID_AFTER_OFF_MS;
+  if (now - prev.noticeAt >= RAPID_ON_NOTICE_MS) {
+    next.noticeAt = now;
+    fieldLog('연사 ON 봄', { 자리: `${player}P`, 다섯번ms: Math.round(spanMs), 자동OFF: auto, 화면: game.state });
+    const manual = '총에서 5 + 스페이스 + Q 를 함께 눌러 OFF 로 바꾸세요';
+    let sub = '앱이 곧 OFF 로 바꿔요';
+    if (!auto) sub = manual;
+    else if (stillOn) sub = `앱이 OFF 를 보내도 다시 ON 이에요 — ${manual} (안 되면 총 전원을 껐다 켜기)`;
+    noticeRapid(player, `${player}P 총 연사 ON`, sub, '#ff8a7a');
+  }
+  rapidMemo[player] = next;
 }
+// 앱이 연사 ON 을 본 총에 OFF 를 보냈을 때
+//   'OFF' 알림도 같은 총에 5초에 한 번까지. OFF 를 보내도 계속 ON 이면(30초 안에 세 번째부터) 'OFF' 는 띄우지 않는다
+//   (화면에 OFF·ON 이 번갈아 뜨지 않게 — 그때는 'ON' 알림이 '총에서 직접 끄기'를 안내한다)
+window.ghastApp?.onRapidOff?.((player) => {
+  const now = performance.now();
+  const prev = rapidMemo[player] || { noticeAt: -Infinity, askAt: -Infinity, offs: [] };
+  const offs = [...prev.offs.filter((t) => now - t < RAPID_RETRY_WINDOW_MS), now];
+  const quiet = offs.length >= 3 || now - (prev.offNoticeAt ?? -Infinity) < RAPID_ON_NOTICE_MS;
+  rapidMemo[player] = { ...prev, offs, offNoticeAt: quiet ? prev.offNoticeAt : now };
+  if (typeof Guns !== 'undefined') {
+    const { [player]: _off, ...rest } = Guns.rapidSeen;
+    Guns.rapidSeen = rest;
+  }
+  fieldLog('연사 OFF 보냄 알림', { 자리: `${player}P`, 최근30초OFF: offs.length, 화면알림: !quiet });
+  if (!quiet) noticeRapid(player, `${player}P 총 연사 OFF`, '앱이 총에 연사 OFF 명령을 보냈어요 (한 번 당기면 한 발)', '#9ff6ff');
+});
 
 function loadSettings() {
   try {

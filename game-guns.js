@@ -25,6 +25,7 @@ function screenOffset() {
 
 const PARITY_GRID_MS = 25; // 2P 보통 총의 방아쇠가 들어오는 단위 (접시 사격 M0 실측: 25ms 배수)
 const PARITY_LINES_PER_MATCH = 30; // 실기 기록 파일에 1P 방아쇠 보정을 발마다 적는 것은 한 경기 처음 30발까지
+const RAPID_SHOW_MS = 10000; // 총 연결 화면에 '연사 ON' 을 보여 주는 시간 (그 안에 앱이 OFF 를 보내면 바로 OFF)
 const Guns = {
   pads: {},       // gamepad.index → { key, id, x, y, pressed[], min[], max[], lastActive }
   // 저장되는 지정 정보: 어떤 총(key)이 1P/2P 인지, 총마다 방아쇠 버튼 번호
@@ -34,6 +35,7 @@ const Guns = {
   serial: null,    // 앱(desktop/gun-mode.js)이 3초마다 알려 주는 수신기 상태 { at, list: [{ player, state }] }
   serialSeen: {},  // 앱이 한 번이라도 수신기를 본 자리 (빠짐 안내용)
   calib: null,     // 조준 보정 중: { who, key, raw[] }
+  rapidSeen: {},   // 자리(1·2) → 방아쇠 신호로 연사 ON 을 본 시각 (앱이 OFF 를 보내면 지움, v3.5.1)
   message: '',
 
   save() { writeJson(GUN_SAVE_KEY, this.saved); },
@@ -96,18 +98,28 @@ const Guns = {
     if (silent) return `${silent} 총 신호 없음 — 총 전원을 켜고 조이스틱 모드(Space + 5 + 왼쪽)로 바꾼 뒤 한 번 흔들어 주세요`;
     return this.noReceiverMessage(players);
   },
-  // 총 연결 화면의 연사 점검 한 줄 (v3.5.0, 앱이 수신기 COM 포트로 확인한 최근 10초 안의 결과). 웹 버전이거나 소식이 없으면 null
-  //   → { text, color }. 확인 불가(총이 연사 명령에 답하지 않음)는 이 화면에서만 알린다
+  // 총 연결 화면의 연사 한 줄 (v3.5.1) → { text, color } 또는 null (앱 소식도 없고 연사를 본 적도 없을 때)
+  //   앱이 3초마다 켜진 총에 연사 OFF 를 보내면 'OFF'. 게임이 방아쇠 신호로 연사를 보면 앱이 OFF 를 보낼 때까지 'ON'
+  //   (총의 연사 상태는 총에 물어도 알 수 없다 — 2026-11-20 실측)
   rapidNote() {
-    const info = this.serial;
-    if (!info || performance.now() - info.at > 10000) return null;
-    const rows = info.list.filter((r) => r.rapid);
-    if (!rows.length) return null;
-    const words = { off: '꺼짐 ✓', on: '켜짐 — 총의 Rapid Fire 스위치를 끄세요', noReply: '확인 불가', disabled: '자동 끄기 꺼짐(설정)' };
-    const has = (kind) => rows.some((r) => r.rapid === kind);
-    const hint = has('noReply') ? '  —  확인 불가인 총은 총 테스트(T)에서 한 번 당겨 한 발만 들어가는지 보세요' : '';
-    const text = `연사: ${rows.map((r) => `${r.player}P ${words[r.rapid] || r.rapid}`).join('  ·  ')}${hint}`;
-    const color = has('on') ? '#ff8a7a' : has('noReply') ? '#ffe14a' : has('disabled') ? '#c9a89a' : '#7dff7a';
+    const now = performance.now();
+    const seen = Object.entries(this.rapidSeen).filter(([, at]) => now - at < RAPID_SHOW_MS).map(([p]) => Number(p));
+    const info = this.serial && now - this.serial.at <= 10000 ? this.serial : null;
+    const rows = info ? info.list.filter((r) => r.rapid) : [];
+    const players = [...new Set([...rows.map((r) => r.player), ...seen])].sort((a, b) => a - b);
+    if (!players.length) return null;
+    const disabled = rows.some((r) => r.rapid === 'disabled');
+    const word = (p) => {
+      if (seen.includes(p)) return 'ON';
+      const r = rows.find((x) => x.player === p);
+      return r?.rapid === 'off' ? 'OFF' : r?.rapid === 'disabled' ? '자동 끄기 꺼짐(설정)' : '—';
+    };
+    const manual = '총에서 5 + 스페이스 + Q 를 함께 눌러 OFF';
+    let hint = '  (앱이 3초마다 총에 연사 OFF 명령을 보내요)';
+    if (seen.length) hint = disabled || !info ? `  —  ${manual}` : '  —  앱이 곧 OFF 로 바꿔요';
+    else if (disabled) hint = `  —  연사가 ON 이면 ${manual}`;
+    const text = `연사: ${players.map((p) => `${p}P ${word(p)}`).join('  ·  ')}${hint}`;
+    const color = seen.length ? '#ff8a7a' : disabled ? '#c9a89a' : '#7dff7a';
     return { text, color };
   },
   // 수신기가 처음부터 안 꽂힘 (앱이 시리얼로 확인한 목록에 없고, 이번 실행에서 본 적도 없음. 빠진 경우는 위의 '빠졌어요').
@@ -206,7 +218,11 @@ const Guns = {
       s.axes = [...gp.axes];
       gp.buttons.forEach((b, i) => {
         const down = b.pressed || b.value > 0.5;
-        if (down && !s.pressed[i]) { s.lastActive = now; s.moved = true; this.onButton(s, i); }
+        if (down && !s.pressed[i]) {
+          s.lastActive = now; s.moved = true;
+          if (i === this.triggerOf(s)) this.noteTrigger(s, now);
+          this.onButton(s, i);
+        }
         s.pressed[i] = down;
       });
     }
@@ -228,6 +244,18 @@ const Guns = {
     game.paused = true;
     game.pauseNote = { title: `${who + 1}P 총 연결이 끊겼어요`, sub: '총을 다시 연결한 뒤 P 또는 Space 로 계속하세요' };
     fieldLog('총 빠짐으로 일시정지', { 자리: `${who + 1}P`, 모드: MODE_WORDS[game.mode] || game.mode });
+  },
+
+  // 연사 ON 알아보기 (v3.5.1, rapid-detect.js): 방아쇠가 1초에 약 9번 넘게 눌리면 연사 ON → 알림 + 앱에 바로 OFF 부탁 (game.js onRapidSeen).
+  //   막지는 않는다 (들어온 방아쇠는 그대로 처리). 앱에 부탁할 때는 수신기 번호(XGUNNER-P1/P2)를 쓴다
+  noteTrigger(s, now) {
+    if (typeof RapidDetect === 'undefined') return;
+    const r = RapidDetect.notePress(s.triggerTimes, now);
+    s.triggerTimes = r.rapid ? [] : r.history; // 본 뒤에는 처음부터 다시 센다 (같은 연사를 누를 때마다 알리지 않게)
+    if (!r.rapid) return;
+    const slot = this.receiverSlot(s.id);
+    const who = slot >= 0 ? slot : this.playerOf(s);
+    if (who >= 0) onRapidSeen(who + 1, r.spanMs, slot >= 0);
   },
 
   onButton(s, i) {
