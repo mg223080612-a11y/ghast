@@ -3334,7 +3334,9 @@ function drawGunSetup() {
       const role = who >= 0 ? `${who + 1}P${Guns.receiverSlot(s.id) === who ? ' 자동' : ''}` : '미지정';
       const axes = (s.axes || []).slice(0, 4).map((v) => v.toFixed(2)).join('  ');
       const fresh = performance.now() - s.lastActive < 1500;
-      text(`총 ${i + 1}  ·  ${role}`, px + U * 6, y, U * 3.8, color, 'left');
+      // 이름표는 오른쪽 '방아쇠 = …' 글자(px + 34칸) 앞까지만 — 넘치면 글자를 줄인다 (예전에는 '2P 자동' 이 겹쳤다, 11-20 교사)
+      const label = `총 ${i + 1}  ·  ${role}`;
+      text(label, px + U * 6, y, fitTextSize(label, U * 3.8, U * 27), color, 'left');
       // 축 숫자는 매 프레임 바뀌므로 글자 그림으로 저장하지 않고 바로 그린다 (저장 공간이 쓸데없이 차지 않게)
       text(`방아쇠 = 버튼 ${Guns.triggerOf(s)}  ·  축 [${axes}]${fresh ? '  ● 움직임' : ''}`, px + U * 34, y, U * 2.6, '#ffd9b0', 'left', { live: true });
       // 움직이는 중에 위치 갱신이 적으면 총이 화면(센서)을 잘 못 보는 것: 배터리·렌즈·총 보정 확인
