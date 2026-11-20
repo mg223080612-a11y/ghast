@@ -5,8 +5,91 @@
 //  - 전체화면 끄기/켜기: F (또는 오른쪽 위 ⛶ 전체화면 버튼, F11)
 //  - 종료: Alt+F4 (맥은 Cmd+Q)
 const { app, BrowserWindow, protocol, net, shell, Menu, ipcMain, session, powerSaveBlocker } = require('electron');
+const { fork } = require('child_process');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const { createFieldLog, removeOldLogs } = require('./field-log.js');
+// 실기용 기록 파일 (설정 폴더 logs/play-YYYY-MM-DD.log — desktop/field-log.js). 설정 폴더를 정한 뒤 만든다
+let playLog = null;
+function logApp(event, data) { playLog?.write('앱', event, data); }
+// 앱이 시리얼로 확인한 수신기·총 상태를 사람이 읽는 말로 (기록 파일용)
+const GUN_STATE_WORDS = { ok: '게임패드 정상', switching: '전환 중', mouse: '마우스 모드(직접 바꿔야 함)', off: '총 꺼짐', busy: '다른 프로그램이 사용 중', stuck: '수신기 응답 없음' };
+const RAPID_WORDS = { off: '연사 OFF 보냄', disabled: '연사 자동 끄기 꺼짐' };
+const gunStatusText = (list) => (Array.isArray(list) ? list : [])
+  .map((r) => `${r.player}P ${GUN_STATE_WORDS[r.state] || r.state}${r.rapid ? `·${RAPID_WORDS[r.rapid] || r.rapid}` : ''}`)
+  .join(', ') || '수신기 없음';
+// 엑스거너 총 모드 자동 전환: 게임과 따로 도는 작은 프로세스(desktop/gun-mode-worker.js)에서.
+// 시리얼 부품 오류로 그 프로세스가 죽어도 게임은 그대로이고, 3초 뒤 다시 띄운다 (1분에 5번까지)
+let gunWorker = null;
+const gunWorkerStarts = [];
+const GUN_WORKER_RESTART_MS = 3000;
+const GUN_WORKER_STUCK_RESTART_MS = 20000; // 수신기 시리얼이 멈춰 스스로 끝냈을 때 (그동안 '수신기 다시 꽂기' 안내 유지)
+let gunWorkerDelay = GUN_WORKER_RESTART_MS;
+let lastGunStatus = [];
+function sendToGame(channel, payload) { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); }
+function startGunWorker() {
+  const now = Date.now();
+  while (gunWorkerStarts.length && now - gunWorkerStarts[0] > 60_000) gunWorkerStarts.shift();
+  if (gunWorkerStarts.length >= 5 && gunWorkerDelay === GUN_WORKER_RESTART_MS) {
+    console.error('[가스트 사격] 총 모드 자동 전환이 1분 안에 너무 자주 멈춰서 다시 켜지 않습니다');
+    logApp('총 모드 자동 전환 중단', { 이유: '1분 안에 5번 넘게 멈춤' });
+    return;
+  }
+  gunWorkerStarts.push(now);
+  try {
+    // 앱 실행 파일을 일반 Node 로 띄운다 (ELECTRON_RUN_AS_NODE). 묶음(asar) 안의 파일·풀린 네이티브 부품도 그대로 읽는다
+    gunWorker = fork(path.join(__dirname, 'gun-mode-worker.js'), [], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+    });
+  } catch (err) {
+    console.error('[가스트 사격] 총 모드 자동 전환을 쓸 수 없습니다:', err.message);
+    logApp('총 모드 자동 전환 시작 실패', { 내용: err.message });
+    return;
+  }
+  gunWorker.send({ type: 'enabled', on: gunAutoMode });
+  gunWorker.send({ type: 'rapid-enabled', on: rapidAutoOff });
+  gunWorker.send({ type: 'confirmed', list: [...gunsConfirmed], live: [...gunsLive] });
+  gunWorker.on('message', (msg) => {
+    if (msg?.type === 'status') {
+      // 기록 파일에는 상태가 바뀔 때만 (3초마다 오므로)
+      if (gunStatusText(msg.list) !== gunStatusText(lastGunStatus) || !gunStatusLogged) logApp('총 상태', { 상태: gunStatusText(msg.list) });
+      gunStatusLogged = true;
+      lastGunStatus = msg.list;
+      sendToGame('gun-status', msg.list);
+    }
+    else if (msg?.type === 'restart-later') gunWorkerDelay = GUN_WORKER_STUCK_RESTART_MS;
+    else if (msg?.type === 'switch') { logApp('총 모드 전환 보냄', { 자리: `${msg.player}P` }); sendToGame('gun-mode-switched', msg.player); }
+    else if (msg?.type === 'rapid-off') { logApp('연사 OFF 보냄 (연사 ON 을 봐서)', { 자리: `${msg.player}P` }); sendToGame('gun-rapid-off', msg.player); }
+    else if (msg?.type === 'log') { console.log(`[가스트 사격] ${msg.msg}`); logApp('총 모드 알림', { 내용: msg.msg }); }
+  });
+  gunWorker.on('error', (err) => {
+    console.error('[가스트 사격] 총 모드 자동 전환 프로세스 오류:', err.message);
+    logApp('총 모드 프로세스 오류', { 내용: err.message });
+  });
+  gunWorker.on('exit', (code, signal) => {
+    gunWorker = null;
+    if (quitting) return;
+    console.error(`[가스트 사격] 총 모드 자동 전환 프로세스가 멈춤 (코드 ${code}${signal ? ` ${signal}` : ''}) — 잠시 뒤 다시 켭니다`);
+    logApp('총 모드 프로세스 멈춤', { 코드: code, 신호: signal || '', 다시켜기초: gunWorkerDelay / 1000 });
+    const delay = gunWorkerDelay;
+    gunWorkerDelay = GUN_WORKER_RESTART_MS;
+    // 기다리는 동안에도 게임에 마지막 상태('응답 없음' 등)를 계속 알려 안내 띠가 사라지지 않게
+    const keep = setInterval(() => sendToGame('gun-status', lastGunStatus), 3000);
+    setTimeout(() => { clearInterval(keep); startGunWorker(); }, delay);
+  });
+}
+let gunStatusLogged = false;
+let quitting = false;
+app.on('before-quit', () => {
+  if (!quitting) logApp('앱 끝');
+  quitting = true;
+  gunWorker?.kill();
+});
+let gunAutoMode = true; // 게임 설정 '총 모드 자동 전환' (game.js 가 알려 줌)
+let rapidAutoOff = true; // 게임 설정 '연사 자동 끄기' (v3.5.0~, game.js 가 알려 줌)
+let gunsConfirmed = new Set(); // 게임에 게임패드 신호가 들어오고 있는 자리 (1·2, 최근 60초, game.js 가 알려 줌)
+let gunsLive = new Set();      // 게임이 지금(몇 초 안) 신호를 받고 있는 자리 (v3.6.0)
 
 const isMac = process.platform === 'darwin';
 
@@ -19,14 +102,46 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
 ]);
 
-// 설정·총 보정은 앱 이름과 상관없이 늘 이 폴더에 저장한다 (예전 '조준점 있음/없음' 두 버전도 이 폴더를 써서 그대로 이어진다)
+// 설정·총 보정은 앱 이름과 상관없이 늘 이 폴더에 저장한다 (예전 '조준점 있음/없음' 두 버전도 이 폴더를 써서 그대로 이어진다).
+// v3('가스트 사격 3' 폴더)와는 따로라 두 앱을 같이 깔아도 서로 설정을 덮어쓰지 않는다.
+// (같은 프로그램 두 번 켜기 막기도 이 폴더 기준이라 아래 requestSingleInstanceLock 보다 먼저 정해야 한다)
 app.setPath('userData', path.join(app.getPath('appData'), '가스트 사격'));
 
-// 같은 프로그램을 두 번 켜면 새 창 대신 이미 켜진 창을 앞으로
-if (!app.requestSingleInstanceLock()) app.quit();
+// 같은 프로그램을 두 번 켜면 새 창 대신 이미 켜진 창을 앞으로 (아래 'second-instance').
+// 두 번째로 켠 쪽은 app.quit() 만으로는 아래 코드(창 만들기 등)가 계속 돌아서 바로 끝낸다
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  process.exit(0);
+}
+playLog = createFieldLog({ dir: path.join(app.getPath('userData'), 'logs') });
+logApp('앱 시작', {
+  버전: app.getVersion(), 운영체제: process.platform, 칩: process.arch, electron: process.versions.electron,
+  점검모드: !!process.env.GHAST_SMOKE_OUT,
+});
 
 const root = path.join(__dirname, '..');
 let win = null;
+
+const CRASH_RELOAD_LIMIT = 3;        // 화면이 죽어서 다시 여는 것은 1분에 이만큼까지 (계속 죽는 고장이면 멈춘다)
+const CRASH_RELOAD_WINDOW_MS = 60_000;
+let crashReloads = [];               // 최근에 다시 연 시각들
+
+// 화면(렌더러)이 죽으면(그래픽 고장·메모리 부족 등) 저절로 다시 연다.
+// 대회 진행 상황·설정은 localStorage 에 있어서 다시 열어도 이어진다
+function reloadAfterCrash(details) {
+  console.error('[가스트 사격] 화면 프로세스가 멈춤:', details.reason, details.exitCode);
+  logApp('화면 프로세스 멈춤', { 이유: details.reason, 코드: details.exitCode });
+  if (!win || win.isDestroyed() || details.reason === 'clean-exit') return;
+  const now = Date.now();
+  crashReloads = [...crashReloads.filter((t) => now - t < CRASH_RELOAD_WINDOW_MS), now];
+  if (crashReloads.length > CRASH_RELOAD_LIMIT) {
+    console.error('[가스트 사격] 1분 안에 너무 자주 멈춰서 다시 열지 않습니다');
+    logApp('화면 다시 열지 않음', { 이유: '1분 안에 너무 자주 멈춤' });
+    return;
+  }
+  logApp('화면 다시 엶');
+  win.reload();
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -54,6 +169,7 @@ function createWindow() {
   const openOutside = (url) => { if (/^https?:\/\//i.test(url)) shell.openExternal(url); };
   win.webContents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith('app://')) { e.preventDefault(); openOutside(url); } });
+  win.webContents.on('render-process-gone', (e, details) => reloadAfterCrash(details));
 }
 
 // 맥은 '단순 전체화면'(simpleFullScreen)을 쓴다.
@@ -75,6 +191,37 @@ function toggleFullScreen() {
 ipcMain.on('toggle-fullscreen', (e) => { if (win && e.sender === win.webContents) toggleFullScreen(); });
 // 앱 버전 (package.json 의 version) → preload.js → 게임 처음 화면 구석의 'v2.0.0'
 ipcMain.on('app-version', (e) => { e.returnValue = app.getVersion(); });
+ipcMain.on('gun-auto-mode', (e, on) => {
+  if (!win || e.sender !== win.webContents) return;
+  if (gunAutoMode !== !!on) logApp('총 모드 자동 전환 설정', { 켬: !!on });
+  gunAutoMode = !!on;
+  if (gunWorker?.connected) gunWorker.send({ type: 'enabled', on: gunAutoMode });
+});
+ipcMain.on('rapid-auto-off', (e, on) => {
+  if (!win || e.sender !== win.webContents) return;
+  if (rapidAutoOff !== !!on) logApp('연사 자동 끄기 설정', { 켬: !!on });
+  rapidAutoOff = !!on;
+  if (gunWorker?.connected) gunWorker.send({ type: 'rapid-enabled', on: rapidAutoOff });
+});
+// 게임이 방아쇠 신호로 연사 ON 을 봤을 때 (v3.5.1, rapid-detect.js) → 총 모드 프로세스가 바로 OFF 를 보낸다
+ipcMain.on('rapid-seen', (e, player) => {
+  if (!win || e.sender !== win.webContents) return;
+  const p = Number(player);
+  if (p !== 1 && p !== 2) return;
+  if (gunWorker?.connected) gunWorker.send({ type: 'rapid-seen', player: p });
+});
+// 게임 화면이 남기는 기록 (preload.js 의 ghastApp.log). 사건 이름·자료는 field-log.js 가 한 줄로 정리한다
+ipcMain.on('field-log', (e, event, data) => {
+  if (!win || e.sender !== win.webContents) return;
+  playLog?.write('게임', event, data);
+});
+const playerSet = (list) => new Set((Array.isArray(list) ? list : []).map(Number).filter((p) => p === 1 || p === 2));
+ipcMain.on('guns-confirmed', (e, list, live) => {
+  if (!win || e.sender !== win.webContents || !Array.isArray(list)) return;
+  gunsConfirmed = playerSet(list);
+  gunsLive = playerSet(live);
+  if (gunWorker?.connected) gunWorker.send({ type: 'confirmed', list: [...gunsConfirmed], live: [...gunsLive] });
+});
 
 app.whenReady().then(() => {
   // 메뉴 막대는 숨긴다. 맥은 메뉴가 없으면 Cmd+Q(종료)·복사/붙여넣기가 안 돼서 기본 메뉴만 남긴다
@@ -88,14 +235,38 @@ app.whenReady().then(() => {
   // 총을 조이스틱 모드로 쓰면 키보드·마우스 입력이 없어서 컴퓨터가 '쉬는 중'으로 보고 화면을 끌 수 있다
   // (맥북은 배터리로 쓰면 기본 2분 만에 화면이 꺼진다)
   powerSaveBlocker.start('prevent-display-sleep');
+  // 30일 지난 기록 파일 정리, 대회 결과 CSV 같은 파일 저장의 결과(저장·취소·실패)를 기록 (파일 이름은 대회 이름이 들어가서 확장자만)
+  removeOldLogs(playLog.dir, new Date(), undefined, (err) => logApp('지난 기록 정리 실패', { 내용: err.message }))
+    .forEach((name) => logApp('지난 기록 지움', { 파일: name }));
+  session.defaultSession.on('will-download', (e, item) => {
+    item.once('done', (_e, state) => logApp('파일 저장', { 결과: state, 종류: path.extname(item.getFilename()) }));
+  });
   // app://ghast/… → 프로그램 안 게임 파일. 게임 폴더 밖은 열지 않는다
+  // '.' 으로 시작하는 이름(.git·.github·.env 같은 숨김 파일·폴더, '..')이 경로에 하나라도 있으면 없는 파일로 답한다
   protocol.handle('app', (req) => {
-    const rel = decodeURIComponent(new URL(req.url).pathname).replace(/^\/+/, '') || 'index.html';
+    let rel;
+    try {
+      rel = decodeURIComponent(new URL(req.url).pathname).replace(/^\/+/, '') || 'index.html';
+    } catch {
+      return new Response('bad request', { status: 400 });
+    }
+    if (rel.split(/[\\/]/).some((seg) => seg.startsWith('.'))) return new Response('not found', { status: 404 });
     const file = path.normalize(path.join(root, rel));
     if (!file.startsWith(root + path.sep)) return new Response('forbidden', { status: 403 });
     return net.fetch(pathToFileURL(file).toString());
   });
   createWindow();
+  // 빌드 확인용 '앱 켜 보기' (GHAST_SMOKE_OUT 이 있을 때만 — desktop/smoke-check.js)
+  if (process.env.GHAST_SMOKE_OUT) {
+    // 점검은 app.exit 로 끝나 before-quit 가 불리지 않는다 → 여기서 '앱 끝' 을 적고, 총 모드 프로세스를 끈 것을 '멈춤' 으로 적지 않게
+    require('./smoke-check.js').startSmokeCheck(win, app, process.env.GHAST_SMOKE_OUT, () => {
+      logApp('앱 끝', { 이유: '점검 끝' });
+      quitting = true;
+      gunWorker?.kill();
+    });
+  }
+  // 3초마다 수신기를 확인해 마우스 모드인 총을 게임패드 모드로 (게임과 따로 도는 프로세스)
+  startGunWorker();
 });
 
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });

@@ -10,6 +10,34 @@
 // 컴퓨터용 프로그램(exe·맥 앱)의 버전. package.json 의 version 을 앱(desktop/main.js → preload.js)이 넘겨준다.
 // 웹(브라우저)에는 없어서 빈 글자 → 처음 화면에 버전을 그리지 않는다
 const APP_VERSION = (window.ghastApp && typeof window.ghastApp.version === 'string') ? window.ghastApp.version : '';
+// ---------- 실기용 기록 파일 (앱에서만 — desktop/field-log.js, 웹 버전은 아무 일도 안 함) ----------
+// 설정 폴더 logs/play-YYYY-MM-DD.log 에 '경기 시작·끝, 총 잡힘·빠짐, 1P 방아쇠 보정, 오류' 등을 한 줄씩. 이름은 넘기지 않는다
+const MODE_WORDS = { solo: '1인 기록전', versus: '2인 대결', tournament: '대회 경기' };
+const ERROR_LOG_LIMIT = 20; // 오류 내용은 처음 20건까지만 적는다 (같은 오류가 1초에 60번 날 수 있어서)
+let fieldLogWarned = false;
+function fieldLog(event, data = {}) {
+  if (!window.ghastApp?.log) return;
+  try {
+    window.ghastApp.log(event, data);
+  } catch (err) {
+    if (!fieldLogWarned) { fieldLogWarned = true; console.warn('[가스트 사격] 기록 파일로 보내지 못함', err); }
+  }
+}
+// 오류 한 건을 기록용으로: 번호·내용(200글자까지)·어디서(스택 앞 두 줄).
+// 오류 문구가 그대로 파일에 남으므로 게임 코드에서 던지는 오류 문구에는 이름(닉네임·명단)을 넣지 않는다
+const errorDetail = (err, n) => ({
+  번호: n,
+  내용: String(err?.message ?? err).slice(0, 200),
+  위치: String(err?.stack || '').split('\n').slice(1, 3).map((s) => s.trim()).join(' | '),
+});
+// try 로 잡지 못한 오류(다른 스크립트·비동기)도 기록 파일에 (게임 동작은 그대로)
+let uncaughtCount = 0;
+function logUncaught(kind, err) {
+  uncaughtCount += 1;
+  if (uncaughtCount <= ERROR_LOG_LIMIT) fieldLog(kind, errorDetail(err, uncaughtCount));
+}
+window.addEventListener('error', (e) => logUncaught('처리 안 된 오류', e.error || e.message));
+window.addEventListener('unhandledrejection', (e) => logUncaught('처리 안 된 비동기 오류', e.reason));
 // 이 게임을 만든 학생 (본인 공개 동의, 처음 화면 제목 아래·아래 띠에 표시)
 const CREATOR = '정다희';
 
@@ -47,6 +75,8 @@ const DEFAULTS = {
   quality: 'normal',   // 화질: 'normal' 보통(빠름) / 'light' 가볍게(저사양) / 'sharp' 선명하게(느릴 수 있음)
   showFps: false,      // 왼쪽 아래에 FPS(화면 갱신 속도) 표시
   autoQuality: true,   // 버벅이면 자동으로 화질·효과를 한 단계씩 낮춤
+  gunAutoMode: true,   // 총 모드 자동 전환 (앱만, v2.5.0): 마우스 모드로 켜진 엑스거너 총을 게임패드 모드로 (desktop/gun-mode.js)
+  rapidAutoOff: true,  // 연사 자동 끄기 (앱만, v2.5.0): 켜진 총에 3초마다 수신기 COM 포트로 연사 OFF(XA:0;)를 보낸다 (desktop/gun-mode.js)
   fewEffects: false,   // 효과 줄이기: 터지는 조각 적게, 빛 번짐·불티 끄기
   volume: 0.8,         // 효과음 크기
   inputMode: 'gun',    // 'gun' = 라이트건(마우스로 인식) / 'touch' = 프로젝터 터치 센서
@@ -55,9 +85,98 @@ const DEFAULTS = {
   debounceMs: 80,      // (터치 모드에서만) 센서가 한 번의 충격을 여러 번 보내는 것을 무시
   showTouches: true,   // 터치(탄착) 위치를 화면에 표시
 };
+const GUN_LIVE_MS = 2000;   // 이 안에 조준 위치가 바뀌었거나 방아쇠를 당긴 총은 '지금 신호가 들어오는 총' (앱에 알림)
+const GUN_REPORT_MS = 1000; // 앱에 알리는 간격
 // 기본 규칙이 바뀌면 이름 뒤 숫자를 올려 예전에 저장된 설정을 무시한다
 const SETTINGS_KEY = 'ghast-shooting-settings-v10';
 let settings = loadSettings();
+setTimeout(tellGunAutoMode, 0);
+// 앱이 총에 게임패드 모드 전환을 보냈을 때: 게임 중이 아니면 잠깐 알린다
+// 앱이 알려 주는 수신기·총 상태 (시리얼로 확인 — 꺼진 총은 게임패드로 보이지 않아 게임만으로는 알 수 없다)
+window.ghastApp?.onGunStatus?.((list) => {
+  // 게임 파일(game-guns.js)을 아직 다 읽기 전에 신호가 오면 이번 한 번은 건너뛴다 (3초마다 다시 온다)
+  if (typeof Guns === 'undefined') return;
+  Guns.serial = { at: performance.now(), list };
+  reportGunsToApp();
+});
+// 게임패드 신호가 실제로 들어오는 엑스거너 자리(최근 60초 안에 값이 들어옴)를 앱에 알린다 → 앱은 그 총에 모드 전환을 다시 보내지 않는다
+// (가만히 든 총은 값이 잠깐 안 바뀔 수 있어 넉넉히. 총을 껐다 켜면 앱이 '켜짐'을 보고 바로 다시 바꾼다)
+// live: 지금(2초 안) 조준 위치가 바뀌었거나 방아쇠를 당긴 총 = 켜져 있고 게임패드 모드 → 앱이 꺼짐으로 보지 않고 모드 전환도 다시 안 보낸다
+//   (v3.6.0 — 11-20 TV 실기: 2P 가 앱의 '켜짐' 질문에 가끔 답하지 않아 경기 중에 모드 전환이 다시 가고 조준점이 가끔 끊김).
+//   막 연결돼 아직 움직이지 않은 총은 넣지 않는다. 총을 끈 것을 앱이 빨리 알도록 1초마다 알린다
+function reportGunsToApp() {
+  if (typeof Guns === 'undefined' || !window.ghastApp?.reportGunsConfirmed) return;
+  const now = performance.now();
+  const slotOf = (s) => Guns.receiverSlot(s.id) + 1;
+  const ok = Guns.list().filter((s) => s.moved && now - s.lastReport < 60000).map(slotOf).filter((n) => n > 0);
+  const fresh = (s) => now - Math.max(s.lastReport ?? -Infinity, s.lastActive ?? -Infinity) < GUN_LIVE_MS;
+  const live = Guns.list().filter((s) => s.moved && fresh(s)).map(slotOf).filter((n) => n > 0);
+  window.ghastApp.reportGunsConfirmed(ok, live);
+}
+if (window.ghastApp?.reportGunsConfirmed) setInterval(reportGunsToApp, GUN_REPORT_MS);
+window.ghastApp?.onGunModeSwitched?.((player) => {
+  if (typeof game === 'undefined' || typeof showBanner === 'undefined') return; // 게임 파일을 다 읽기 전 (알림만 건너뜀)
+  if (game.state === 'play' || game.state === 'countdown') return;
+  showBanner(`${player}P 총을 게임패드 모드로 바꾸는 중`, '총이 켜져 있으면 곧 조준점이 나타나요 (안 나타나면 총 전원 확인)', '#9ff6ff', 2.2);
+});
+// 연사 ON/OFF 알림 (v3.5.1). 연사 ON 은 게임이 방아쇠 신호로 알아보고(game-guns.js noteTrigger · rapid-detect.js),
+//   앱에 바로 OFF 를 부탁한다. 앱이 그 총에 OFF 를 보내면 'OFF' 를 알린다. 경기 중에는 화면을 가리지 않게 작은 글자로
+const RAPID_NOTICE_MS = 5000;     // 같은 총의 'ON'·'OFF' 알림 간격
+const RAPID_ASK_MS = 1500;        // 앱에 OFF 를 부탁하는 간격
+const RAPID_FAIL_MS = 5000;       // OFF 를 보낸 뒤 이 안에 또 연사가 나오면 OFF 가 듣지 않는 것
+                                  // (손으로 다시 켜려면 방아쇠를 놓고 5+스페이스+E 를 눌러야 해서 보통 이보다 오래 걸린다 — 11-20 실측 7초·19초)
+const RAPID_IN_FLIGHT_MS = 1000;  // OFF 를 보낸 직후 1초는 명령이 닿는 중·이미 시작된 연사의 끝으로 보고 세지 않는다
+                                  // (OFF 가 정말 안 들으면 앱이 1.5초마다 다시 보내므로 그 사이에 잡힌다)
+function noticeRapid(player, title, sub, color) {
+  if (typeof game === 'undefined' || typeof showBanner === 'undefined') return; // 게임 파일을 다 읽기 전 (알림만 건너뜀)
+  const playing = (game.state === 'play' || game.state === 'countdown') && !game.paused;
+  const tint = (typeof PLAYER_COLORS !== 'undefined' && PLAYER_COLORS[player - 1]) || color;
+  if (playing) popupScore(W / 2, H * 0.2, title, tint);
+  else showBanner(title, sub, color, 2.6);
+}
+// 자리 → { noticeAt 'ON' 알림, askAt 앱에 부탁, offAt 앱이 OFF 를 보낸 때, offNoticeAt 'OFF' 알림, failAt OFF 가 안 들은 것을 본 때 }
+const rapidMemo = {};
+const sinceMs = (now, at) => now - (at ?? -Infinity);
+// 게임이 연사 ON 을 봤을 때 (game-guns.js). canAsk: 수신기 번호를 아는 엑스거너 총이라 앱에 OFF 를 부탁할 수 있음
+function onRapidSeen(player, spanMs, canAsk) {
+  const now = performance.now();
+  const prev = rapidMemo[player] || {};
+  const auto = canAsk && settings.rapidAutoOff !== false && !!window.ghastApp?.reportRapidOn;
+  const sinceOff = sinceMs(now, prev.offAt);
+  const failing = auto && sinceOff > RAPID_IN_FLIGHT_MS && sinceOff < RAPID_FAIL_MS;
+  const next = { ...prev, failAt: failing ? now : prev.failAt };
+  Guns.rapidSeen = { ...Guns.rapidSeen, [player]: now };
+  if (auto && sinceMs(now, prev.askAt) >= RAPID_ASK_MS) {
+    next.askAt = now;
+    window.ghastApp.reportRapidOn(player);
+  }
+  if (sinceMs(now, prev.noticeAt) >= RAPID_NOTICE_MS) {
+    next.noticeAt = now;
+    fieldLog('연사 ON 봄', { 자리: `${player}P`, 다섯번ms: Math.round(spanMs), 자동OFF: auto, OFF뒤ms: Number.isFinite(sinceOff) ? Math.round(sinceOff) : null, 화면: game.state });
+    const manual = '총에서 5 + 스페이스 + Q 를 함께 눌러 OFF 로 바꾸세요';
+    let sub = '앱이 곧 OFF 로 바꿔요';
+    if (!auto) sub = manual;
+    else if (failing) sub = `앱이 OFF 를 보내도 다시 ON 이에요 — ${manual} (안 되면 총 전원을 껐다 켜기)`;
+    noticeRapid(player, `${player}P 총 연사 ON`, sub, '#ff8a7a');
+  }
+  rapidMemo[player] = next;
+}
+// 앱이 연사 ON 을 본 총에 OFF 를 보냈을 때
+//   'OFF' 알림도 같은 총에 5초에 한 번까지. OFF 가 듣지 않고 있으면(최근 5초 안에 OFF 뒤 또 연사) 'OFF' 는 띄우지 않는다
+//   (화면에 OFF·ON 이 번갈아 뜨지 않게 — 그때는 'ON' 알림이 '총에서 직접 끄기'를 안내한다)
+window.ghastApp?.onRapidOff?.((player) => {
+  const now = performance.now();
+  const prev = rapidMemo[player] || {};
+  const failing = sinceMs(now, prev.failAt) < RAPID_FAIL_MS;
+  const quiet = failing || sinceMs(now, prev.offNoticeAt) < RAPID_NOTICE_MS;
+  rapidMemo[player] = { ...prev, offAt: now, offNoticeAt: quiet ? prev.offNoticeAt : now };
+  if (typeof Guns !== 'undefined') {
+    const { [player]: _off, ...rest } = Guns.rapidSeen;
+    Guns.rapidSeen = rest;
+  }
+  fieldLog('연사 OFF 보냄 알림', { 자리: `${player}P`, 듣지않는중: failing, 화면알림: !quiet });
+  if (!quiet) noticeRapid(player, `${player}P 총 연사 OFF`, '앱이 총에 연사 OFF 명령을 보냈어요 (한 번 당기면 한 발)', '#9ff6ff');
+});
 
 function loadSettings() {
   try {
@@ -72,7 +191,15 @@ function loadSettings() {
 }
 function saveSettings() {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* 저장 불가 환경 */ }
+  tellGunAutoMode();
 }
+// 앱에 '총 모드 자동 전환' 켬/끔을 알린다 (웹 버전에는 없는 기능이라 그냥 지나감)
+// 같은 때 '연사 자동 끄기' 켬/끔도 알린다
+function tellGunAutoMode() {
+  window.ghastApp?.setGunAutoMode?.(settings.gunAutoMode !== false);
+  window.ghastApp?.setRapidAutoOff?.(settings.rapidAutoOff !== false);
+}
+
 
 // ---------- 작은 도구들 ----------
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -203,6 +330,12 @@ function buildGhastVariants() {
 }
 
 // ---------- 효과음 (파일 없이 WebAudio 로 직접 합성) ----------
+// 1P·2P 사격 소리 음색 (v2.5.0). 2P 는 낮고(×0.6) 거친 톱니파·낮은 잡음으로 1P 와 귀로 바로 구분되게. 자리를 모르면 1P
+const SHOT_VOICES = [
+  { pitch: 1, wave: 'square', noiseFreq: 2000 },
+  { pitch: 0.6, wave: 'sawtooth', noiseFreq: 800 },
+];
+const shotVoice = (who) => SHOT_VOICES[who] || SHOT_VOICES[0];
 const Sound = {
   ctx: null, master: null, noiseBuf: null, muted: false,
 
@@ -258,7 +391,13 @@ const Sound = {
     o.start(t); o.stop(t + dur + 0.05);
   },
 
-  hit()     { this.tone(900, 0.08, { freqEnd: 400, gain: 0.25 }); this.noise(0.08, { type: 'highpass', freq: 2000, gain: 0.4 }); },
+  // 사격 결과 소리(맞힘·반사·빗나감)는 쏜 선수마다 음색이 다르다 (v2.5.0 — 11-20 TV 실기 교사: "1P,2P의 총 소리가 똑같아서 헷갈린다").
+  //   who: 0 = 1P (예전 소리 그대로) · 1 = 2P (낮고 거친 톱니파). 1인 기록전·메뉴는 1P 소리
+  hit(who = 0) {
+    const v = shotVoice(who);
+    this.tone(900 * v.pitch, 0.08, { type: v.wave, freqEnd: 400 * v.pitch, gain: 0.25 });
+    this.noise(0.08, { type: 'highpass', freq: v.noiseFreq, gain: 0.4 });
+  },
   pop()     { // 팡! (가스트가 연기로 터짐)
     this.noise(0.35, { freq: 4000, freqEnd: 200, gain: 0.9 });
     this.tone(160, 0.3, { type: 'sine', freqEnd: 45, gain: 0.7 });
@@ -268,12 +407,20 @@ const Sound = {
     this.noise(0.9, { freq: 2500, freqEnd: 80, gain: 1 });
     this.tone(90, 0.7, { type: 'sine', freqEnd: 30, gain: 0.9 });
   },
-  deflect() { this.tone(1400, 0.15, { type: 'triangle', freqEnd: 2200, gain: 0.3 }); this.noise(0.25, { freq: 3000, freqEnd: 300, gain: 0.5 }); },
+  deflect(who = 0) {
+    const v = shotVoice(who);
+    this.tone(1400 * v.pitch, 0.15, { type: who === 1 ? 'sawtooth' : 'triangle', freqEnd: 2200 * v.pitch, gain: 0.3 });
+    this.noise(0.25, { freq: 3000 * v.pitch, freqEnd: 300, gain: 0.5 });
+  },
   charge()  { this.tone(500, 0.55, { type: 'sawtooth', freqEnd: 1300, gain: 0.2, attack: 0.1 }); },
   shoot()   { this.noise(0.5, { type: 'bandpass', freq: 400, freqEnd: 2500, q: 2, gain: 0.7 }); },
   spawn()   { this.tone(rand(260, 340), 0.6, { type: 'sine', freqEnd: 180, gain: 0.08, attack: 0.15 }); },
   escape()  { this.tone(420, 0.35, { type: 'triangle', freqEnd: 160, gain: 0.18 }); this.tone(300, 0.4, { type: 'sine', freqEnd: 120, gain: 0.12, delay: 0.08 }); },
-  miss()    { this.noise(0.06, { type: 'highpass', freq: 1500, gain: 0.15 }); this.tone(180, 0.18, { type: 'square', freqEnd: 110, gain: 0.12 }); },
+  miss(who = 0) {
+    const v = shotVoice(who);
+    this.noise(0.06, { type: 'highpass', freq: 1500 * v.noiseFreq / 2000, gain: 0.15 });
+    this.tone(180 * v.pitch, 0.18, { type: v.wave, freqEnd: 110 * v.pitch, gain: 0.12 });
+  },
   tick()    { this.tone(1000, 0.05, { gain: 0.12 }); },
   go()      { this.tone(660, 0.12, { gain: 0.2 }); this.tone(990, 0.3, { gain: 0.2, delay: 0.1 }); },
   bonus()   { [523, 659, 784, 1047].forEach((f, i) => this.tone(f, 0.2, { gain: 0.2, delay: i * 0.09 })); },
@@ -1439,6 +1586,9 @@ function spawnGhast(demo) {
 
 function goTitle() {
   if (confirmOpen()) closeConfirm(false);
+  if (game.state === 'play' || game.state === 'countdown') {
+    fieldLog('경기 중단', { 모드: MODE_WORDS[game.mode] || game.mode, 경과초: Math.round(game.elapsed || 0), 점수: game.players.map((p) => p.score) });
+  }
   game.state = 'title';
   game.diff = settings.diffLevel; // 처음 화면의 설명·랭킹 띠는 고른 난이도로
   game.level = 1; // 처음 화면의 가스트는 천천히
@@ -1484,11 +1634,34 @@ function startGame(mode = game.mode, names = game.players.map((p) => p.name), op
   fireballs = [];
   ghasts.forEach((g) => g.hittable() && g.leave(true));
   updateCornerButtons();
+  Guns.resetParity();
+  fieldLog('경기 시작', {
+    모드: MODE_WORDS[mode] || mode, 난이도: game.diff, 시간초: game.baseSeconds, 인원: count,
+    입력: settings.inputMode, 조준점: settings.aimMode,
+    ...(count === 2 ? { 조준제한Hz: settings.versusAimHz, '1P보정ms': settings.versusFireDelayMs } : {}),
+  });
+}
+
+// 경기 끝 기록용 요약 (이름 없이 자리·점수·통계만)
+function matchSummary() {
+  const players = game.players.map((p, i) => ({
+    자리: `${i + 1}P`, 점수: p.score, 쏜수: p.stats.shots, 처치: p.stats.kills, 반사: p.stats.deflects,
+    맞음: p.stats.hitsTaken, 빈곳: p.stats.misses, 놓침: p.stats.escapes,
+  }));
+  return {
+    모드: MODE_WORDS[game.mode] || game.mode, 난이도: game.diff, 경기초: Math.round(game.elapsed || 0), 레벨: game.level,
+    선수: players, ...(isTwoPlayer() ? { '1P보정': Guns.paritySummary() } : {}), 오류누계: errorLog.count,
+  };
 }
 
 function endGame() {
   // 토너먼트는 비기면 끝내지 않고 연장전으로 이어 간다
-  if (game.mode === 'tournament' && Tournament.tied()) { Tournament.startOvertime(); return; }
+  if (game.mode === 'tournament' && Tournament.tied()) {
+    fieldLog('연장전', { 점수: game.players.map((p) => p.score), 연장: game.overtime + 1 });
+    Tournament.startOvertime();
+    return;
+  }
+  fieldLog('경기 끝', matchSummary());
   game.state = 'result';
   game.resultTime = 0;
   game.timeLeft = 0;
@@ -1787,7 +1960,7 @@ function onTap(x, y, who = 0, source = 'mouse') {
   if (fb) {
     fb.dead = true;
     shooter.stats.deflects++;
-    Sound.deflect();
+    Sound.deflect(who);
     burstFire(fb.x, fb.y, 0.7);
     shake = Math.max(shake, U * 0.6);
     if (settings.deflectPoints > 0) popupScore(fb.x, fb.y - U * 4, tag(`+${settings.deflectPoints} 반사!`), tint('#ffd25a'));
@@ -1801,7 +1974,7 @@ function onTap(x, y, who = 0, source = 'mouse') {
     const c = g.center();
     g.kill(); // 한 번 맞히면 처치
     shooter.stats.kills++;
-    Sound.hit();
+    Sound.hit(who);
     shake = Math.max(shake, U * 0.8);
     doFlash('#ffffff', 0.12);
     const color = g.type === 'gold' ? '#ffd84a' : g.points > settings.killPoints ? '#ffb23a' : '#7dff6a';
@@ -1816,7 +1989,7 @@ function onTap(x, y, who = 0, source = 'mouse') {
 
   // 3) 빗나감 (배경을 맞힘) → 쏜 사람만 감점
   shooter.stats.misses++;
-  Sound.miss();
+  Sound.miss(who);
   for (let i = 0; i < 6; i++) {
     addPart({ x, y, vx: rand(-1, 1) * U * 8, vy: rand(-1, 0.3) * U * 8, g: U * 40, size: U * 0.6, life: 0.4, color: '#bbbbbb' });
   }
@@ -1869,13 +2042,18 @@ function screenOffset() {
 }
 
 const PARITY_GRID_MS = 25; // 2P 보통 총의 방아쇠가 들어오는 단위 (접시 사격 M0 실측: 25ms 배수)
+const PARITY_LINES_PER_MATCH = 30; // 실기 기록 파일에 1P 방아쇠 보정을 발마다 적는 것은 한 경기 처음 30발까지
+const RAPID_SHOW_MS = 10000; // 총 연결 화면에 '연사 ON' 을 보여 주는 시간 (그 안에 앱이 OFF 를 보내면 바로 OFF)
 const Guns = {
   pads: {},       // gamepad.index → { key, id, x, y, pressed[], min[], max[], lastActive }
   // 저장되는 지정 정보: 어떤 총(key)이 1P/2P 인지, 총마다 방아쇠 버튼 번호
   saved: readJson(GUN_SAVE_KEY, { p1: null, p2: null, trigger: {} }),
   assigning: null, // 총 연결 화면에서 지금 지정 중인 자리 (0 = 1P, 1 = 2P)
   seen: {},        // 이번 실행에서 한 번이라도 잡힌 총(수신기) — 빠졌는지 알리려고
+  serial: null,    // 앱(desktop/gun-mode.js)이 3초마다 알려 주는 수신기 상태 { at, list: [{ player, state }] }
+  serialSeen: {},  // 앱이 한 번이라도 수신기를 본 자리 (빠짐 안내용)
   calib: null,     // 조준 보정 중: { who, key, raw[] }
+  rapidSeen: {},   // 자리(1·2) → 방아쇠 신호로 연사 ON 을 본 시각 (앱이 OFF 를 보내면 지움, v3.5.1)
   message: '',
 
   save() { writeJson(GUN_SAVE_KEY, this.saved); },
@@ -1897,6 +2075,7 @@ const Guns = {
     if (this.saved[slot] === s.key && this.saved[other] !== s.key) return;
     this.saved = { ...this.saved, [slot]: s.key, [other]: this.saved[other] === s.key ? null : this.saved[other] };
     this.save();
+    fieldLog('총 자리 지정', { 자리: `${who + 1}P`, 총: s.id, 방법: '수신기 번호' });
   },
   // 총 상태 (접시 사격의 총 상태 배너와 같은 생각). 꺼진 총도 수신기는 마지막 위치를 계속 보내서(실측) 켜짐·꺼짐은 구분할 수 없다.
   // 'missing' 이번 실행에서 잡혔던 1P/2P 수신기가 빠짐 · 'silent' 수신기는 있는데 3초 넘게 움직임·방아쇠가 한 번도 없음 · 'ok' · 'none'
@@ -1907,12 +2086,73 @@ const Guns = {
     if (!s) return this.seen[key] ? 'missing' : 'none';
     return !s.moved && performance.now() - s.connectedAt > 3000 ? 'silent' : 'ok';
   },
+  // 앱이 시리얼로 확인한 상태 (최근 10초 안의 것만). 웹 버전이거나 아직 소식이 없으면 null
+  serialStateOf(who) {
+    const info = this.serial;
+    if (!info || performance.now() - info.at > 10000) return null;
+    const row = info.list.find((r) => r.player === who + 1);
+    if (row) { this.serialSeen[who] = true; return row.state; }
+    return this.serialSeen[who] ? 'missing' : 'none';
+  },
   statusMessage(players = [0, 1]) {
+    const serial = players.map((i) => [i, this.serialStateOf(i)]);
+    if (serial.some(([, st]) => st !== null)) {
+      const pickS = (kind) => serial.filter(([, st]) => st === kind).map(([i]) => `${i + 1}P`).join('·');
+      if (pickS('missing')) return `${pickS('missing')} 총 수신기가 빠졌어요 — 수신기를 다시 꽂으세요`;
+      if (pickS('stuck')) return `${pickS('stuck')} 수신기가 응답하지 않아요 — 수신기를 뽑았다가 다시 꽂으세요`;
+      if (pickS('off')) return `${pickS('off')} 총이 꺼져 있어요 — 총 전원을 켜세요 (켜면 게임패드 모드로 자동 전환)`;
+      // 총은 켜져 있고 전환도 보냈는데 게임에 안 잡힘: 맥은 대부분 입력 모니터링 권한 문제 (수신기에 키보드 기능이 있어 권한이 있어야 열림.
+      // 정식 서명이 없는 빌드는 새로 설치할 때마다 권한이 이어지지 않는다 — 2026-11-19 실측). 그 밖에는 총에서 직접 전환
+      if (pickS('mouse')) {
+        return /Mac/i.test(navigator.platform)
+          ? `${pickS('mouse')} 총이 게임에 안 잡혀요 — 시스템 설정 → 개인정보 보호 및 보안 → 입력 모니터링에서 이 앱을 켜고 다시 시작 (안 되면 총에서 Space + 5 + 왼쪽)`
+          : `${pickS('mouse')} 총이 게임패드 모드가 아니에요 — 총에서 Space + 5 + 조이스틱 왼쪽을 누르세요`;
+      }
+      if (pickS('switching')) return `${pickS('switching')} 총을 게임패드 모드로 바꾸는 중… (총을 한 번 흔들어 주세요)`;
+    }
     const pick = (kind) => players.filter((i) => this.statusOf(i) === kind).map((i) => `${i + 1}P`).join('·');
     const missing = pick('missing'), silent = pick('silent');
     if (missing) return `${missing} 총 수신기가 빠졌어요 — 수신기를 다시 꽂으세요`;
     if (silent) return `${silent} 총 신호 없음 — 총 전원을 켜고 조이스틱 모드(Space + 5 + 왼쪽)로 바꾼 뒤 한 번 흔들어 주세요`;
-    return '';
+    return this.noReceiverMessage(players);
+  },
+  // 총 연결 화면의 연사 한 줄 (v3.5.1) → { text, color } 또는 null (앱 소식도 없고 연사를 본 적도 없을 때)
+  //   앱이 3초마다 켜진 총에 연사 OFF 를 보내면 'OFF'. 게임이 방아쇠 신호로 연사를 보면 앱이 OFF 를 보낼 때까지 'ON'
+  //   (총의 연사 상태는 총에 물어도 알 수 없다 — 2026-11-20 실측)
+  rapidNote() {
+    const now = performance.now();
+    const seen = Object.entries(this.rapidSeen).filter(([, at]) => now - at < RAPID_SHOW_MS).map(([p]) => Number(p));
+    const info = this.serial && now - this.serial.at <= 10000 ? this.serial : null;
+    const rows = info ? info.list.filter((r) => r.rapid) : [];
+    const players = [...new Set([...rows.map((r) => r.player), ...seen])].sort((a, b) => a - b);
+    if (!players.length) return null;
+    const disabled = rows.some((r) => r.rapid === 'disabled');
+    const word = (p) => {
+      if (seen.includes(p)) return 'ON';
+      const r = rows.find((x) => x.player === p);
+      return r?.rapid === 'off' ? 'OFF' : r?.rapid === 'disabled' ? '자동 끄기 꺼짐(설정)' : '—';
+    };
+    const manual = '총에서 5 + 스페이스 + Q 를 함께 눌러 OFF';
+    let hint = '  (앱이 3초마다 총에 연사 OFF 명령을 보내요)';
+    if (seen.length) hint = disabled || !info ? `  —  ${manual}` : '  —  앱이 곧 OFF 로 바꿔요';
+    else if (disabled) hint = `  —  연사가 ON 이면 ${manual}`;
+    const text = `연사: ${players.map((p) => `${p}P ${word(p)}`).join('  ·  ')}${hint}`;
+    const color = seen.length ? '#ff8a7a' : disabled ? '#c9a89a' : '#7dff7a';
+    return { text, color };
+  },
+  // 수신기가 처음부터 안 꽂힘 (앱이 시리얼로 확인한 목록에 없고, 이번 실행에서 본 적도 없음. 빠진 경우는 위의 '빠졌어요').
+  //   1인 기록전 화면([0])은 아무 수신기도 없을 때만 (2P 수신기만 있어도 1인 기록전은 할 수 있다).
+  //   웹 버전은 수신기를 알 수 없어서 알리지 않는다
+  noReceiverMessage(players) {
+    const info = this.serial;
+    if (!info || performance.now() - info.at > 10000 || settings.inputMode !== 'gun') return '';
+    const plugged = (i) => this.serialSeen[i] || info.list.some((r) => r.player === i + 1)
+      || this.list().some((s) => this.receiverSlot(s.id) === i);
+    if (players.length === 1) {
+      return info.list.length === 0 && this.list().length === 0 ? '총 수신기가 꽂혀 있지 않아요 — 수신기를 USB 에 꽂으세요' : '';
+    }
+    const absent = players.filter((i) => !plugged(i)).map((i) => `${i + 1}P`).join('·');
+    return absent ? `${absent} 총 수신기가 꽂혀 있지 않아요 — 수신기를 USB 에 꽂으세요` : '';
   },
   // 2인 대결 준비 완료: 1P·2P 로 지정된 총 2대가 지금 게임패드로 연결돼 있음
   readyForVersus() {
@@ -1956,6 +2196,7 @@ const Guns = {
       let s = this.pads[gp.index];
       if (!s || s.key !== key) {
         s = this.pads[gp.index] = { key, id: gp.id, index: gp.index, x: W / 2, y: H / 2, pressed: [], min: [], max: [], lastActive: -1e9, moved: false, connectedAt: now };
+        fieldLog('총 잡힘', { 총: gp.id, 번호: gp.index, 화면: game.state });
         this.seen[key] = true;
         this.autoAssign(s);
       }
@@ -1978,7 +2219,7 @@ const Guns = {
       if (s.rx !== undefined && Math.hypot(nx - s.rx, ny - s.ry) > 2) { s.lastActive = now; s.moved = true; }
       // 총 상태 확인용: 1초에 위치가 몇 번 바뀌는지 (총이 화면·센서를 잘 보면 움직일 때 50 이상, 못 보면 한 자리 수)
       const axKey = gp.axes[ix] + ',' + gp.axes[iy];
-      if (axKey !== s.axKey) { s.axKey = axKey; s.moves = (s.moves || 0) + 1; }
+      if (axKey !== s.axKey) { s.axKey = axKey; s.moves = (s.moves || 0) + 1; s.lastReport = now; }
       if (!s.rateAt || now - s.rateAt >= 1000) {
         s.rate = s.moves || 0; s.moves = 0; s.rateAt = now;
         s.capRate = s.capMoves || 0; s.capMoves = 0;
@@ -1995,14 +2236,20 @@ const Guns = {
       s.axes = [...gp.axes];
       gp.buttons.forEach((b, i) => {
         const down = b.pressed || b.value > 0.5;
-        if (down && !s.pressed[i]) { s.lastActive = now; s.moved = true; this.onButton(s, i); }
+        if (down && !s.pressed[i]) {
+          s.lastActive = now; s.moved = true;
+          if (i === this.triggerOf(s)) this.noteTrigger(s, now);
+          this.onButton(s, i);
+        }
         s.pressed[i] = down;
       });
     }
     // 뽑힌 총은 목록에서 뺀다
     for (const idx of Object.keys(this.pads)) {
       if (list.some((g) => String(g.index) === idx)) continue;
-      this.onUnplug(this.pads[idx]);
+      const gone = this.pads[idx];
+      fieldLog('총 빠짐', { 총: gone.id, 번호: gone.index, 자리: this.playerOf(gone) >= 0 ? `${this.playerOf(gone) + 1}P` : '지정 안 됨', 화면: game.state });
+      this.onUnplug(gone);
       delete this.pads[idx];
     }
     this.flushPendingShots(now);
@@ -2014,6 +2261,19 @@ const Guns = {
     if (who < 0 || !isTwoPlayer() || game.state !== 'play' || game.paused) return;
     game.paused = true;
     game.pauseNote = { title: `${who + 1}P 총 연결이 끊겼어요`, sub: '총을 다시 연결한 뒤 P 또는 Space 로 계속하세요' };
+    fieldLog('총 빠짐으로 일시정지', { 자리: `${who + 1}P`, 모드: MODE_WORDS[game.mode] || game.mode });
+  },
+
+  // 연사 ON 알아보기 (v3.5.1, rapid-detect.js): 방아쇠가 1초에 약 9번 넘게 눌리면 연사 ON → 알림 + 앱에 바로 OFF 부탁 (game.js onRapidSeen).
+  //   막지는 않는다 (들어온 방아쇠는 그대로 처리). 앱에 부탁할 때는 수신기 번호(XGUNNER-P1/P2)를 쓴다
+  noteTrigger(s, now) {
+    if (typeof RapidDetect === 'undefined') return;
+    const r = RapidDetect.notePress(s.triggerTimes, now);
+    s.triggerTimes = r.rapid ? [] : r.history; // 본 뒤에는 처음부터 다시 센다 (같은 연사를 누를 때마다 알리지 않게)
+    if (!r.rapid) return;
+    const slot = this.receiverSlot(s.id);
+    const who = slot >= 0 ? slot : this.playerOf(s);
+    if (who >= 0) onRapidSeen(who + 1, r.spanMs, slot >= 0);
   },
 
   onButton(s, i) {
@@ -2036,6 +2296,7 @@ const Guns = {
       // 1P 를 정했고 2P 가 아직 없으면 바로 2P 지정으로 넘어간다
       this.assigning = done === 0 && !this.saved.p2 ? 1 : null;
       this.message = `${done + 1}P 총을 지정했어요 (방아쇠 = 버튼 ${i})`;
+      fieldLog('총 자리 지정', { 자리: `${done + 1}P`, 총: s.id, 방아쇠버튼: i, 방법: '총 연결 화면' });
       return;
     }
     if (i !== this.triggerOf(s)) return; // 방아쇠가 아닌 버튼은 무시
@@ -2047,8 +2308,9 @@ const Guns = {
       if (who < 0) return; // 지정 안 된 총은 대결 중 무시
     }
     if (this.fireParity(s)) {
-      const at = AimCap.parityFireAt(performance.now(), PARITY_GRID_MS, settings.versusFireDelayMs);
-      this.pendingShots = [...this.pendingShots, { at, key: s.key, who, source: `pad:${s.key}` }];
+      const pressed = performance.now();
+      const at = AimCap.parityFireAt(pressed, PARITY_GRID_MS, settings.versusFireDelayMs);
+      this.pendingShots = [...this.pendingShots, { at, pressed, key: s.key, who, source: `pad:${s.key}` }];
       return;
     }
     onTap(s.x, s.y, who, `pad:${s.key}`);
@@ -2067,12 +2329,31 @@ const Guns = {
     if (!this.pendingShots.length) return;
     const live = isTwoPlayer() && (game.state === 'play' || game.state === 'countdown') && !game.paused;
     const due = this.pendingShots.filter((p) => p.at <= now);
+    const dropped = live ? 0 : this.pendingShots.length;
     this.pendingShots = live ? this.pendingShots.filter((p) => p.at > now) : [];
-    if (!live) return;
+    if (!live) {
+      this.parity = { ...this.parity, dropped: this.parity.dropped + dropped };
+      fieldLog('1P 방아쇠 보정 버림', { 발수: dropped, 이유: game.paused ? '일시정지' : `경기 중 아님(${game.state})` });
+      return;
+    }
     for (const p of due) {
       const s = this.list().find((g) => g.key === p.key);
+      this.noteParityShot(now - p.pressed, p.at - p.pressed);
       if (s) onTap(s.x, s.y, p.who, p.source);
     }
+  },
+  // 실기 기록용: 1P 방아쇠를 실제로 몇 ms 늦게 처리했는지 (계획 = 25ms 칸 + 설정값, 실제 = 총 읽기 간격만큼 더 늦을 수 있음)
+  parity: { count: 0, sum: 0, max: 0, dropped: 0 },
+  resetParity() { this.parity = { count: 0, sum: 0, max: 0, dropped: 0 }; },
+  // 발마다 한 줄은 한 경기에 처음 PARITY_LINES_PER_MATCH 발까지만 (연사로 줄이 쌓여 하루 기록 한도를 먼저 채우지 않게).
+  // 나머지는 '경기 끝' 의 1P보정 요약(발수·평균·최대)에만 센다
+  noteParityShot(lateMs, plannedMs) {
+    this.parity = { ...this.parity, count: this.parity.count + 1, sum: this.parity.sum + lateMs, max: Math.max(this.parity.max, lateMs) };
+    if (this.parity.count <= PARITY_LINES_PER_MATCH) fieldLog('1P 방아쇠 보정', { 늦춤ms: Math.round(lateMs), 계획ms: Math.round(plannedMs) });
+  },
+  paritySummary() {
+    const { count, sum, max, dropped } = this.parity;
+    return { 발수: count, 평균ms: count ? Math.round(sum / count) : 0, 최대ms: Math.round(max), 버림: dropped };
   },
 
   // 화면에 총 조준점 그리기 (최근에 쓴 총만). 지정된 총은 1P/2P 색과 이름표
@@ -3073,6 +3354,12 @@ function drawGunSetup() {
     }
   }
 
+  // 연사 ON/OFF (v2.5.0, 앱이 수신기 COM 포트로 3초마다 OFF — desktop/gun-mode.js, 게임이 방아쇠 신호로 ON 을 알아봄).
+  //   총이 잡혀 있으면 총 목록 바로 아래 (아래쪽은 '2인 대결 시작' 버튼 자리), 없으면 안내 글 아래
+  const rapid = Guns.rapidNote();
+  const rapidY = pads.length ? Math.min(y + U * 6, py + ph - U * 39) : py + ph - U * 37;
+  if (rapid) text(rapid.text, cx, rapidY, fitTextSize(rapid.text, U * 2.6, pw - U * 8), rapid.color);
+
   // 안내 문구: 지금 무엇을 해야 하는지. 두 총이 다 준비되면 바로 대결을 시작할 수 있는 버튼
   if (Guns.assigning === null && Guns.readyForVersus()) {
     if (game.gunSetupFrom === 'bracket') button(`${Tournament.isLeague() ? '순위표' : '대진표'}로 돌아가기 ▶`, cx, py + ph - U * 33, U * 50, U * 8, closeGunSetup, true, true);
@@ -3722,11 +4009,19 @@ function draw(time) {
 
 // 큰 조준점 (프로젝터 화면에서도 잘 보이게). 크기는 설정의 '조준점 크기'
 // glow: 테두리 빛 색 (2인 대결의 1P/2P 색), label: 조준점 아래 이름표
+// 색이 있으면 조준점 몸통 전체를 그 색으로 (v2.5.0 — 예전에는 몸통이 흰색이고 색은 가장자리 빛뿐이라
+//   TV 에서 1P·2P 가 같은 색으로 보였다, 11-20 교사). 색이 없으면(마우스·지정 안 된 총) 예전처럼 흰 몸통 + 노란 빛
+const AIM_PLAIN_GLOW = 'rgba(255,225,74,0.9)';
+function aimLayers(glow, t, s) {
+  const outline = ['rgba(0,0,0,0.85)', t + U * 0.7 * s];
+  if (glow) return [outline, [glow, t + U * 0.28 * s]];
+  return [outline, [AIM_PLAIN_GLOW, t + U * 0.28 * s], ['#ffffff', t]];
+}
 function drawAim(x, y, glow = null, label = '') {
   const s = clamp(settings.aimSize, 50, 300) / 100;
   const r = U * 3.8 * s, gap = U * 1.1 * s, len = U * 2.4 * s, t = Math.max(3, U * 0.6 * s);
-  // 검은 테두리 → 노란(또는 플레이어 색) 빛 → 흰 선 순서로 겹쳐 어두운 네더 배경에서도 또렷하게
-  for (const [color, w] of [['rgba(0,0,0,0.85)', t + U * 0.7 * s], [glow || 'rgba(255,225,74,0.9)', t + U * 0.28 * s], ['#ffffff', t]]) {
+  // 검은 테두리 → (색 몸통) 또는 (노란 빛 → 흰 선) 순서로 겹쳐 어두운 네더 배경에서도 또렷하게
+  for (const [color, w] of aimLayers(glow, t, s)) {
     ctx.strokeStyle = color;
     ctx.lineWidth = w;
     ctx.lineCap = 'square';
@@ -3755,6 +4050,9 @@ const errorLog = { count: 0 };
 function reportError(err) {
   errorLog.count++;
   if (errorLog.count <= 5) console.error('[가스트 사격] 오류가 났지만 게임은 계속합니다', err);
+  // 실기 기록 파일: 처음 20건은 내용까지, 그 뒤는 한 번만 알리고 개수는 '경기 끝' 의 오류누계로
+  if (errorLog.count <= ERROR_LOG_LIMIT) fieldLog('오류', { ...errorDetail(err, errorLog.count), 화면: game.state });
+  else if (errorLog.count === ERROR_LOG_LIMIT + 1) fieldLog('오류가 계속 남', { 이유: `${ERROR_LOG_LIMIT}건이 넘어 더는 내용을 적지 않음` });
 }
 
 // 렉 자동 방지: 화면이 3초 넘게 40fps 아래로 버벅이면 한 단계씩 가볍게 바꾼다 (설정에서 끌 수 있음)
@@ -3780,7 +4078,10 @@ function checkAutoPerf(now) {
   if (autoPerf.lowSeconds >= 3 && now - autoPerf.lastChange > 10000) {
     autoPerf.lowSeconds = 0;
     autoPerf.lastChange = now;
-    if (lightenOneStep()) showBanner('렉 방지: 화면을 가볍게 바꿨어요', '설정 → 화질에서 되돌릴 수 있어요', '#9ff6ff', 2.2);
+    if (lightenOneStep()) {
+      showBanner('렉 방지: 화면을 가볍게 바꿨어요', '설정 → 화질에서 되돌릴 수 있어요', '#9ff6ff', 2.2);
+      fieldLog('렉 방지로 화질 낮춤', { fps: fpsMeter.value, 화질: settings.quality, 효과줄이기: settings.fewEffects });
+    }
   }
 }
 
@@ -3816,7 +4117,13 @@ function frame(now) {
 // ---------- 시작 ----------
 window.addEventListener('resize', resize);
 resize();
-loadImages()
+// 그림과 함께 '뒤에 불러오는 스크립트(tournament.js · solo.js 등)'까지 다 읽은 뒤 시작한다.
+// 그림이 먼저 끝나면 처음 화면을 그리다 아직 없는 Tournament·syncSoloInput 을 찾아 오류가 난다
+// (v3 에서 2026-11-19 확인·수정, v2 는 2026-11-20 앱 켜 보기로 확인)
+const scriptsReady = document.readyState === 'loading'
+  ? new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
+  : Promise.resolve();
+Promise.all([loadImages(), scriptsReady])
   .then(() => {
     buildGhastVariants();
     goTitle();
@@ -3824,8 +4131,14 @@ loadImages()
     loadLocalAdminKey();
     // 효과음 준비. 보통 브라우저에서는 첫 클릭·키 입력 때 소리가 켜진다 (Sound.init 이 다시 불리며 재개).
     Sound.init();
+    fieldLog('게임 준비', {
+      화면: `${screen.width}x${screen.height}`, 창: `${window.innerWidth}x${window.innerHeight}`, 배율: window.devicePixelRatio,
+      화질: settings.quality, 입력: settings.inputMode, 조준점: settings.aimMode, 총자동전환: settings.gunAutoMode !== false,
+      저장된총: { '1P': !!Guns.saved.p1, '2P': !!Guns.saved.p2 },
+    });
   })
   .catch((err) => {
+    fieldLog('게임 준비 실패', { 내용: String(err?.message ?? err) });
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.fillStyle = '#fff';
     ctx.font = '20px sans-serif';
