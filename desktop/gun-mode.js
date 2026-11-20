@@ -13,6 +13,8 @@
 //   (총 위쪽 Rapid Fire 스위치는 이 총에서 연사를 켜지 않았다.) 연사가 ON 인지는 게임이 방아쇠 신호로 알아보고(rapid-detect.js)
 //   requestOff 로 바로 OFF 를 부탁한다 → 보낸 뒤 onRapidOff 로 알린다.
 //   - J 를 보낸 회차에는 OFF 를 보내지 않는다 (모드가 바뀌는 중이라, 다음 회차에)
+//   - 게임이 연사를 본 총은 XQ; 답을 기다리지 않고 XA:0; 부터 보낸다 (v3.5.2 — 11-20 실측: 2P 가 연사 중 XQ; 에 답하지 않아
+//     꺼짐으로 보이고 OFF 가 5초 늦었다). 게임이 그 총의 방아쇠 신호를 받고 있으니 켜져 있고 게임패드 모드다 → J 도 안 보낸다
 // =============================================================
 const { SerialPort } = require('serialport');
 
@@ -46,12 +48,13 @@ async function receiverPorts() {
 //   sendJ 이면 켜진 총에 'J'(게임패드 모드)를 보낸다. 꺼진 총에는 보내지 않는다
 //   (꺼진 총에 J 를 보내면 수신기가 좌표를 한 번 0 으로 보내 조준점이 잠깐 구석에 생긴다)
 //   rapidOff 이면 (J 를 보내지 않는 회차에) 켜진 총에 연사 OFF(XA:0;)를 보낸다 (답은 오지 않는다)
+//   offFirst 이면 XQ; 보다 먼저 XA:0; 를 보낸다 (게임이 연사를 본 총 — 켜져 있는 것이 확실하고 빨리 꺼야 해서). sendJ 와 같이 쓰지 않는다
 //   주의: 시리얼 좌표(GT:A…)는 총이 마우스 모드여도 흘러서 모드를 알려 주지 않는다 (2026-11-19 실측).
 //   그래서 '게임패드 모드인지'는 게임 쪽에서 그 총의 게임패드 신호가 실제로 들어오는지로 판단한다 (confirmed)
 //   결과 { state, rapid }: state 'alive' 켜짐 · 'switched' 켜짐 + J 보냄 · 'off' 꺼짐 · 'busy' 못 엶(다른 프로그램 등)
 //   · 'stuck' 3초 안에 안 끝남(수신기 다시 꽂기). rapid: OFF 를 보냈으면 { sent: true }, 아니면 null
 //   openPort: 시험에서 가짜 포트를 넣을 때만
-function checkPort(path, { sendJ = false, rapidOff = false, openPort = realPort } = {}) {
+function checkPort(path, { sendJ = false, rapidOff = false, offFirst = false, openPort = realPort } = {}) {
   return new Promise((resolve) => {
     const port = openPort(path);
     let done = false, timer = null;
@@ -70,7 +73,8 @@ function checkPort(path, { sendJ = false, rapidOff = false, openPort = realPort 
     // XQ; 를 보낸 뒤의 XV 만 본다. 답이 쓰기 완료(drain) 알림보다 먼저 와도 놓치지 않게.
     //   수신기는 버튼 상태 줄(GT:A…)을 쉬지 않고 보내 한 번에 1KB 넘게 올 수 있다 → 들어온 조각 전체에서 찾고,
     //   조각 사이에 'X' | 'V' 로 나뉜 경우만 위해 끝 몇 글자를 남긴다 (예전에는 1KB 로 잘라 낸 뒤 찾다가 XV 를 잃었다)
-    let asked = false, gotXV = false, tail = '';
+    let asked = false, gotXV = false, tail = '', offSent = false;
+    const rapidResult = () => (offSent ? { sent: true } : null);
     port.on('error', () => finish('busy'));
     port.on('data', (d) => {
       const joined = tail + d.toString('latin1');
@@ -78,14 +82,18 @@ function checkPort(path, { sendJ = false, rapidOff = false, openPort = realPort 
       if (!asked || gotXV || !joined.includes('XV')) return;
       gotXV = true;
       clearTimeout(timer); timer = null;
-      if (sendJ) send(GAMEPAD_MODE, () => finish('switched'));
-      else if (rapidOff) send(RAPID_OFF, () => finish('alive', { sent: true }));
-      else finish('alive');
+      if (sendJ) send(GAMEPAD_MODE, () => finish('switched', rapidResult()));
+      else if (rapidOff && !offSent) send(RAPID_OFF, () => finish('alive', { sent: true }));
+      else finish('alive', rapidResult());
     });
+    const askAlive = () => {
+      asked = true;
+      send(ALIVE_QUERY, () => { if (!gotXV && !done) timer = setTimeout(() => finish('off', rapidResult()), ALIVE_WAIT_MS); });
+    };
     port.open((err) => {
       if (err) { finish('busy'); return; }
-      asked = true;
-      send(ALIVE_QUERY, () => { if (!gotXV && !done) timer = setTimeout(() => finish('off'), ALIVE_WAIT_MS); });
+      if (offFirst && rapidOff && !sendJ) send(RAPID_OFF, () => { offSent = true; askAlive(); });
+      else askAlive();
     });
   });
 }
@@ -126,9 +134,11 @@ function startGunModeWatch({
     const confirmed = isConfirmed(player);
     if (confirmed) st.tries = 0;
     if ((stuckUntil.get(path) || 0) > now) return { player, state: 'stuck' };
+    // 게임이 연사를 본 총: 켜져 있고 게임패드 모드인 것이 확실하다 → J 없이 OFF 부터
+    const urgent = rapidWanted && offWanted.has(player);
     // 막 켜진 총(꺼짐 → 켜짐, 또는 앱을 막 켬)은 언제나 J. 켜져 있는데 게임패드 신호가 안 보이면 8초마다 다시 (최대 3번)
-    const wantJ = isEnabled() && (!st.alive || (!confirmed && st.tries < RETRIES && now - st.lastJ >= RETRY_MS));
-    const { state: result, rapid } = await check(path, { sendJ: wantJ, rapidOff: rapidWanted && !wantJ });
+    const wantJ = !urgent && isEnabled() && (!st.alive || (!confirmed && st.tries < RETRIES && now - st.lastJ >= RETRY_MS));
+    const { state: result, rapid } = await check(path, { sendJ: wantJ, rapidOff: rapidWanted && !wantJ, offFirst: urgent });
     if (result === 'busy') { info.set(player, st); return { player, state: 'busy' }; }
     if (result === 'stuck') {
       stuckUntil.set(path, now + STUCK_RETRY_MS);
@@ -136,11 +146,19 @@ function startGunModeWatch({
       return { player, state: 'stuck' };
     }
     stuckUntil.delete(path);
+    if (rapid?.sent) {
+      const askedAt = offWanted.get(player);
+      offWanted.delete(player);
+      if (askedAt !== undefined && now - askedAt <= OFF_REQUEST_MS) { log(`${player}P 연사 ON 을 봐서 OFF 보냄`); onRapidOff(player); }
+    }
     if (result === 'off') {
-      const misses = (st.misses || 0) + 1;
+      // 연사를 본 총(urgent)은 답이 없어도 켜져 있다 (게임이 방아쇠 신호를 받고 있음) → 꺼짐으로 세지 않는다
+      const misses = urgent ? st.misses || 0 : (st.misses || 0) + 1;
       // 켜져 있던 총의 답이 한 번 늦은 것은 꺼짐으로 보지 않는다 (J 를 다시 보내지 않게)
-      if (st.alive && misses < OFF_MISSES) {
-        info.set(player, { ...st, misses });
+      //   연사를 본 총은 앱을 막 켜서 아직 켜짐을 못 봤어도 켜진 것으로 둔다 (게임패드 신호가 오고 있으니 J 도 필요 없다)
+      if ((st.alive || urgent) && misses < OFF_MISSES) {
+        if (rapid?.sent) rapidSent.add(player);
+        info.set(player, { ...st, alive: true, misses });
         return { player, state: aliveState(st, confirmed), rapid: rapidStatus(player, rapidWanted) };
       }
       // 총 전원을 끄면 연사도 OFF 로 돌아간다 → 다시 켜지면 처음부터
@@ -157,12 +175,7 @@ function startGunModeWatch({
       if (st.tries === 1) onSwitch(player);
     }
     info.set(player, st);
-    if (rapid?.sent) {
-      rapidSent.add(player);
-      const askedAt = offWanted.get(player);
-      offWanted.delete(player);
-      if (askedAt !== undefined && now - askedAt <= OFF_REQUEST_MS) { log(`${player}P 연사 ON 을 봐서 OFF 보냄`); onRapidOff(player); }
-    }
+    if (rapid?.sent) rapidSent.add(player);
     return { player, state: aliveState(st, confirmed), rapid: rapidStatus(player, rapidWanted) };
   };
 

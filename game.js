@@ -109,10 +109,12 @@ window.ghastApp?.onGunModeSwitched?.((player) => {
 });
 // 연사 ON/OFF 알림 (v3.5.1). 연사 ON 은 게임이 방아쇠 신호로 알아보고(game-guns.js noteTrigger · rapid-detect.js),
 //   앱에 바로 OFF 를 부탁한다. 앱이 그 총에 OFF 를 보내면 'OFF' 를 알린다. 경기 중에는 화면을 가리지 않게 작은 글자로
-const RAPID_ON_NOTICE_MS = 5000;  // 같은 총의 'ON' 알림 간격
+const RAPID_NOTICE_MS = 5000;     // 같은 총의 'ON'·'OFF' 알림 간격
 const RAPID_ASK_MS = 1500;        // 앱에 OFF 를 부탁하는 간격
-const RAPID_RETRY_WINDOW_MS = 30000; // 이 안에 OFF 를 두 번 보냈는데 또 ON 이면 '끄지 못함' 안내
-const RAPID_AFTER_OFF_MS = 1000;  // OFF 를 보낸 직후에 들어온 방아쇠는 그 전 연사의 끝으로 본다
+const RAPID_FAIL_MS = 5000;       // OFF 를 보낸 뒤 이 안에 또 연사가 나오면 OFF 가 듣지 않는 것
+                                  // (손으로 다시 켜려면 방아쇠를 놓고 5+스페이스+E 를 눌러야 해서 보통 이보다 오래 걸린다 — 11-20 실측 7초·19초)
+const RAPID_IN_FLIGHT_MS = 1000;  // OFF 를 보낸 직후 1초는 명령이 닿는 중·이미 시작된 연사의 끝으로 보고 세지 않는다
+                                  // (OFF 가 정말 안 들으면 앱이 1.5초마다 다시 보내므로 그 사이에 잡힌다)
 function noticeRapid(player, title, sub, color) {
   if (typeof game === 'undefined' || typeof showBanner === 'undefined') return; // 게임 파일을 다 읽기 전 (알림만 건너뜀)
   const playing = (game.state === 'play' || game.state === 'countdown') && !game.paused;
@@ -120,45 +122,47 @@ function noticeRapid(player, title, sub, color) {
   if (playing) popupScore(W / 2, H * 0.2, title, tint);
   else showBanner(title, sub, color, 2.6);
 }
-const rapidMemo = {}; // 자리 → { noticeAt, askAt, offs[] } (알림·부탁 간격, 최근 OFF 보낸 시각)
+// 자리 → { noticeAt 'ON' 알림, askAt 앱에 부탁, offAt 앱이 OFF 를 보낸 때, offNoticeAt 'OFF' 알림, failAt OFF 가 안 들은 것을 본 때 }
+const rapidMemo = {};
+const sinceMs = (now, at) => now - (at ?? -Infinity);
 // 게임이 연사 ON 을 봤을 때 (game-guns.js). canAsk: 수신기 번호를 아는 엑스거너 총이라 앱에 OFF 를 부탁할 수 있음
 function onRapidSeen(player, spanMs, canAsk) {
   const now = performance.now();
-  const prev = rapidMemo[player] || { noticeAt: -Infinity, askAt: -Infinity, offs: [] };
-  const offs = prev.offs.filter((t) => now - t < RAPID_RETRY_WINDOW_MS);
+  const prev = rapidMemo[player] || {};
   const auto = canAsk && settings.rapidAutoOff !== false && !!window.ghastApp?.reportRapidOn;
-  const next = { ...prev, offs };
+  const sinceOff = sinceMs(now, prev.offAt);
+  const failing = auto && sinceOff > RAPID_IN_FLIGHT_MS && sinceOff < RAPID_FAIL_MS;
+  const next = { ...prev, failAt: failing ? now : prev.failAt };
   Guns.rapidSeen = { ...Guns.rapidSeen, [player]: now };
-  if (auto && now - prev.askAt >= RAPID_ASK_MS) {
+  if (auto && sinceMs(now, prev.askAt) >= RAPID_ASK_MS) {
     next.askAt = now;
     window.ghastApp.reportRapidOn(player);
   }
-  const stillOn = offs.length >= 2 && now - offs[offs.length - 1] > RAPID_AFTER_OFF_MS;
-  if (now - prev.noticeAt >= RAPID_ON_NOTICE_MS) {
+  if (sinceMs(now, prev.noticeAt) >= RAPID_NOTICE_MS) {
     next.noticeAt = now;
-    fieldLog('연사 ON 봄', { 자리: `${player}P`, 다섯번ms: Math.round(spanMs), 자동OFF: auto, 화면: game.state });
+    fieldLog('연사 ON 봄', { 자리: `${player}P`, 다섯번ms: Math.round(spanMs), 자동OFF: auto, OFF뒤ms: Number.isFinite(sinceOff) ? Math.round(sinceOff) : null, 화면: game.state });
     const manual = '총에서 5 + 스페이스 + Q 를 함께 눌러 OFF 로 바꾸세요';
     let sub = '앱이 곧 OFF 로 바꿔요';
     if (!auto) sub = manual;
-    else if (stillOn) sub = `앱이 OFF 를 보내도 다시 ON 이에요 — ${manual} (안 되면 총 전원을 껐다 켜기)`;
+    else if (failing) sub = `앱이 OFF 를 보내도 다시 ON 이에요 — ${manual} (안 되면 총 전원을 껐다 켜기)`;
     noticeRapid(player, `${player}P 총 연사 ON`, sub, '#ff8a7a');
   }
   rapidMemo[player] = next;
 }
 // 앱이 연사 ON 을 본 총에 OFF 를 보냈을 때
-//   'OFF' 알림도 같은 총에 5초에 한 번까지. OFF 를 보내도 계속 ON 이면(30초 안에 세 번째부터) 'OFF' 는 띄우지 않는다
+//   'OFF' 알림도 같은 총에 5초에 한 번까지. OFF 가 듣지 않고 있으면(최근 5초 안에 OFF 뒤 또 연사) 'OFF' 는 띄우지 않는다
 //   (화면에 OFF·ON 이 번갈아 뜨지 않게 — 그때는 'ON' 알림이 '총에서 직접 끄기'를 안내한다)
 window.ghastApp?.onRapidOff?.((player) => {
   const now = performance.now();
-  const prev = rapidMemo[player] || { noticeAt: -Infinity, askAt: -Infinity, offs: [] };
-  const offs = [...prev.offs.filter((t) => now - t < RAPID_RETRY_WINDOW_MS), now];
-  const quiet = offs.length >= 3 || now - (prev.offNoticeAt ?? -Infinity) < RAPID_ON_NOTICE_MS;
-  rapidMemo[player] = { ...prev, offs, offNoticeAt: quiet ? prev.offNoticeAt : now };
+  const prev = rapidMemo[player] || {};
+  const failing = sinceMs(now, prev.failAt) < RAPID_FAIL_MS;
+  const quiet = failing || sinceMs(now, prev.offNoticeAt) < RAPID_NOTICE_MS;
+  rapidMemo[player] = { ...prev, offAt: now, offNoticeAt: quiet ? prev.offNoticeAt : now };
   if (typeof Guns !== 'undefined') {
     const { [player]: _off, ...rest } = Guns.rapidSeen;
     Guns.rapidSeen = rest;
   }
-  fieldLog('연사 OFF 보냄 알림', { 자리: `${player}P`, 최근30초OFF: offs.length, 화면알림: !quiet });
+  fieldLog('연사 OFF 보냄 알림', { 자리: `${player}P`, 듣지않는중: failing, 화면알림: !quiet });
   if (!quiet) noticeRapid(player, `${player}P 총 연사 OFF`, '앱이 총에 연사 OFF 명령을 보냈어요 (한 번 당기면 한 발)', '#9ff6ff');
 });
 

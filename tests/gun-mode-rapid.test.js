@@ -80,6 +80,20 @@ test('꺼진 총(XQ; 무응답): 연사 OFF 를 보내지 않는다', async () =
   assert.deepEqual(r, { state: 'off', rapid: null });
 });
 
+test('게임이 연사를 본 총(offFirst): XA:0; 를 먼저 보내고 XQ; 로 켜짐을 묻는다', async () => {
+  const { openPort, written } = fakePortFactory({ 'XQ;': GUN_ON });
+  const r = await checkPort('p1', { rapidOff: true, offFirst: true, openPort });
+  assert.deepEqual(written, ['XA:0;', 'XQ;']);
+  assert.deepEqual(r, { state: 'alive', rapid: { sent: true } });
+});
+
+test('offFirst 인데 XQ; 에 답이 없어도 OFF 는 이미 보냈다 (2026-11-20 실측: 2P 가 연사 중 답하지 않아 OFF 가 5초 늦음)', async () => {
+  const { openPort, written } = fakePortFactory({});
+  const r = await checkPort('p1', { rapidOff: true, offFirst: true, openPort });
+  assert.deepEqual(written, ['XA:0;', 'XQ;']);
+  assert.deepEqual(r, { state: 'off', rapid: { sent: true } });
+});
+
 // 3초 확인(startGunModeWatch). results: 회차마다 check 가 돌려줄 결과 (모자라면 마지막 것)
 function watch({ results, ticks = 1, intervalMs = 30, ...opts }) {
   const calls = [], statuses = [], offs = [], logs = [];
@@ -181,4 +195,58 @@ test('OFF 부탁 뒤 수신기가 한동안 바빠 10초 넘게 지나서야 보
   } finally {
     Date.now = realNow;
   }
+});
+
+test('연사를 본 총은 XQ; 답이 없어도 바로 OFF 를 보내고 알리며, 꺼짐으로 세지 않고 J 도 보내지 않는다', async () => {
+  const calls = [];
+  const t = watch({
+    results: [ALIVE_SENT], ticks: 4, intervalMs: 60000, isRapidEnabled: () => true, isConfirmed: () => true,
+    check: async (path, o) => {
+      calls.push(o);
+      if (o.offFirst) return { state: 'off', rapid: { sent: true } }; // 연사 중이라 XQ; 에 답 없음
+      return ALIVE_SENT;
+    },
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  t.w.requestOff(1);
+  await new Promise((r) => setTimeout(r, 10));
+  t.w.requestOff(1);
+  await new Promise((r) => setTimeout(r, 10));
+  t.w.requestOff(1);
+  await t.done;
+  assert.deepEqual(calls.map((o) => [o.sendJ, !!o.offFirst]), [[true, false], [false, true], [false, true], [false, true]]);
+  assert.deepEqual(t.offs, [1, 1, 1]);
+  assert.deepEqual(t.statuses.map((s) => s[0].state), ['ok', 'ok', 'ok', 'ok'], '게임이 신호를 받고 있으니 꺼짐이 아니다');
+});
+
+test('연사를 본 총은 게임패드 신호가 안 보이는 회차여도 J 대신 OFF 부터 보낸다', async () => {
+  const calls = [];
+  const t = watch({
+    results: [ALIVE_SENT], ticks: 2, intervalMs: 60000, isRapidEnabled: () => true, isConfirmed: () => false,
+    check: async (path, o) => { calls.push(o); return o.sendJ ? { state: 'switched', rapid: null } : ALIVE_SENT; },
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  t.w.requestOff(1);
+  await t.done;
+  assert.deepEqual(calls.map((o) => [o.sendJ, !!o.offFirst]), [[true, false], [false, true]]);
+  assert.deepEqual(t.offs, [1]);
+});
+
+test('앱을 연사 도중에 켜서 켜짐을 본 적이 없어도, 연사를 본 총은 꺼짐으로 보이지 않고 J 도 다시 보내지 않는다', async () => {
+  const calls = [];
+  let first = true;
+  const t = watch({
+    results: [ALIVE_SENT], ticks: 3, intervalMs: 60, isRapidEnabled: () => true, isConfirmed: () => true,
+    check: async (path, o) => {
+      calls.push(o);
+      if (first) { first = false; return { state: 'off', rapid: null }; } // 연사 중이라 첫 XQ; 에 답 없음
+      return o.offFirst ? { state: 'off', rapid: { sent: true } } : ALIVE_SENT;
+    },
+  });
+  await new Promise((r) => setTimeout(r, 15));
+  t.w.requestOff(1); // 곧바로 한 번 더 확인 (연사를 본 총), 그다음은 60ms 뒤 보통 회차
+  await t.done;
+  assert.deepEqual(t.statuses.map((s) => s[0].state), ['off', 'ok', 'ok']);
+  assert.deepEqual(calls.map((o) => [o.sendJ, !!o.offFirst]), [[true, false], [false, true], [false, false]], '보통 회차에도 J 를 다시 보내지 않는다');
+  assert.deepEqual(t.offs, [1]);
 });
