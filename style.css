@@ -210,6 +210,7 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
 #tournament-form h2 { margin: 0 0 14px; font-size: 30px; color: var(--accent); }
 #tournament-form .t-options { display: flex; justify-content: center; align-items: center; gap: 28px; flex-wrap: wrap; font-size: 18px; }
 #tournament-form .t-options label { display: flex; align-items: center; gap: 10px; }
+#tournament-form .t-options label[hidden] { display: none; }
 #tournament-form .t-count { display: inline-flex; align-items: center; gap: 6px; }
 #tournament-form .t-count button { font-size: 22px; padding: 4px 14px; }
 #tournament-form input {
@@ -328,7 +329,7 @@ button.primary { background: #3f7a2a; box-shadow: inset 2px 2px 0 #6fae4f, inset
   text-align: center;
 }
 #contest-pick h2 { margin: 0 0 18px; font-size: 30px; color: var(--accent); }
-#contest-pick .contest-options { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+#contest-pick .contest-options { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
 #contest-pick .contest-opt { display: flex; flex-direction: column; gap: 10px; padding: 22px 18px; font-size: 18px; line-height: 1.4; }
 #contest-pick .contest-opt b { font-size: 30px; }
 #contest-pick .contest-opt span { opacity: 0.85; }

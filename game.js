@@ -12,7 +12,7 @@
 const APP_VERSION = (window.ghastApp && typeof window.ghastApp.version === 'string') ? window.ghastApp.version : '';
 // ---------- 실기용 기록 파일 (앱에서만 — desktop/field-log.js, 웹 버전은 아무 일도 안 함) ----------
 // 설정 폴더 logs/play-YYYY-MM-DD.log 에 '경기 시작·끝, 총 잡힘·빠짐, 1P 방아쇠 보정, 오류' 등을 한 줄씩. 이름은 넘기지 않는다
-const MODE_WORDS = { solo: '1인 기록전', versus: '2인 대결', tournament: '대회 경기' };
+const MODE_WORDS = { solo: '1인 기록전', versus: '2인 대결', tournament: '대회 경기', record: '기록전 대회' };
 const ERROR_LOG_LIMIT = 20; // 오류 내용은 처음 20건까지만 적는다 (같은 오류가 1초에 60번 날 수 있어서)
 let fieldLogWarned = false;
 function fieldLog(event, data = {}) {
@@ -68,7 +68,7 @@ const DEFAULTS = {
   diffLevel: 'normal', // 난이도 'easy' | 'normal' | 'hard' (닉네임 창에서 고르고, 다음 사람에게도 그대로)
   tournamentSeconds: 40, // 토너먼트 한 경기 시간 (보너스 시간 없이 고정)
   tournamentThird: true, // 토너먼트 3·4위전
-  contestKind: 'tournament', // 대회 모드에서 마지막으로 고른 방식 'tournament' | 'league'
+  contestKind: 'tournament', // 대회 모드에서 마지막으로 고른 방식 'tournament' | 'league' | 'record'(기록전 대회)
   leagueGames: 4,        // 리그전 한 사람당 판 수
   hitPadding: 15,      // 가스트 판정 범위를 몇 % 넓힐지
   ghastScale: 100,     // 가스트 크기 (%)
@@ -1408,7 +1408,7 @@ const RESULT_LOCK = 3;
 // 처음 화면으로 돌아가 다음 사람이 바로 시작할 수 있게 한다. 토너먼트는 진행요원이 넘기므로 빼고, 마지막 10초는 알려 준다
 const IDLE_TO_TITLE = 60;
 const IDLE_WARN = 10;
-const idleWatched = () => !settingsOpen() && (game.state === 'solo' || (game.mode !== 'tournament'
+const idleWatched = () => !settingsOpen() && (game.state === 'solo' || (!isContest()
   && (game.state === 'result' || (game.state === 'ranking' && rankAfterGame()))));
 function noteInput() { game.idleT = 0; }
 function updateIdle(dt) {
@@ -1673,7 +1673,7 @@ function endGame() {
   const win = game.players.some(gotReward);
   Sound.end(win || isTwoPlayer());
   updateCornerButtons();
-  if (game.mode === 'tournament') Tournament.finishMatch();
+  if (isContest()) Tournament.finishMatch();
 
   // 랭킹은 1인 기록전만 저장한다 (2인 대결은 승패만). 먼저 랭킹에 남길 이름을 총으로 쏴서 받는다
   if (game.mode !== 'solo') return;
@@ -1729,6 +1729,8 @@ function soloStats(me) {
 const PLAYER_COLORS = ['#5ae8ff', '#ff7ad9'];
 // 두 사람이 겨루는 모드 (2인 대결·토너먼트 경기): 점수판·총 1P/2P 구분·결과 화면이 같다
 const isTwoPlayer = (mode = game.mode) => mode === 'versus' || mode === 'tournament';
+// 대회 모드의 경기: 'tournament' 토너먼트·리그전 한 경기(2인) · 'record' 기록전 대회의 한 판(1인, 1인 기록전 규칙·랭킹 저장 없음)
+const isContest = (mode = game.mode) => mode === 'tournament' || mode === 'record';
 const topScore = () => Math.max(0, ...game.players.map((p) => p.score));
 // '1P 다희' 처럼 자리와 이름을 함께. 이름을 비워 '1P' 그대로면 한 번만
 const playerLabel = (p, i) => (p.name === `${i + 1}P` ? p.name : `${i + 1}P  ${p.name}`);
@@ -2168,7 +2170,7 @@ const Guns = {
   // 1인 기록전 게임 중에는 1P 총만 쓴다: 다른 총(2P 등)은 조준점도 그리지 않고 방아쇠도 무시한다.
   // 1P 총이 연결돼 있지 않으면(2P 수신기만 꽂힌 경우 등) 1인 기록전을 할 수 있게 모든 총을 그대로 쓴다
   hiddenInSolo(s) {
-    if (game.mode !== 'solo' || (game.state !== 'play' && game.state !== 'countdown')) return false;
+    if ((game.mode !== 'solo' && game.mode !== 'record') || (game.state !== 'play' && game.state !== 'countdown')) return false;
     const p1Connected = this.list().some((p) => p.key === this.saved.p1);
     return p1Connected && s.key !== this.saved.p1;
   },
@@ -2748,7 +2750,7 @@ document.getElementById('name-random').addEventListener('click', () => {
 });
 // 결과 화면 → 다음 사람/새 대결 (이름 새로 입력). 토너먼트는 대진표(또는 우승 발표)로
 function nextPlayer() {
-  if (game.mode === 'tournament') { Tournament.afterResult(); return; }
+  if (isContest()) { Tournament.afterResult(); return; }
   if (game.mode === 'solo') { SoloReady.open(); return; } // 1인 기록전은 준비 화면(solo.js)으로
   openNameEntry(game.mode);
 }
@@ -3820,6 +3822,7 @@ function drawResult(time) {
   // 처음 화면은 오른쪽 위 운영 버튼으로 (같은 버튼을 두 번 두지 않는다)
   const ready = game.resultTime > RESULT_LOCK; // 계속 쏘던 총알이 실수로 버튼을 누르지 않게 잠깐 잠금
   const by = py + ph - U * 8;
+  if (game.mode === 'record') { Tournament.drawResultButtons(cx, by, ready); return; } // 기록전 대회: 순위표로
   button('다음 사람', cx - U * 31, by, U * 28, U * 9, nextPlayer, ready, true);
   button('다시 하기', cx, by, U * 28, U * 9, retrySolo, ready);
   button('랭킹', cx + U * 31, by, U * 28, U * 9, openRanking, ready);
@@ -3914,7 +3917,7 @@ function update(dt) {
   if (game.state === 'solo') SoloReady.tick(dt);
   // 결과 화면, 그리고 게임이 끝나 바로 뜬 랭킹 화면에서도 잠금 시간을 센다
   if (['result', 'bracket', 'champion'].includes(game.state) || (game.state === 'ranking' && game.rankFrom === 'result')) game.resultTime += dt;
-  if (game.state === 'result' && game.mode === 'tournament') Tournament.tickResult(); // 리그전: 잠깐 뒤 순위표로
+  if (game.state === 'result' && isContest()) Tournament.tickResult(); // 리그전: 잠깐 뒤 순위표로
   if (game.state === 'ranking' && rankAfterGame()) rankView.cycleT += dt;
   updateIdle(dt);
   // 잠긴 동안에는 오른쪽 위 버튼을 흐리게 (총으로는 안 눌림)

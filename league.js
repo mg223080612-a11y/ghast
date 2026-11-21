@@ -124,8 +124,10 @@ function drawLeagueHeader(L, tour) {
   const lg = tour.data.league;
   const d = DIFFICULTIES[tour.data.diff];
   const done = Object.keys(lg.results).length;
-  text('리그전 순위표', W / 2, L.py + U * 9, U * 6, '#ffcf5a', 'center', { shadow: '#a3200c' });
-  const info = `${lg.players.length}명  ·  한 사람당 ${lg.games}판  ·  난이도 ${d.label}  ·  한 경기 ${timeLabel(tour.data.seconds)}  ·  ${done}/${lg.matches.length}경기  ·  순위: 합계 → 최고 한 판`;
+  text(lg.solo ? '기록전 대회 순위표' : '리그전 순위표', W / 2, L.py + U * 9, U * 6, '#ffcf5a', 'center', { shadow: '#a3200c' });
+  const info = lg.solo
+    ? `${lg.players.length}명  ·  한 사람씩 1인 기록전 ${lg.games}판  ·  난이도 ${d.label}  ·  한 판 ${timeLabel(tour.data.seconds)}  ·  ${done}/${lg.matches.length}번  ·  순위: 합계 → 최고 한 판`
+    : `${lg.players.length}명  ·  한 사람당 ${lg.games}판  ·  난이도 ${d.label}  ·  한 경기 ${timeLabel(tour.data.seconds)}  ·  ${done}/${lg.matches.length}경기  ·  순위: 합계 → 최고 한 판`;
   text(info, W / 2, L.py + U * 14.5, fitTextSize(info, U * 2.6, L.pw - U * 6), '#ffd9b0');
 }
 
@@ -138,6 +140,15 @@ function drawLeagueFooter(L, tour, next, revealed) {
     text('모든 경기가 끝났어요!', cx, fy + U * 3, U * 4.4, '#ffe14a');
     button('최종 순위 발표 ▶', cx - U * 20, by, U * 36, U * 8.5, () => tour.showChampion(), ready, true);
     button('새 대회', cx + U * 20, by, U * 36, U * 8.5, () => tour.startOver(), ready);
+    return;
+  }
+  if (lg.solo) { // 기록전 대회: 다음 차례 한 사람
+    text(`다음 차례  ·  ${League.matchLabel(lg, next)}`, cx, fy, U * 3.2, '#ffcf5a');
+    const who = tour.name(next.a);
+    text(who, cx, fy + U * 5.5, fitTextSize(who, U * 5.4, W * 0.6), PLAYER_COLORS[0]);
+    if (Object.keys(lg.results).length === 0) button('순서 다시 섞기', cx - U * 40, by, U * 32, U * 8.5, () => tour.reshuffle(), ready);
+    button('게임 시작 ▶', cx, by, U * 40, U * 8.5, () => tour.startNext(), ready, true);
+    button('새 대회', cx + U * 40, by, U * 32, U * 8.5, () => tour.startOver(), ready);
     return;
   }
   text(`다음 경기  ·  ${League.matchLabel(lg, next)}`, cx, fy, U * 3.2, '#ffcf5a');
@@ -185,7 +196,8 @@ function drawLeagueChampion(tour, time) {
   const cx = W / 2, pw = Math.min(W - U * 8, U * 120), ph = U * 90;
   const py = panelTopBelowCorner(ph);
   panel(cx - pw / 2, py, pw, ph, 0.88);
-  text(firsts.length > 1 ? '리그전 공동 우승!' : '리그전 우승!', cx, py + U * 8, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
+  const kind = lg.solo ? '기록전 대회' : '리그전';
+  text(firsts.length > 1 ? `${kind} 공동 우승!` : `${kind} 우승!`, cx, py + U * 8, U * 7, '#ffcf5a', 'center', { shadow: '#a3200c' });
   const cy = py + U * 34;
   drawGlow(cx, cy, U * 30, '255,216,74', 0.35);
   drawCrown(cx, cy - U * 13, U * 16, time);
@@ -201,7 +213,7 @@ function drawLeagueChampion(tour, time) {
     text(str, cx, cy + U * (19 + i * 6), fitTextSize(str, U * 4.2, pw - U * 10), MEDAL[r - 1] || '#c9a89a');
   });
   const d = DIFFICULTIES[tour.data.diff];
-  text(`${lg.players.length}명 참가  ·  한 사람당 ${lg.games}판  ·  난이도 ${d.label}  ·  총 ${lg.matches.length}경기`, cx, py + ph - U * 17, U * 2.8, '#c9a89a');
+  text(`${lg.players.length}명 참가  ·  한 사람당 ${lg.games}판  ·  난이도 ${d.label}  ·  총 ${lg.matches.length}${lg.solo ? '판' : '경기'}`, cx, py + ph - U * 17, U * 2.8, '#c9a89a');
   const ready = game.resultTime > RESULT_LOCK;
   const by = py + ph - U * 8;
   button('순위표 보기', cx - U * 17, by, U * 30, U * 9, () => tour.showBracket(), ready);

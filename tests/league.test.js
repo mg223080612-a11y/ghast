@@ -166,3 +166,40 @@ test('저장된 결과가 망가졌으면(점수 없음·없는 경기) 거절�
   assert.equal(L.isValid({ ...lg, results: { L0: { scores: [1, 'x'] } } }), false);
   assert.equal(L.isValid({ ...lg, results: { L0: { scores: [1, 2] } } }), true);
 });
+
+// ---------- 기록전 대회 (한 사람씩 1인 기록전, v2.6.0) ----------
+test('기록전 대회: 한 사람당 정한 판 수만큼, 판마다 모두 한 번씩 차례가 온다', () => {
+  const lg = L.createLeague(names(21), { games: 2, solo: true, rng: fixedRng(3) });
+  assert.equal(lg.solo, true);
+  assert.equal(lg.matches.length, 42);
+  const first = lg.matches.slice(0, 21).map(([a]) => a).sort((x, y) => x - y);
+  assert.deepEqual(first, Array.from({ length: 21 }, (_, i) => i));
+  assert.ok(lg.matches.every(([, b]) => b === -1));
+  assert.ok(L.isValid(lg));
+  assert.ok(L.isValid(JSON.parse(JSON.stringify(lg))));
+});
+
+test('기록전 대회: 홀수 인원 1판도 만들 수 있고, 점수 순으로 순위가 정해진다', () => {
+  let lg = L.createLeague(names(5), { games: 1, solo: true, rng: fixedRng(7) });
+  const scores = [300, 500, 500, 100, 0];
+  while (L.nextMatch(lg)) {
+    const m = L.nextMatch(lg);
+    lg = L.recordResult(lg, m.id, [scores[m.a], 0]);
+  }
+  assert.ok(L.isFinished(lg));
+  assert.ok(L.isValid(lg));
+  const rows = L.standings(lg);
+  assert.deepEqual(rows.map((r) => r.rank), [1, 1, 3, 4, 5]);
+  assert.deepEqual(rows.map((r) => r.total), [500, 500, 300, 100, 0]);
+  assert.ok(rows.every((r) => r.played === 1));
+});
+
+test('기록전 대회: 다시 섞어도 기록전 대회이고, 망가진 저장값은 거른다', () => {
+  const lg = L.createLeague(names(4), { games: 1, solo: true, rng: fixedRng(2) });
+  const again = L.reshuffle(lg, fixedRng(9));
+  assert.equal(again.solo, true);
+  assert.equal(again.matches.length, 4);
+  assert.equal(L.isValid({ ...lg, matches: lg.matches.slice(1) }), false);
+  assert.equal(L.isValid({ ...lg, matches: lg.matches.map(([a]) => [a, 0]) }), false);
+  assert.match(L.matchLabel(lg, L.nextMatch(lg)), /1번째 차례/);
+});

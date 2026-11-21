@@ -130,6 +130,7 @@
       <div class="contest-options">
         <button type="button" class="contest-opt" data-kind="tournament"><b>🏆 토너먼트</b><span>1:1 로 지면 탈락 · 이긴 사람이 올라가 우승</span></button>
         <button type="button" class="contest-opt" data-kind="league"><b>📋 리그전</b><span>한 사람당 4판(바꿀 수 있음) · 모두 다른 상대 · 점수 합계로 순위</span></button>
+        <button type="button" class="contest-opt" data-kind="record"><b>🎯 기록전 대회</b><span>한 사람씩 1인 기록전 · 점수가 가장 높은 사람이 우승</span></button>
       </div>
       <div class="actions"><button type="button" id="contest-cancel">취소</button></div>
     </form>
@@ -142,6 +143,7 @@
       <div class="kind-row" role="group" aria-label="대회 방식">
         <button type="button" class="kind-btn" data-kind="tournament">🏆 토너먼트</button>
         <button type="button" class="kind-btn" data-kind="league">📋 리그전</button>
+        <button type="button" class="kind-btn" data-kind="record">🎯 기록전 대회</button>
       </div>
       <p class="hint" id="t-kind-hint"></p>
       <div class="t-options">
@@ -152,7 +154,7 @@
             <button type="button" id="t-plus" aria-label="한 명 더하기">+</button>
           </span>
         </label>
-        <label>한 경기 시간 (초)<input name="seconds" type="number" min="10" max="600" step="5" value="40"></label>
+        <label class="t-seconds">한 경기 시간 (초)<input name="seconds" type="number" min="10" max="600" step="5" value="40"></label>
         <label class="check t-third"><input name="third" type="checkbox" checked> 3·4위전</label>
         <label class="t-games" hidden>한 사람당
           <select name="games">

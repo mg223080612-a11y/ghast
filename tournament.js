@@ -36,6 +36,7 @@ let formKind = 'tournament';
 
 // 저장 모양: 토너먼트 { bracket, seconds, diff, current: { id } | null, last: { id, winner, scores, overtime } | null }
 //          리그     { league, seconds, diff, current, last: { id, scores, prevRanks } | null }  (league-core.js)
+//          기록전 대회 (v2.6.0) 는 리그와 같은 모양에 league.solo = true — 한 사람씩 1인 기록전, 경기 = [선수, -1], 점수 = [점수, 0]
 function loadTournament() {
   const d = readJson(TOURNAMENT_KEY, null);
   if (!d) return null;
@@ -65,6 +66,9 @@ const Tournament = {
   },
   bracket() { return this.data?.bracket; },
   isLeague() { return !!this.data?.league; },
+  // 기록전 대회: 한 사람씩 1인 기록전을 하고 점수로 순위 (순위표·발표 화면은 리그전 것을 같이 쓴다)
+  isRecord() { return !!this.data?.league?.solo; },
+  kindWord() { return this.isRecord() ? '기록전 대회' : this.isLeague() ? '리그전' : '토너먼트'; },
   name(id) { return this.isLeague() ? League.playerName(this.data.league, id) : Bracket.playerName(this.bracket(), id); },
   finished() {
     if (!this.data) return false;
@@ -95,7 +99,7 @@ const Tournament = {
     if (game.state !== 'title') goTitle();
     tEntry.hidden = true;
     tPick.hidden = false;
-    setTimeout(() => tPick.querySelector(`.contest-opt[data-kind="${settings.contestKind === 'league' ? 'league' : 'tournament'}"]`)?.focus(), 0);
+    setTimeout(() => tPick.querySelector(`.contest-opt[data-kind="${contestKindOf(settings.contestKind)}"]`)?.focus(), 0);
   },
   closePick() { tPick.hidden = true; },
 
@@ -122,7 +126,9 @@ const Tournament = {
 
   create(names, opts) {
     const common = { seconds: opts.seconds, diff: opts.diff, current: null, last: null };
-    if (opts.kind === 'league') this.set({ league: League.createLeague(names, { games: opts.games }), ...common });
+    // 기록전 대회는 1인 기록전 규칙 그대로: 시간은 설정의 제한 시간 (보너스 시간 있음)
+    if (opts.kind === 'record') this.set({ league: League.createLeague(names, { games: opts.games, solo: true }), ...common, seconds: settings.gameSeconds });
+    else if (opts.kind === 'league') this.set({ league: League.createLeague(names, { games: opts.games }), ...common });
     else this.set({ bracket: Bracket.createBracket(names, { thirdPlace: opts.third }), ...common });
     Sound.bonus();
     this.showBracket();
@@ -137,7 +143,7 @@ const Tournament = {
   // 진행 중인 대회를 버리고 새로 (진행요원 확인)
   async startOver() {
     if (this.inProgress()) {
-      const what = this.isLeague() ? '리그전' : '토너먼트';
+      const what = this.kindWord();
       const ok = await askConfirm(`진행 중인 ${what}를 끝내고 새 대회를 만들까요?\n지금 ${this.isLeague() ? '순위표' : '대진표'}는 사라집니다.`, { ok: '새 대회 만들기', danger: true });
       if (!ok) return;
     }
@@ -179,6 +185,11 @@ const Tournament = {
   startNext() {
     const m = this.nextMatch();
     if (!m) { this.showChampion(); return; }
+    if (this.isRecord()) { // 한 사람씩 1인 기록전 (1P 총 하나, 랭킹에는 올리지 않는다)
+      this.set({ ...this.data, current: { id: m.id } });
+      startGame('record', [this.name(m.a)], { seconds: this.data.seconds, diff: this.data.diff });
+      return;
+    }
     if (!ensureVersusGuns()) return; // 총 2대가 1P·2P 로 지정돼 있어야 한다 (아니면 총 연결 화면으로)
     this.set({ ...this.data, current: { id: m.id } });
     startGame('tournament', [this.name(m.a), this.name(m.b)], { seconds: this.data.seconds, diff: this.data.diff });
@@ -201,7 +212,7 @@ const Tournament = {
     const m = this.currentMatch();
     if (!m) return; // 대진표가 바뀌었으면(새 토너먼트 등) 결과를 넣지 않는다
     banner = null; // 경기 막판의 '연장전!'·'레벨 UP!' 안내가 결과 화면에 겹치지 않게
-    const scores = game.players.map((p) => p.score);
+    const scores = this.isRecord() ? [game.players[0].score, 0] : game.players.map((p) => p.score);
     if (this.isLeague()) { this.finishLeagueMatch(m, scores); return; }
     const winner = scores[0] > scores[1] ? m.a : m.b;
     try {
@@ -297,13 +308,21 @@ function setNameCount(n) {
 }
 
 // ---------- 대회 방식 (토너먼트 · 리그) ----------
+const contestKindOf = (kind) => (kind === 'league' || kind === 'record' ? kind : 'tournament');
+const KIND_WORDS = { tournament: '토너먼트', league: '리그전', record: '기록전 대회' };
+const KIND_SUBMIT = { tournament: '대진표 만들기', league: '리그 대진 만들기', record: '기록전 대회 만들기' };
 function setFormKind(kind) {
-  formKind = kind === 'league' ? 'league' : 'tournament';
+  const before = formKind;
+  formKind = contestKindOf(kind);
   document.querySelectorAll('.kind-btn').forEach((b) => b.classList.toggle('on', b.dataset.kind === formKind));
-  tForm.querySelector('.t-games').hidden = formKind !== 'league';
-  tForm.querySelector('.t-third').hidden = formKind === 'league';
-  tTitle.textContent = `${formKind === 'league' ? '리그전' : '토너먼트'} — 참가자를 입력하세요`;
-  tForm.querySelector('button[type=submit]').textContent = formKind === 'league' ? '리그 대진 만들기' : '대진표 만들기';
+  tForm.querySelector('.t-games').hidden = formKind === 'tournament';
+  tForm.querySelector('.t-third').hidden = formKind !== 'tournament';
+  tForm.querySelector('.t-seconds').hidden = formKind === 'record'; // 기록전 대회는 1인 기록전 시간(설정) 그대로
+  // 판 수: 기록전 대회는 1판부터, 리그전은 지난번 값
+  if (formKind === 'record' && before !== 'record') tForm.elements.games.value = '1';
+  if (formKind === 'league' && before === 'record') tForm.elements.games.value = String(clamp(Math.round(Number(settings.leagueGames)) || League.DEFAULT_GAMES, 1, LEAGUE_FORM.maxGames));
+  tTitle.textContent = `${KIND_WORDS[formKind]} — 참가자를 입력하세요`;
+  tForm.querySelector('button[type=submit]').textContent = KIND_SUBMIT[formKind];
   updateKindHint();
 }
 // 방식 고르기 창: 고르면 그 방식으로 참가자 입력 창
@@ -317,6 +336,12 @@ tPick.querySelectorAll('.contest-opt').forEach((b) => b.addEventListener('click'
 document.getElementById('contest-cancel').addEventListener('click', () => Tournament.closePick());
 // 방식 설명. 리그는 지금 인원·판 수로 짤 수 있는지 함께 알려 준다
 function updateKindHint() {
+  if (formKind === 'record') {
+    const n = nameInputs().length, g = tForm.elements.games.value;
+    tKindHint.textContent = `${n}명 × ${g}판 = 모두 ${n * g}번 · 한 사람씩 1인 기록전 · 점수(합계)로 순위 · 온라인 랭킹에는 안 올라가요`;
+    tKindHint.classList.remove('error');
+    return;
+  }
   if (formKind !== 'league') {
     tKindHint.textContent = '지면 탈락 · 이긴 사람이 올라가 우승을 가려요';
     tKindHint.classList.remove('error');
@@ -465,7 +490,7 @@ tForm.addEventListener('submit', (e) => {
   const seconds = clamp(Math.round(Number(tForm.elements.seconds.value)) || TOURNAMENT.defaultSeconds, TOURNAMENT.minSeconds, TOURNAMENT.maxSeconds);
   const third = tForm.elements.third.checked;
   const games = clamp(Math.round(Number(tForm.elements.games.value)) || League.DEFAULT_GAMES, 1, LEAGUE_FORM.maxGames);
-  settings = { ...settings, tournamentSeconds: seconds, tournamentThird: third, contestKind: formKind, leagueGames: games };
+  settings = { ...settings, tournamentSeconds: seconds, tournamentThird: third, contestKind: formKind, ...(formKind === 'league' ? { leagueGames: games } : {}) };
   saveSettings();
   try {
     const names = collectNames();

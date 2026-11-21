@@ -17,6 +17,8 @@
   const MAX_PLAYERS = 32;
   const DEFAULT_GAMES = 4;
   const FORMAT = 'league';
+  const MAX_SOLO_GAMES = 6; // 기록전 대회: 한 사람당 판 수
+  const NO_PLAYER = -1;     // 기록전 대회 경기의 상대 자리 (상대 없음)
   const ORDER_TRIES = 60; // 경기 순서를 여러 번 짜 보고 연달아 하는 사람이 가장 적은 것을 고른다
 
   const matchId = (index) => `L${index}`;
@@ -84,10 +86,26 @@
     return { seq, backToBack };
   }
 
-  function createLeague(names, { games = DEFAULT_GAMES, rng = Math.random } = {}) {
+  // 기록전 대회 (v2.6.0): 한 사람씩 1인 기록전을 한다. 판마다 차례를 무작위로 섞는다. 경기 = [선수, NO_PLAYER]
+  const soloGames = (g) => Math.min(Math.max(1, Math.round(Number(g)) || 1), MAX_SOLO_GAMES);
+  function createSolo(names, games, rng) {
+    const count = soloGames(games);
+    const ids = names.map((_, i) => i);
+    return {
+      format: FORMAT,
+      solo: true,
+      players: names.map((name, id) => ({ id, name: String(name) })),
+      games: count,
+      matches: Array.from({ length: count }, () => shuffled(ids, rng).map((id) => [id, NO_PLAYER])).flat(),
+      results: {},
+    };
+  }
+
+  function createLeague(names, { games = DEFAULT_GAMES, rng = Math.random, solo = false } = {}) {
     if (!Array.isArray(names) || names.length < MIN_PLAYERS || names.length > MAX_PLAYERS) {
       throw new Error(`참가 인원은 ${MIN_PLAYERS}~${MAX_PLAYERS}명이어야 해요`);
     }
+    if (solo) return createSolo(names, games, rng);
     const n = names.length;
     const check = checkGames(n, games);
     if (!check.ok) throw new Error(check.message);
@@ -109,7 +127,7 @@
   // 첫 경기 전에만: 같은 참가자·판 수로 다시 짠다
   function reshuffle(lg, rng = Math.random) {
     if (Object.keys(lg.results).length) throw new Error('이미 경기를 시작해서 다시 섞을 수 없어요');
-    return createLeague(lg.players.map((p) => p.name), { games: lg.games, rng });
+    return createLeague(lg.players.map((p) => p.name), { games: lg.games, rng, solo: !!lg.solo });
   }
 
   function matches(lg) {
@@ -155,6 +173,7 @@
   }
 
   function matchLabel(lg, m) {
+    if (lg.solo) return `${m.index + 1}번째 차례 (모두 ${lg.matches.length}번)`;
     return `${m.index + 1}경기 (${lg.matches.length}경기 중)`;
   }
 
@@ -169,11 +188,16 @@
     if (!Array.isArray(players) || !Array.isArray(list) || !results || typeof results !== 'object') return false;
     const n = players.length;
     if (n < MIN_PLAYERS || n > MAX_PLAYERS || !players.every((p, i) => p && p.id === i && typeof p.name === 'string')) return false;
-    if (!Number.isInteger(games) || games < 1 || games > n - 1 || list.length !== (n * games) / 2) return false;
-    const pairsOk = list.every((p) => Array.isArray(p) && p.length === 2 && isPlayer(p[0], n) && isPlayer(p[1], n) && p[0] !== p[1]);
-    if (!pairsOk) return false;
-    const keys = list.map(([a, b]) => (a < b ? `${a}-${b}` : `${b}-${a}`));
-    if (new Set(keys).size !== keys.length) return false;
+    if (lg.solo) {
+      if (!Number.isInteger(games) || games < 1 || games > MAX_SOLO_GAMES || list.length !== n * games) return false;
+      if (!list.every((p) => Array.isArray(p) && p.length === 2 && isPlayer(p[0], n) && p[1] === NO_PLAYER)) return false;
+    } else {
+      if (!Number.isInteger(games) || games < 1 || games > n - 1 || list.length !== (n * games) / 2) return false;
+      const pairsOk = list.every((p) => Array.isArray(p) && p.length === 2 && isPlayer(p[0], n) && isPlayer(p[1], n) && p[0] !== p[1]);
+      if (!pairsOk) return false;
+      const keys = list.map(([a, b]) => (a < b ? `${a}-${b}` : `${b}-${a}`));
+      if (new Set(keys).size !== keys.length) return false;
+    }
     const count = list.flat().reduce((acc, id) => ({ ...acc, [id]: (acc[id] || 0) + 1 }), {});
     if (!players.every((p) => count[p.id] === games)) return false;
     // 결과: 있는 경기 id 에, 점수 두 개(숫자)
@@ -182,7 +206,7 @@
   }
 
   return {
-    MIN_PLAYERS, MAX_PLAYERS, DEFAULT_GAMES,
+    MIN_PLAYERS, MAX_PLAYERS, DEFAULT_GAMES, MAX_SOLO_GAMES,
     checkGames, createLeague, reshuffle, matches, nextMatch, findMatch, recordResult,
     isFinished, standings, matchLabel, playerName, isValid,
   };
