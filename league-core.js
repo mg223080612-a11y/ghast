@@ -167,11 +167,12 @@
       });
       return acc.map((row) => (row.id === m.a ? add(row, sa, sb) : row.id === m.b ? add(row, sb, sa) : row));
     }, empty);
-    const sorted = [...rows].sort((x, y) => y.total - x.total || y.best - x.best || x.id - y.id);
-    return sorted.map((row) => ({
-      ...row,
-      rank: 1 + sorted.filter((o) => o.total > row.total || (o.total === row.total && o.best > row.best)).length,
-    }));
+    // 기권한 사람은 맨 아래로 (v2.6.3, 기록전 대회): 기권이 없는 사람 → 기권한 사람 순서, 그 안에서 합계 → 최고 한 판
+    const out = (row) => (row.forfeits > 0 ? 1 : 0);
+    const sorted = [...rows].sort((x, y) => out(x) - out(y) || y.total - x.total || y.best - x.best || x.id - y.id);
+    const ahead = (o, row) => out(o) < out(row)
+      || (out(o) === out(row) && (o.total > row.total || (o.total === row.total && o.best > row.best)));
+    return sorted.map((row) => ({ ...row, rank: 1 + sorted.filter((o) => ahead(o, row)).length }));
   }
 
   function matchLabel(lg, m) {

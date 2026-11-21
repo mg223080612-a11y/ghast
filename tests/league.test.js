@@ -219,3 +219,16 @@ test('기록전 대회: 기권은 0점으로 넣고 순위표에 기권 수가 �
   assert.equal(rows[0].id, second.a);
   assert.equal(rows[0].forfeits, 0);
 });
+
+test('기록전 대회: 기권한 사람은 아직 안 한 사람(0점)보다도 아래, 맨 끝 순위', () => {
+  let lg = L.createLeague(names(4), { games: 1, solo: true, rng: fixedRng(11) });
+  const quit = L.nextMatch(lg);
+  lg = L.recordResult(lg, quit.id, [0, 0], { forfeit: true });
+  const played = L.nextMatch(lg);
+  lg = L.recordResult(lg, played.id, [250, 0]);
+  const rows = L.standings(lg);
+  assert.equal(rows[0].id, played.a);
+  assert.equal(rows[3].id, quit.a);
+  assert.equal(rows[3].rank, 4);
+  assert.deepEqual(rows.slice(1, 3).map((r) => r.rank), [2, 2]);
+});
