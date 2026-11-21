@@ -126,7 +126,7 @@ const Tournament = {
 
   create(names, opts) {
     const common = { seconds: opts.seconds, diff: opts.diff, current: null, last: null };
-    // 기록전 대회는 1인 기록전 규칙 그대로: 시간은 설정의 제한 시간 (보너스 시간 있음)
+    // 기록전 대회는 1인 기록전 규칙: 시간은 설정의 제한 시간, 보너스 시간은 없다 (game.js bonusSecondsNow)
     if (opts.kind === 'record') this.set({ league: League.createLeague(names, { games: opts.games, solo: true }), ...common, seconds: settings.gameSeconds });
     else if (opts.kind === 'league') this.set({ league: League.createLeague(names, { games: opts.games }), ...common });
     else this.set({ bracket: Bracket.createBracket(names, { thirdPlace: opts.third }), ...common });

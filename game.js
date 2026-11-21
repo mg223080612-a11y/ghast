@@ -824,7 +824,8 @@ const gotReward = (p) => !!p && (p.rewardShown || p.score >= rewardScoreNow());
 const ghastScaleNow = () => settings.ghastScale * rules().size;
 const hitPaddingNow = () => Math.max(0, settings.hitPadding + rules().padding);
 // 토너먼트는 경기 시간이 늘 같게 보너스 시간이 없다 (레벨 UP 은 그대로)
-const bonusSecondsNow = () => (game.mode === 'tournament' ? 0 : settings.bonusSeconds);
+// 기록전 대회의 한 판도 같다 (v2.6.1 — 모두 같은 시간으로 겨루게)
+const bonusSecondsNow = () => (isContest() ? 0 : settings.bonusSeconds);
 
 function pickGhastType(level) {
   const table = rules().odds;
