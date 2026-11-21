@@ -78,7 +78,8 @@ function drawLeagueRow(x, y, w, h, row, games, info, time) {
   if (info.move) text(info.move > 0 ? `▲${info.move}` : `▼${-info.move}`, x + w * LEAGUE_COLS.move, y, size * 0.62, info.move > 0 ? RANK_UP : RANK_DOWN);
   const nameColor = hot ? PLAYER_COLORS[info.justPlayed] : '#ffffff';
   text(row.name, x + w * LEAGUE_COLS.name, y, fitTextSize(row.name, size, w * (LEAGUE_COLS.played - LEAGUE_COLS.name - 0.05)), nameColor, 'left');
-  text(`${row.played}/${games}`, x + w * LEAGUE_COLS.played, y, size * 0.85, row.played === games ? '#c9a89a' : '#ffd9b0');
+  if (row.forfeits) text(row.forfeits === row.played ? '기권' : `${row.played}/${games} 기권${row.forfeits}`, x + w * LEAGUE_COLS.played, y, size * 0.7, RANK_DOWN);
+  else text(`${row.played}/${games}`, x + w * LEAGUE_COLS.played, y, size * 0.85, row.played === games ? '#c9a89a' : '#ffd9b0');
   if (hot) text(`${info.now}점`, x + w * LEAGUE_COLS.now, y, size, '#ffe14a');
   else if (info.next >= 0) text('다음', x + w * LEAGUE_COLS.now, y, size * 0.8, PLAYER_COLORS[info.next]);
   text(`${row.total}`, x + w * LEAGUE_COLS.total, y, size * 1.05, '#ffe14a', 'right');
@@ -145,7 +146,8 @@ function drawLeagueFooter(L, tour, next, revealed) {
   if (lg.solo) { // 기록전 대회: 다음 차례 한 사람
     text(`다음 차례  ·  ${League.matchLabel(lg, next)}`, cx, fy, U * 3.2, '#ffcf5a');
     const who = tour.name(next.a);
-    text(who, cx, fy + U * 5.5, fitTextSize(who, U * 5.4, W * 0.6), PLAYER_COLORS[0]);
+    text(who, cx, fy + U * 5.5, fitTextSize(who, U * 5.4, W * 0.5), PLAYER_COLORS[0]);
+    button('기권', cx + U * 62, fy + U * 4.5, U * 20, U * 7, () => tour.forfeitNext(), ready);
     if (Object.keys(lg.results).length === 0) button('순서 다시 섞기', cx - U * 40, by, U * 32, U * 8.5, () => tour.reshuffle(), ready);
     button('게임 시작 ▶', cx, by, U * 40, U * 8.5, () => tour.startNext(), ready, true);
     button('새 대회', cx + U * 40, by, U * 32, U * 8.5, () => tour.startOver(), ready);

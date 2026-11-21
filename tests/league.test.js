@@ -203,3 +203,19 @@ test('기록전 대회: 다시 섞어도 기록전 대회이고, 망가진 저�
   assert.equal(L.isValid({ ...lg, matches: lg.matches.map(([a]) => [a, 0]) }), false);
   assert.match(L.matchLabel(lg, L.nextMatch(lg)), /1번째 차례/);
 });
+
+test('기록전 대회: 기권은 0점으로 넣고 순위표에 기권 수가 남는다', () => {
+  let lg = L.createLeague(names(3), { games: 1, solo: true, rng: fixedRng(5) });
+  const first = L.nextMatch(lg);
+  lg = L.recordResult(lg, first.id, [999, 0], { forfeit: true });
+  const second = L.nextMatch(lg);
+  lg = L.recordResult(lg, second.id, [200, 0]);
+  assert.ok(L.isValid(JSON.parse(JSON.stringify(lg))));
+  const rows = L.standings(lg);
+  const out = rows.find((r) => r.id === first.a);
+  assert.equal(out.total, 0);
+  assert.equal(out.forfeits, 1);
+  assert.equal(out.played, 1);
+  assert.equal(rows[0].id, second.a);
+  assert.equal(rows[0].forfeits, 0);
+});

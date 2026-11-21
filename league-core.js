@@ -134,7 +134,7 @@
     return lg.matches.map(([a, b], index) => {
       const id = matchId(index);
       const res = lg.results[id];
-      return { id, index, a, b, scores: res ? [...res.scores] : null, done: !!res };
+      return { id, index, a, b, scores: res ? [...res.scores] : null, done: !!res, forfeit: !!res?.forfeit };
     });
   }
 
@@ -142,16 +142,17 @@
   const findMatch = (lg, id) => matches(lg).find((m) => m.id === id) || null;
   const isFinished = (lg) => matches(lg).every((m) => m.done);
 
-  function recordResult(lg, id, scores) {
+  // forfeit: 기권 (기록전 대회, v2.6.2) — 0점으로 넣고 순위표에 '기권'으로 보인다
+  function recordResult(lg, id, scores, { forfeit = false } = {}) {
     const m = findMatch(lg, id);
     if (!m || m.done) throw new Error('지금 할 수 없는 경기예요');
     const clean = [0, 1].map((i) => Math.round(Number(scores?.[i])) || 0);
-    return { ...lg, results: { ...lg.results, [id]: { scores: clean } } };
+    return { ...lg, results: { ...lg.results, [id]: forfeit ? { scores: [0, 0], forfeit: true } : { scores: clean } } };
   }
 
   // 순위표: 점수 합계 → 최고 한 판 → 공동 순위. 아직 경기 안 한 사람도 0점으로 넣는다
   function standings(lg) {
-    const empty = lg.players.map((p) => ({ id: p.id, name: p.name, played: 0, total: 0, best: 0, wins: 0, draws: 0, losses: 0 }));
+    const empty = lg.players.map((p) => ({ id: p.id, name: p.name, played: 0, total: 0, best: 0, wins: 0, draws: 0, losses: 0, forfeits: 0 }));
     const rows = matches(lg).filter((m) => m.done).reduce((acc, m) => {
       const [sa, sb] = m.scores;
       const add = (row, mine, theirs) => ({
@@ -162,6 +163,7 @@
         wins: row.wins + (mine > theirs ? 1 : 0),
         draws: row.draws + (mine === theirs ? 1 : 0),
         losses: row.losses + (mine < theirs ? 1 : 0),
+        forfeits: row.forfeits + (m.forfeit ? 1 : 0),
       });
       return acc.map((row) => (row.id === m.a ? add(row, sa, sb) : row.id === m.b ? add(row, sb, sa) : row));
     }, empty);

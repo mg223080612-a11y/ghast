@@ -194,6 +194,20 @@ const Tournament = {
     this.set({ ...this.data, current: { id: m.id } });
     startGame('tournament', [this.name(m.a), this.name(m.b)], { seconds: this.data.seconds, diff: this.data.diff });
   },
+  // 기록전 대회: 다음 차례 사람이 기권 (진행요원 확인) → 0점 · 순위표에 '기권', 다음 사람으로
+  async forfeitNext() {
+    const m = this.nextMatch();
+    if (!m || !this.isRecord()) return;
+    const ok = await askConfirm(`${this.name(m.a)} 님을 기권으로 처리할까요?\n이번 판은 0점이 되고 다음 사람으로 넘어갑니다.`, { ok: '기권 처리', danger: true });
+    if (!ok || this.nextMatch()?.id !== m.id) return;
+    try {
+      this.set({ ...this.data, league: League.recordResult(this.data.league, m.id, [0, 0], { forfeit: true }), current: null, last: null });
+      fieldLog('기록전 대회 기권', { 차례: m.index + 1 });
+      this.showBracket();
+    } catch (err) {
+      reportError(err);
+    }
+  },
   currentMatch() { return this.findMatch(this.data?.current?.id); },
   // 동점이면 연장전 (토너먼트만. 리그는 점수 합계라 비겨도 그대로 끝)
   tied() {
